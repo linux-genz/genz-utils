@@ -33,7 +33,9 @@ from uuid import UUID, uuid4
 from pathlib import Path
 from genz_common import GCID
 from middleware.netlink_mngr import NetlinkManager
-from pdb import set_trace
+from typing import List
+from pdb import set_trace, post_mortem
+import traceback
 
 INVALID_GCID = GCID(val=0xffffffff)
 TEMP_SUBNET = 0xffff  # where we put uninitialized local bridges
@@ -44,8 +46,8 @@ class Interface():
         self.num = num
 
     # Returns True if interface is usable - is I-Up/I-LP, not I-Down/I-CFG
-    def iface_init(self):
-        self.iface_dir = list((self.comp.path / 'control/interface').glob(
+    def iface_init(self, prefix='control'):
+        self.iface_dir = list((self.comp.path / prefix / 'interface').glob(
             'interface{}@*'.format(self.num)))[0]
         iface_file = self.iface_dir / 'interface'
         with iface_file.open(mode='rb+') as f:
@@ -61,9 +63,9 @@ class Interface():
 
             if not self.phy_init():
                 if self.comp.verbosity:
-                    print('interface {} is not usable'.format(self.num))
+                    print('interface{} is not PHY-Up'.format(self.num))
                     self.usable = False
-                # return False  # Revisit: no return to test code below
+                return False
 
             icap1 = genz.ICAP1(iface.ICAP1, iface)
             # Revisit: select compatible LLR/P2PNextHdr/P2PEncrypt settings
@@ -113,6 +115,8 @@ class Interface():
             if status == 0:
                 if self.comp.verbosity:
                     print('send_path_time timeout')
+            # save PeerInterfaceID
+            self.peer_iface_num = self.get_peer_iface_num(iface)
             # set LinkRFCDisable (depending on local_br)
             ictl = genz.IControl(iface.IControl, iface)
             ictl.field.LinkRFCDisable = 1 if self.comp.local_br else 0
@@ -126,6 +130,12 @@ class Interface():
             iface.IControl = ictl.val
             self.comp.control_write(iface,
                             genz.InterfaceStructure.IControl, sz=4, off=4)
+            # Revisit: do we need to do this?
+            istatus = genz.IStatus(0, iface)
+            istatus.field.LinkRFCStatus = 1  # RW1C
+            iface.IStatus = istatus.val
+            self.comp.control_write(iface,
+                            genz.InterfaceStructure.IStatus, sz=4, off=0)
             # Revisit: verify I-Up
             state = self.check_i_state(iface)
             if state in [2, 3]:
@@ -133,7 +143,7 @@ class Interface():
         # end with
         return self.usable
 
-    def send_peer_attr1(self, iface, timeout=0):
+    def send_peer_attr1(self, iface, timeout=10000):
         icontrol = genz.IControl(iface.IControl, iface)
         icontrol.field.PeerAttr1Req = 1
         iface.IControl = icontrol.val
@@ -142,7 +152,7 @@ class Interface():
         status = self.wait_link_ctl(iface, timeout)
         return status
 
-    def send_path_time(self, iface, timeout=0):
+    def send_path_time(self, iface, timeout=10000):
         icontrol = genz.IControl(iface.IControl, iface)
         icontrol.field.PathTimeReq = 1
         iface.IControl = icontrol.val
@@ -177,6 +187,18 @@ class Interface():
                 istatus.field.IState))
         return istatus.field.IState
 
+    def get_peer_iface_num(self, iface):
+        peer_state = genz.PeerState(iface.PeerState, iface)
+        # Revisit: should this re-read value?
+        if self.comp.verbosity:
+            print('get_peer_iface_num: PeerIfaceIDValid={}, PeerInterfaceID={}'.format(
+                peer_state.field.PeerIfaceIDValid, iface.PeerInterfaceID))
+        if peer_state.field.PeerIfaceIDValid == 1:
+            id = iface.PeerInterfaceID
+        else:
+            id = None
+        return id
+
     def phy_init(self):
         # This does not actually init anything - it only checks PHY status
         # Revisit: handle multiple PHYs
@@ -196,22 +218,14 @@ class Interface():
         op_status = genz.PHYStatus(phy.PHYStatus, phy).field.PHYLayerOpStatus
         return op_status in [1, 3, 4, 5, 6, 7, 8, 9, 0xa]
 
-class DirectedRelay():
-    def __init__(self, dr_comp, dr_iface):
-        self.comp = dr_comp
-        self.iface = dr_iface
-
-    @property
-    def gcid(self):
-        return self.comp.gcid
-
 class Component():
     timer_unit_list = [ 1e-9, 10*1e-9, 100*1e-9, 1e-6, 10*1e-6, 100*1e-6,
                         1e-3, 10*1e-3, 100*1e-3, 1.0 ]
     ctl_timer_unit_list = [ 1e-6, 10*1e-6, 100*1e-6, 1e-3 ]
 
     def __init__(self, fab, map, path, mgr_uuid, verbosity=0, local_br=False,
-                 dr=None, tmp_gcid=None, br_gcid=None, netlink=None):
+                 dr=None, tmp_gcid=None, br_gcid=None, netlink=None,
+                 uuid=None):
         self.fab = fab
         self.map = map
         self.path = path
@@ -223,12 +237,15 @@ class Component():
         self.dr = dr
         self.nl = netlink
         self.interfaces = []
+        self.uuid = uuid4() if uuid is None else uuid
+        fab.components[self.uuid] = self
+        fab.add_node(self)
 
     def __hash__(self):
-        return hash(self.path)  # Revisit: broken when path changes
+        return hash(self.uuid)
 
     def __eq__(self, other):
-        return self.path == other.path  # Revisit: broken when path changes
+        return self.uuid == other.uuid
 
     def timeout_val(self, time):
         return int(time / Component.timer_unit_list[self.timer_unit])
@@ -256,7 +273,7 @@ class Component():
                 'br_gcid':  self.br_gcid.val,
                 'tmp_gcid': self.tmp_gcid.val,
                 'dr_gcid':  self.dr.gcid.val if self.dr else INVALID_GCID.val,
-                'dr_iface': self.dr.iface if self.dr else 0,
+                'dr_iface': self.dr.iface.num if self.dr else 0,
                 'mgr_uuid': self.mgr_uuid,
         }
         msg = self.nl.build_msg(cmd=cmd_name, data=data)
@@ -264,10 +281,23 @@ class Component():
         self.update_path()
         return ret
 
+    def add_fab_dr_comp(self):
+        cmd_name = self.nl.cfg.get('ADD_FAB_DR_COMP')
+        data = {'gcid':     self.gcid.val,
+                'br_gcid':  self.br_gcid.val,
+                'tmp_gcid': INVALID_GCID.val,
+                'dr_gcid':  self.dr.gcid.val,
+                'dr_iface': self.dr.iface.num if self.dr else 0,
+                'mgr_uuid': self.mgr_uuid,
+        }
+        msg = self.nl.build_msg(cmd=cmd_name, data=data)
+        ret = self.nl.sendmsg(msg)
+        return ret
+
     # Returns the current component GCID
-    def get_gcid(self):
+    def get_gcid(self, prefix='control'):
         gcid = None
-        core_file = self.path / 'control/core@0x0/core'
+        core_file = self.path / prefix / 'core@0x0/core'
         with core_file.open(mode='rb+') as f:
             data = bytearray(f.read())
             core = self.map.fileToStruct('core', data, fd=f.fileno(),
@@ -277,12 +307,11 @@ class Component():
         return gcid
 
     # Returns True if component is usable - is C-Up/C-LP/C-DLP, not C-Down
-    def comp_init(self, gcid, pfm_gcid, random_cid=False):
+    def comp_init(self, pfm_gcid, prefix='control'):
         self.usable = False
-        self.gcid = gcid
         if self.local_br:
-            self.br_gcid = gcid
-        core_file = self.path / 'control/core@0x0/core'
+            self.br_gcid = self.gcid
+        core_file = self.path / prefix / 'core@0x0/core'
         with core_file.open(mode='rb+') as f:
             data = bytearray(f.read())
             core = self.map.fileToStruct('core', data, fd=f.fileno(),
@@ -295,7 +324,7 @@ class Component():
             self.ctl_timer_unit = cap1.field.CtlTimerUnit
             # set CV/CID0/SID0
             # Revisit: support subnets and multiple CIDs
-            core.CID0 = gcid.cid
+            core.CID0 = self.gcid.cid
             core.CV = 1
             self.control_write(core, genz.CoreStructure.CV, sz=8)
             # set MGR-UUID
@@ -343,6 +372,7 @@ class Component():
             core.CAP2Control = cap2ctl.val
             self.control_write(core, genz.CoreStructure.CAP2Control, sz=8)
             # check that at least 1 interface can be brought Up
+            # Revisit: special handling of ingress iface for non-local-br
             for iface in range(0, core.MaxInterface):
                 self.interfaces.append(Interface(self, iface))
                 iup = self.interfaces[iface].iface_init()
@@ -376,11 +406,35 @@ class Component():
                     print('add_fab_comp failed with exception {}'.format(e))
                 self.usable = False
         # end with
+        self.comp_dest_dir = list((self.path / prefix).glob(
+            'component_destination_table@*'))[0]
+        self.ssdt_dir = list(self.comp_dest_dir.glob('ssdt@*'))[0]
+        #set_trace()  # Revisit: temp debug
+        # invalidate SSDT
+        for cid in range(0, self.ssdt_size):
+            self.ssdt_write(cid, 0x780|cid, valid=0)  # Revisit: ei debug
         return self.usable
+
+    def ssdt_write(self, cid, ei, valid=1, mhc=None, hc=None, vca=None):
+        # Revisit: should we not do open/close (via "with") on every write?
+        ssdt_file = self.ssdt_dir / 'ssdt'
+        with ssdt_file.open(mode='rb+', buffering=0) as f:
+            data = bytearray(f.read())
+            self.ssdt = self.map.fileToStruct('ssdt', data, path=ssdt_file,
+                                fd=f.fileno(), verbosity=self.verbosity)
+            self.ssdt[cid].EI = ei
+            self.ssdt[cid].V = valid
+            self.ssdt[cid].MHC = mhc if mhc is not None else 0
+            self.ssdt[cid].HC = hc if hc is not None else 0
+            self.ssdt[cid].VCA = vca if vca is not None else 0
+            self.control_write(self.ssdt, self.ssdt.element.MHC,
+                               off=4*cid, sz=4)
+        # end with
 
 class Bridge(Component):
     def __init__(self, *args, brnum, **kwargs):
         self.brnum = brnum
+        self._ssdt_sz = None
         super().__init__(*args, **kwargs)
 
     def explore_interfaces(self):
@@ -388,14 +442,35 @@ class Bridge(Component):
         for iface in self.interfaces:
             if iface.usable:
                 if self.verbosity:
-                    print('exploring interface {}'.format(iface.num))
-                #do_something() # Revisit
+                    print('exploring interface{}, '.format(iface.num), end='')
+                dr = DirectedRelay(self, iface)
+                comp = Component(self.fab, self.map, dr.path, self.mgr_uuid,
+                                 dr=dr, br_gcid=self.br_gcid,
+                                 netlink=self.nl, verbosity=self.verbosity)
+                peer_iface = Interface(comp, iface.peer_iface_num)
+                gcid = self.fab.assign_gcid(comp, ssdt_sz=self.ssdt_size)
+                if self.verbosity:
+                    print('assigned gcid={}'.format(gcid))
+                self.fab.add_link(self, iface, comp, peer_iface)
+                self.fab.setup_routing(self, comp)
+                try:
+                    comp.add_fab_dr_comp()
+                except Exception as e:
+                    if self.verbosity:
+                        print('add_fab_dr_comp failed with exception {}'.format(e))
+                    continue
+                set_trace()
+                comp.comp_init(self.pfm_gcid, prefix='dr')
+                # Revisit: if switch, recurse
             else:
                 if self.verbosity:
                     print('interface{} is not usable'.format(iface.num))
 
     # ssdt_size is used to limit the range of random CIDs
+    @property
     def ssdt_size(self):
+        if self._ssdt_sz is not None:
+            return self._ssdt_sz
         comp_dest_dir = list((self.path / 'control').glob(
             'component_destination_table@*'))[0]
         comp_dest_file = comp_dest_dir / 'component_destination_table'
@@ -404,10 +479,10 @@ class Bridge(Component):
             comp_dest = self.map.fileToStruct('component_destination_table',
                                               data, fd=f.fileno(),
                                               verbosity=self.verbosity)
-            ssdt_sz = comp_dest.SSDTSize
+            self._ssdt_sz = comp_dest.SSDTSize
             if self.verbosity:
-                print('ssdt_sz={}'.format(ssdt_sz))
-            return ssdt_sz
+                print('ssdt_sz={}'.format(self._ssdt_sz))
+        return self._ssdt_sz
 
     def update_path(self):
         if self.verbosity:
@@ -440,15 +515,37 @@ class Fabric(nx.MultiGraph):
         self.accept_cids = accept_cids
         self.verbosity = verbosity
         self.bridges = []
-        self.components = []
+        self.components = {}
         self.rand_list = []
         self.gcid = GCID(cid=1)  # Revisit: grand plan
+        super().__init__()
         if self.verbosity:
-            print('fabric: {}, num={}, mgr_uuid={}'.format(path, self.fabnum,
-                                                           self.mgr_uuid))
+            print('fabric: {}, num={}, fab_uuid={}, mgr_uuid={}'.format(
+                path, self.fabnum, self.fab_uuid, self.mgr_uuid))
+
+    def assign_gcid(self, comp, ssdt_sz=4096):
+        # Revisit: CID conficts between accepted & assigned are possible
+        random_cids = self.random_cids
+        if self.accept_cids:
+            hw_gcid = comp.get_gcid()
+            if hw_gcid is not None:
+                self.gcid = hw_gcid
+                random_cids = False
+        if random_cids:
+            if len(self.rand_list) == 0:
+                self.rand_list = random.sample(range(1, ssdt_sz), ssdt_sz-1)
+                self.rand_index = 0
+            self.gcid.cid = self.rand_list[self.rand_index]
+        comp.gcid = GCID(val=self.gcid.val)
+        if random_cids:
+            self.rand_index += 1
+        else:
+            self.gcid.cid += 1
+        return comp.gcid
 
     def fab_init(self):
         br_paths = self.path.glob('bridge*')
+        # Revisit: deal with multiple bridges that may or may not be on same fabric
         for br_path in br_paths:
             cuuid = get_cuuid(br_path)
             cur_gcid = get_gcid(br_path)
@@ -458,26 +555,75 @@ class Fabric(nx.MultiGraph):
                         brnum=brnum, dr=None,
                         tmp_gcid=tmp_gcid, netlink=self.nl,
                         verbosity=self.verbosity)
-            ssdt_sz = br.ssdt_size()
-            if self.accept_cids:
-                hw_gcid = br.get_gcid()
-                if hw_gcid is not None:
-                    self.gcid = hw_gcid
-                    self.random_cids = False
-            if self.random_cids:
-                if len(self.rand_list) == 0:
-                    self.rand_list = random.sample(range(0, ssdt_sz), ssdt_sz)
-                    self.rand_index = 0
-                self.gcid.cid = self.rand_list[self.rand_index]
-            pfm_gcid = self.gcid
-            print('{}:{} bridge{} {}'.format(self.fabnum, self.gcid, brnum, cuuid))
-            br.comp_init(self.gcid, pfm_gcid, self.random_cids)
+            gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size)
+            pfm_gcid = gcid
+            print('{}:{} bridge{} {}'.format(self.fabnum, gcid, brnum, cuuid))
+            br.comp_init(pfm_gcid)
             self.bridges.append(br)
-            if self.random_cids:
-                self.rand_index += 1
-            else:
-                self.gcid.cid += 1
             br.explore_interfaces()
+        # end for br_path
+
+    def shortest_path(self, fr: Component, to: Component) -> List[Component]:
+        return nx.shortest_path(self, fr, to)
+
+    def route(self, fr: Component, to: Component) -> "Route":
+        # Revisit: MultiPath, edge weights
+        path = self.shortest_path(fr, to)
+        return Route(path)
+
+    def setup_routing(self, fr: Component, to: Component) -> None:
+        route = self.route(fr, to)
+        dr = to.dr  # Revisit: delete?
+        for rt in route:
+            # add to's GCID to rt's SSDT
+            rt.set_ssdt(to)
+        # Revisit: add route to Connection
+        #set_trace()  # Revisit: temp debug
+
+    def add_link(self, fr: Component, fr_iface: Interface,
+                 to: Component, to_iface: Interface) -> None:
+        self.add_edges_from([(fr, to, {fr.uuid: fr_iface, to.uuid: to_iface})])
+
+class RouteElement():
+    def __init__(self, comp: Component, iface: Interface):
+        self.comp = comp
+        self.iface = iface
+        self.dr = False
+
+    @property
+    def gcid(self):
+        return self.comp.gcid
+
+    @property
+    def path(self):
+        return self.iface.iface_dir
+
+    def set_ssdt(self, to: Component):
+        self.comp.ssdt_write(to.gcid.cid, self.iface.num)
+
+class DirectedRelay(RouteElement):
+    def __init__(self, dr_comp: Component, dr_iface: Interface):
+        super().__init__(dr_comp, dr_iface)
+        self.dr = True
+
+class Route():
+    def __init__(self, path: List[Component]):
+        self._elems = []
+        #set_trace()  # Revisit: temp debug
+        for fr, to in moving_window(2, path):
+            edge_data = fr.fab.get_edge_data(fr, to)[0]
+            iface = edge_data[fr.uuid]
+            elem = RouteElement(fr, iface)
+            self._elems.append(elem)
+
+    def __getitem__(self, key):
+        return self._elems[key]
+
+    def __len__(self):
+        return len(self._elems)
+
+    def __iter__(self):
+        return iter(self._elems)
 
 class Conf():
     def __init__(self, file):
@@ -512,7 +658,16 @@ def component_num(comp_path):
     match = comp_num_re.match(str(comp_path))
     return int(match.group(2))
 
+def moving_window(n, iterable):
+    # return "n" items from iterable at a time, advancing 1 item per call
+    start, stop = 0, n
+    while stop <= len(iterable):
+        yield iterable[start:stop]
+        start += 1
+        stop += 1
+
 def main():
+    global args
     global cols
     parser = argparse.ArgumentParser()
     parser.add_argument('-k', '--keyboard', action='store_true',
@@ -526,6 +681,8 @@ def main():
     parser.add_argument('-G', '--genz-version', choices=['1.1'],
                         default='1.1',
                         help='Gen-Z spec version of Control Space structures')
+    parser.add_argument('-P', '--post_mortem', action='store_true',
+                        help='enter debugger on uncaught exception')
     args = parser.parse_args()
     if args.verbosity > 5:
         print('Gen-Z version = {}'.format(args.genz_version))
@@ -552,7 +709,8 @@ def main():
     fab_paths = sys_devices.glob('genz*')
     for fab_path in fab_paths:
         fab = Fabric(nl, map, fab_path, random_cids=args.random_cids,
-                     accept_cids=args.accept_cids, verbosity=args.verbosity)
+                     accept_cids=args.accept_cids, fab_uuid=fab_uuid,
+                     verbosity=args.verbosity)
         fabrics[fab_path] = fab
         fab.fab_init()
 
@@ -560,4 +718,11 @@ def main():
         set_trace()
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as post_err:
+        if args.post_mortem:
+            traceback.print_exc()
+            post_mortem()
+        else:
+            raise
