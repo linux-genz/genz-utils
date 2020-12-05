@@ -1008,6 +1008,11 @@ class ControlStructureMap(LittleEndianStructure):
                 'opcode_set_uuid'             : 'OpCodeSetUUIDTable',
                 'req_vcat'                    : 'RequesterVCATTable',
                 'rsp_vcat'                    : 'ResponderVCATTable',
+                'rit'                         : 'RITTable',
+                'ssdt'                        : 'SSDTTable',
+                'msdt'                        : 'SSDTTable',
+                'lprt'                        : 'SSDTTable',
+                'mprt'                        : 'SSDTTable',
                 'c_access_r_key'              : 'CAccessRKeyTable',
                 'c_access_l_p2p'              : 'CAccessLP2PTable',
                 'pg_base'                     : 'PGTable',  # Revisit - delete
@@ -1969,6 +1974,39 @@ class ResponderVCATTable(ControlTableArray):
                                                   'Size': 4}) # Revisit
         items = self.Size // sizeof(VCAT)
         self.array = (VCAT * items).from_buffer(self.data)
+
+class RITTable(ControlTableArray):
+    def fileToStructInit(self):
+        super().fileToStructInit()
+        # Revisit: need parent/core so we can dynamically build RIT based on
+        # MaxInterface, RITPadSize, etc.
+        fields = [('EIM',       c_u32, 32)
+        ]
+        RIT = type('RIT', (ControlStructure,), {'_fields_': fields,
+                                                'verbosity': self.verbosity,
+                                                'Size': 4}) # Revisit
+        items = self.Size // sizeof(RIT)
+        self.array = (RIT * items).from_buffer(self.data)
+
+# also for MSDT, LPRT, and MPRT
+class SSDTTable(ControlTableArray):
+    def fileToStructInit(self):
+        super().fileToStructInit()
+        # Revisit: need parent so we can dynamically build SSDT based on
+        # SSDTSize, SSDTMSDTRowSize, etc.
+        fields = [('MHC',       c_u32,  6),
+                  ('R0',        c_u32,  2),
+                  ('V',         c_u32,  1),
+                  ('HC',        c_u32,  6),
+                  ('VCA',       c_u32,  5),
+                  ('EI',        c_u32, 12),
+        ]
+        SSDT = type('SSDT', (ControlStructure,), {'_fields_': fields,
+                                                  'verbosity': self.verbosity,
+                                                  'Size': 4}) # Revisit
+        items = self.Size // sizeof(SSDT)
+        self.array = (SSDT * items).from_buffer(self.data)
+        self.element = SSDT  # Revisit: add to other array types
 
 # also for MCAP, MSAP, and MSMCAP
 class SSAPTable(ControlTableArray):
