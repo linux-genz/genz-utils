@@ -125,7 +125,7 @@ class CAP1(SpecialField, Union):
                     ('CtlTimerUnit',        c_u64,  2),
                     ('TimerUnit',           c_u64,  4),
                     ('PwrDisSigSup',        c_u64,  1),
-                    ('RspZMMUIntrSup',      c_u64,  1),
+                    ('RspZMMUIntrTransSup', c_u64,  1),
                     ('SharedEmergSigSup',   c_u64,  1),
                     ('MgmtCLPSup',          c_u64,  1),
                     ('MgmtCDLPSup',         c_u64,  1),
@@ -320,41 +320,41 @@ class IControl(SpecialField, Union):
 
 class ICAP1(SpecialField, Union):
     class ICAP1Fields(Structure):
-        _fields_ = [('IfaceContainmentSup',      c_u64,  1),
-                    ('IfaceErrFieldsSup',        c_u64,  1),
-                    ('IfaceErrLogSup',           c_u64,  1),
-                    ('TransientErrThreshSup',    c_u64,  1),
-                    ('IErrFaultInjSup',          c_u64,  1),
-                    ('LPRTWildcardSup',          c_u64,  1),
-                    ('MPRTWildcardSup',          c_u64,  1),
-                    ('IfaceLoopbackSup',         c_u64,  1),
-                    ('ImplicitFCSup',            c_u64,  1),
-                    ('ExplicitFCSup',            c_u64,  1),
-                    ('Rv',                       c_u64,  1),
-                    ('P2P64Sup',                 c_u64,  1),
-                    ('P2PVdefSup',               c_u64,  1),
-                    ('Rv',                       c_u64,  1),
-                    ('ExplicitOpClassSup',       c_u64,  1),
-                    ('DROpClassSup',             c_u64,  1),
-                    ('PktRelayAKeyFields',       c_u64,  1),
-                    ('IfaceAKeyValidationSup',   c_u64,  1),
-                    ('LLRSup',                   c_u64,  1),
-                    ('TRIfaceSup',               c_u64,  1),
-                    ('SrcCIDPktValidationSup',   c_u64,  1),
-                    ('SrcSIDPktValidationSup',   c_u64,  1),
-                    ('AdaptiveFCCreditSup',      c_u64,  1),
-                    ('PCOCommSup',               c_u64,  1),
-                    ('Rv',                       c_u64,  1),
-                    ('AggIfaceSup',              c_u64,  1),
-                    ('AggIfaceRole',             c_u64,  1),
-                    ('PeerNonceValidationSup',   c_u64,  1),
-                    ('P2PStandaloneAckRequired', c_u64,  1),
-                    ('IfaceGroupSup',            c_u64,  1),
-                    ('IfaceGroupSingleOpClass',  c_u64,  1),
-                    ('P2PBackupSup',             c_u64,  1),
+        _fields_ = [('IfaceContainmentSup',      c_u32,  1),
+                    ('IfaceErrFieldsSup',        c_u32,  1),
+                    ('IfaceErrLogSup',           c_u32,  1),
+                    ('TransientErrThreshSup',    c_u32,  1),
+                    ('IErrFaultInjSup',          c_u32,  1),
+                    ('LPRTWildcardSup',          c_u32,  1),
+                    ('MPRTWildcardSup',          c_u32,  1),
+                    ('IfaceLoopbackSup',         c_u32,  1),
+                    ('ImplicitFCSup',            c_u32,  1),
+                    ('ExplicitFCSup',            c_u32,  1),
+                    ('Rv',                       c_u32,  1),
+                    ('P2P64Sup',                 c_u32,  1),
+                    ('P2PVdefSup',               c_u32,  1),
+                    ('Rv',                       c_u32,  1),
+                    ('ExplicitOpClassSup',       c_u32,  1),
+                    ('DROpClassSup',             c_u32,  1),
+                    ('PktRelayAKeyFields',       c_u32,  1),
+                    ('IfaceAKeyValidationSup',   c_u32,  1),
+                    ('LLRSup',                   c_u32,  1),
+                    ('TRIfaceSup',               c_u32,  1),
+                    ('SrcCIDPktValidationSup',   c_u32,  1),
+                    ('SrcSIDPktValidationSup',   c_u32,  1),
+                    ('AdaptiveFCCreditSup',      c_u32,  1),
+                    ('PCOCommSup',               c_u32,  1),
+                    ('Rv',                       c_u32,  1),
+                    ('AggIfaceSup',              c_u32,  1),
+                    ('AggIfaceRole',             c_u32,  1),
+                    ('PeerNonceValidationSup',   c_u32,  1),
+                    ('P2PStandaloneAckRequired', c_u32,  1),
+                    ('IfaceGroupSup',            c_u32,  1),
+                    ('IfaceGroupSingleOpClass',  c_u32,  1),
+                    ('P2PBackupSup',             c_u32,  1),
         ]
 
-    _fields_    = [('field', ICAP1Fields), ('val', c_u64)]
+    _fields_    = [('field', ICAP1Fields), ('val', c_u32)]
 
     def __init__(self, value, parent, verbosity=0):
         super().__init__(value, parent, verbosity=verbosity)
@@ -397,6 +397,55 @@ class ICAP1Control(SpecialField, Union):
                    'Rv', 'Rv', 'Rv', 'Incompatible']
     _agg_iface  = ['Independent', 'NAI', 'SAI', 'Rv']
     _special = {'OpClassSelect': _opclass, 'AggIfaceCtl': _agg_iface}
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class ICAP2(SpecialField, Union):
+    class ICAP2Fields(Structure):
+        _fields_ = [('TEHistSize',               c_u32,  3),
+                    ('Rv',                       c_u32, 29),
+        ]
+
+    _fields_    = [('field', ICAP2Fields), ('val', c_u32)]
+
+    _te_hist_sz = ['256', '512', '1024']
+    _special = {'TEHistSize': _te_hist_sz}
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class ICAP2Control(SpecialField, Union):
+    class ICAP2ControlFields(Structure):
+        _fields_ = [('SWMgmtI0',                         c_u32,  1),
+                    ('SWMgmtI1',                         c_u32,  1),
+                    ('Rv',                               c_u32, 30),
+        ]
+
+    _fields_    = [('field', ICAP2ControlFields), ('val', c_u32)]
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+# for IErrorStatus/IErrorDetect/IErrorFaultInjection/IErrorTrigger
+class IError(SpecialField, Union):
+    class IErrorFields(Structure):
+        _fields_ = [('ExcessivePHYRetraining',           c_u16,  1),
+                    ('NonTransientLinkErr',              c_u16,  1),
+                    ('IfaceContainment',                 c_u16,  1),
+                    ('IfaceAKEYViolation',               c_u16,  1),
+                    ('IfaceFCFwdProgressViolation',      c_u16,  1),
+                    ('UnexpectedPHYFailure',             c_u16,  1),
+                    ('P2PSECE',                          c_u16,  1),
+                    ('IfaceAE',                          c_u16,  1),
+                    ('SwitchPktRelayFailure',            c_u16,  1),
+                    ('Rv',                               c_u16,  7),
+        ]
+
+    _fields_    = [('field', IErrorFields), ('val', c_u16)]
 
     def __init__(self, value, parent, verbosity=0):
         super().__init__(value, parent, verbosity=verbosity)
@@ -1636,9 +1685,12 @@ class InterfaceStructure(ControlStructure):
                 ]
 
     #_ptr_fields = ['NextIPTR', 'IPHYPTR', 'VDPTR', 'ISTATSPTR', 'IARBPTR', 'MechanicalPTR']
-    _special_dict = { 'IStatus': IStatus, 'IControl': IControl, 'ICAP1': ICAP1,
-                      'ICAP1Control': ICAP1Control, 'PeerState': PeerState,
-                      'LinkCTLControl': LinkCTLControl}
+    _special_dict = { 'IStatus': IStatus, 'IControl': IControl,
+                      'ICAP1': ICAP1, 'ICAP1Control': ICAP1Control,
+                      'ICAP2': ICAP2, 'ICAP2Control': ICAP2Control,
+                      'IErrorStatus': IError, 'IErrorDetect': IError,
+                      'IErrorFaultInjection': IError, 'IErrorTrigger': IError,
+                      'PeerState': PeerState, 'LinkCTLControl': LinkCTLControl}
 
 class InterfaceXStructure(ControlStructure):
     '''InterafceXStructure is the same as InterfaceStructure, but with
@@ -1715,9 +1767,12 @@ class InterfaceXStructure(ControlStructure):
                 ('EgressAKeyMask',             c_u64, 64), #0xA8
                 ]
 
-    _special_dict = { 'IStatus': IStatus, 'IControl': IControl, 'ICAP1': ICAP1,
-                      'ICAP1Control': ICAP1Control, 'PeerState': PeerState,
-                      'LinkCTLControl': LinkCTLControl}
+    _special_dict = { 'IStatus': IStatus, 'IControl': IControl,
+                      'ICAP1': ICAP1, 'ICAP1Control': ICAP1Control,
+                      'ICAP2': ICAP2, 'ICAP2Control': ICAP2Control,
+                      'IErrorStatus': IError, 'IErrorDetect': IError,
+                      'IErrorFaultInjection': IError, 'IErrorTrigger': IError,
+                      'PeerState': PeerState, 'LinkCTLControl': LinkCTLControl}
 
 class InterfacePHYStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12),  # Basic PHY Fields
@@ -1947,6 +2002,7 @@ class PATable(ControlTableArray):
                                               'Size': 2}) # Revisit
         items = self.Size // sizeof(PA)
         self.array = (PA * items).from_buffer(self.data)
+        self.element = PA
 
 class RequesterVCATTable(ControlTableArray):
     def fileToStructInit(self):
@@ -1960,6 +2016,7 @@ class RequesterVCATTable(ControlTableArray):
                                                   'Size': 4}) # Revisit
         items = self.Size // sizeof(VCAT)
         self.array = (VCAT * items).from_buffer(self.data)
+        self.element = VCAT
 
 class ResponderVCATTable(ControlTableArray):
     # Revisit: identical to RequesterVCATTable
@@ -1974,6 +2031,7 @@ class ResponderVCATTable(ControlTableArray):
                                                   'Size': 4}) # Revisit
         items = self.Size // sizeof(VCAT)
         self.array = (VCAT * items).from_buffer(self.data)
+        self.element = VCAT
 
 class RITTable(ControlTableArray):
     def fileToStructInit(self):
@@ -1987,6 +2045,7 @@ class RITTable(ControlTableArray):
                                                 'Size': 4}) # Revisit
         items = self.Size // sizeof(RIT)
         self.array = (RIT * items).from_buffer(self.data)
+        self.element = RIT
 
 # also for MSDT, LPRT, and MPRT
 class SSDTTable(ControlTableArray):
@@ -2006,7 +2065,7 @@ class SSDTTable(ControlTableArray):
                                                   'Size': 4}) # Revisit
         items = self.Size // sizeof(SSDT)
         self.array = (SSDT * items).from_buffer(self.data)
-        self.element = SSDT  # Revisit: add to other array types
+        self.element = SSDT
 
 # also for MCAP, MSAP, and MSMCAP
 class SSAPTable(ControlTableArray):
@@ -2030,6 +2089,7 @@ class SSAPTable(ControlTableArray):
                                                   'Size': 4})
         items = self.Size // sizeof(SSAP)
         self.array = (SSAP * items).from_buffer(self.data)
+        self.element = SSAP
 
 class CAccessRKeyTable(ControlTableArray):
     def fileToStructInit(self):
@@ -2042,6 +2102,7 @@ class CAccessRKeyTable(ControlTableArray):
                                                   'Size': 8})
         items = self.Size // sizeof(RKey)
         self.array = (RKey * items).from_buffer(self.data)
+        self.element = RKey
 
 class CAccessLP2PTable(ControlTableArray):
     def fileToStructInit(self):
@@ -2056,6 +2117,7 @@ class CAccessLP2PTable(ControlTableArray):
                                                   'Size': 1})
         items = self.Size // sizeof(LP2P)
         self.array = (LP2P * items).from_buffer(self.data)
+        self.element = LP2P
 
 class PGTable(ControlTableArray):
     def fileToStructInit(self):
@@ -2072,6 +2134,7 @@ class PGTable(ControlTableArray):
                                               'Size': 16})
         items = self.Size // sizeof(PG)
         self.array = (PG * items).from_buffer(self.data)
+        self.element = PG
 
 class PTETable(ControlTableArray):
     def splitField(self, fld, bits):
@@ -2241,3 +2304,4 @@ class PTETable(ControlTableArray):
                                                 'Size': 32}) # Revisit
         items = self.Size // sizeof(PTE)
         self.array = (PTE * items).from_buffer(self.data)
+        self.element = PTE
