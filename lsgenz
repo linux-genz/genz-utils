@@ -22,4 +22,4 @@
 
 cwd=$(dirname "$0")
 export PYTHONPATH=$PYTHONPATH:$cwd
-sudo $cwd/lsgz_subsys.py $*
+exec sudo $cwd/lsgz_subsys.py $*

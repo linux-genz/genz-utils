@@ -28,7 +28,8 @@ import re
 from uuid import UUID
 from pathlib import Path
 from genz_common import GCID
-from pdb import set_trace
+from pdb import set_trace, post_mortem
+import traceback
 
 def get_gcid(comp_path):
     gcid = comp_path / 'gcid'
@@ -49,7 +50,14 @@ def component_num(comp_path):
 def get_struct(fpath, map, parent=None, core=None, verbosity=0):
     fname = fpath.name
     with fpath.open(mode='rb') as f:
-        data = bytearray(f.read())
+        try:  # Revisit: workaround for zero-length files
+            data = bytearray(f.read())
+        except OSError:
+            size = fpath.stat().st_size
+            if size == 0:
+                return None
+            else:
+                raise
         # special case for 'interface' - optional fields
         if (fname == 'interface' and
             len(data) >= ctypes.sizeof(genz.InterfaceXStructure)):
@@ -62,14 +70,46 @@ def get_struct(fpath, map, parent=None, core=None, verbosity=0):
 def get_parent(fpath, dpath, parents):
     parent = parents['core@0x0']  # default parent, if we do not find another
     for p in reversed(dpath.parents[0].parts):
-        if p == 'control':
+        if p == 'control' or p == 'dr':
             break
         if '@0x' in p:
             parent = parents[p]
             break
     return parent
 
+def ls_comp(ctl, map, ignore_dr=True):
+    parents = {}
+    drs = []
+    # do core structure first
+    core_path = ctl / 'core@0x0' / 'core'
+    core = get_struct(core_path, map, verbosity=args.verbosity)
+    print('  {}='.format('core@0x0'), end='')
+    print(core)
+    parents['core@0x0'] = core
+    for dir, dirnames, filenames in os.walk(ctl):
+        #print('{}, {}, {}'.format(dir, dirnames, filenames))
+        if dir[-3:] == '/dr':
+            drs.append(Path(dir))
+            continue
+        elif ignore_dr and dir.find('/dr/') >= 0:
+            continue
+        dpath = Path(dir)
+        for file in filenames:
+            if file == 'core':  # we already did core
+                continue
+            print('  {}='.format(dpath.name), end='')
+            fpath = dpath / file
+            parent = get_parent(fpath, dpath, parents)
+            struct = get_struct(fpath, map, core=core, parent=parent,
+                                verbosity=args.verbosity)
+            print(struct)
+            parents[dpath.name] = struct
+        # end for filenames
+    # end for dir
+    return drs
+
 def main():
+    global args
     global cols
     global genz
     parser = argparse.ArgumentParser()
@@ -79,11 +119,20 @@ def main():
     parser.add_argument('-G', '--genz-version', choices=['1.1'],
                         default='1.1',
                         help='Gen-Z spec version of Control Space structures')
+    parser.add_argument('-P', '--post_mortem', action='store_true',
+                        help='enter debugger on uncaught exception')
+    parser.add_argument('-S', '--struct', action='store',
+                        help='input file representing a single control structure')
     args = parser.parse_args()
     if args.verbosity > 5:
         print('Gen-Z version = {}'.format(args.genz_version))
     genz = __import__('genz_{}'.format(args.genz_version.replace('.', '_')))
     map = genz.ControlStructureMap()
+    if args.struct:
+        fpath = Path(args.struct)
+        struct = get_struct(fpath, map, verbosity=args.verbosity)
+        print(struct)
+        return
     sys_devices = Path('/sys/devices')
     fabrics = sys_devices.glob('genz*')
     for fab in fabrics:
@@ -97,31 +146,23 @@ def main():
             print('{}:{} bridge{} {}'.format(fabnum, gcid, brnum, cuuid))
             if args.verbosity < 1:
                 continue
-            parents = {}
             ctl = br / 'control'
-            # do core structure first
-            core_path = ctl / 'core@0x0' / 'core'
-            core = get_struct(core_path, map, verbosity=args.verbosity)
-            print('  {}='.format('core@0x0'), end='')
-            print(core)
-            parents['core@0x0'] = core
-            for dir, dirnames, filenames in os.walk(ctl):
-                #print('{}, {}, {}'.format(dir, dirnames, filenames))
-                for file in filenames:
-                    if file == 'core':  # we already did core
-                        continue
-                    dpath = Path(dir)
-                    print('  {}='.format(dpath.name), end='')
-                    fpath = dpath / file
-                    parent = get_parent(fpath, dpath, parents)
-                    struct = get_struct(fpath, map, core=core, parent=parent,
-                                        verbosity=args.verbosity)
-                    print(struct)
-                    parents[dpath.name] = struct
-                # end for filenames
-            # end for dir
+            drs = ls_comp(ctl, map)
+            for dr in drs:
+                print('dr: {}'.format(dr))  # Revisit: better format
+                if args.verbosity < 1:
+                    continue
+                # Revist: handle nested drs?
+                _ = ls_comp(dr, map, ignore_dr=False)
         # end for br
     # end for fab
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as post_err:
+        if args.post_mortem:
+            traceback.print_exc()
+            post_mortem()
+        else:
+            raise
