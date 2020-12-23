@@ -37,9 +37,19 @@ def get_gcid(comp_path):
         return GCID(str=f.read().rstrip())
 
 def get_cuuid(comp_path):
-    cuuid = comp_path / 'cuuid'
+    cuuid = comp_path / 'c_uuid'
     with cuuid.open(mode='r') as f:
         return UUID(f.read().rstrip())
+
+def get_cclass(comp_path):
+    cclass = comp_path / 'cclass'
+    with cclass.open(mode='r') as f:
+        return int(f.read().rstrip())
+
+def get_serial(comp_path):
+    serial = comp_path / 'serial'
+    with serial.open(mode='r') as f:
+        return int(f.read().rstrip(), base=0)
 
 comp_num_re = re.compile(r'.*/([^0-9]+)([0-9]+)')
 
@@ -134,16 +144,19 @@ def main():
         print(struct)
         return
     sys_devices = Path('/sys/devices')
-    fabrics = sys_devices.glob('genz*')
-    for fab in fabrics:
+    dev_fabrics = sys_devices.glob('genz*')
+    for fab in dev_fabrics:
         fabnum = component_num(fab)
         #print('fabric: {}, num={}'.format(fab, fabnum))
         bridges = fab.glob('bridge*')
         for br in bridges:
             gcid = get_gcid(br)
             cuuid = get_cuuid(br)
+            cclass = get_cclass(br)
+            serial = get_serial(br)
             brnum = component_num(br)
-            print('{}:{} bridge{} {}'.format(fabnum, gcid, brnum, cuuid))
+            print('{}:{} bridge{} {}:{:#x}'.format(fabnum, gcid, brnum,
+                                                   cuuid, serial))
             if args.verbosity < 1:
                 continue
             ctl = br / 'control'
@@ -156,6 +169,26 @@ def main():
                 _ = ls_comp(dr, map, ignore_dr=False)
         # end for br
     # end for fab
+    genz_fabrics = Path('/sys/bus/genz/fabrics')
+    fab_comps = genz_fabrics.glob('fabric*/*:*/*:*:*')
+    for comp in fab_comps:
+        cuuid = get_cuuid(comp)
+        cclass = get_cclass(comp)
+        serial = get_serial(comp)
+        print('{} {} {}:{:#x}'.format(comp.name, genz.cclass_name[cclass],
+                                      cuuid, serial))
+        if args.verbosity < 1:
+            continue
+        ctl = comp / 'control'
+        drs = ls_comp(ctl, map)
+        for dr in drs:
+            print('dr: {}'.format(dr))  # Revisit: better format
+            if args.verbosity < 1:
+                continue
+            # Revist: handle nested drs?
+            _ = ls_comp(dr, map, ignore_dr=False)
+        # end for dr
+    # end for comp
 
 if __name__ == '__main__':
     try:

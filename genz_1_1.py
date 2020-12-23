@@ -29,6 +29,13 @@ cols, lines = shutil.get_terminal_size()
 
 # Revisit: this should be auto-generated from the v1.1.xml file
 
+cclass_name = [ 'reserved',    'memory_p2p64', 'memory',      'int_switch',
+                'exp_switch',  'fab_switch',   'processor',   'processor',
+                'accelerator', 'accelerator',  'accelerator', 'accelerator',
+                'io',          'io',           'io',          'io',
+                'block',       'block',        'tr',          'multi_class',
+                'bridge',      'bridge',       'compliance',  'lph' ]
+
 class CStatus(SpecialField, Union):
     class CStatusFields(Structure):
         _fields_ = [('CState',              c_u64,  3),
