@@ -44,9 +44,11 @@ class Interface():
     def __init__(self, component, num):
         self.comp = component
         self.num = num
+        self.hvs = None
 
     # Returns True if interface is usable - is I-Up/I-LP, not I-Down/I-CFG
     def iface_init(self, prefix='control'):
+        self._prefix = prefix
         self.iface_dir = list((self.comp.path / prefix / 'interface').glob(
             'interface{}@*'.format(self.num)))[0]
         iface_file = self.iface_dir / 'interface'
@@ -60,7 +62,7 @@ class Interface():
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
             if self.comp.verbosity:
                 print(iface)
-
+            self.hvs = iface.HVS
             if not self.phy_init():
                 if self.comp.verbosity:
                     print('interface{} is not PHY-Up'.format(self.num))
@@ -218,6 +220,16 @@ class Interface():
         op_status = genz.PHYStatus(phy.PHYStatus, phy).field.PHYLayerOpStatus
         return op_status in [1, 3, 4, 5, 6, 7, 8, 9, 0xa]
 
+    def update_path(self, prefix=None):
+        if prefix is not None:
+            self._prefix = prefix
+        if self.comp.verbosity:
+            print('iface{}: current path: {}'.format(self.num, self.iface_dir))
+        self.iface_dir = list((self.comp.path / self._prefix / 'interface').glob(
+            'interface{}@*'.format(self.num)))[0]
+        if self.comp.verbosity:
+            print('iface{}: new path: {}'.format(self.num, self.iface_dir))
+
 class Component():
     timer_unit_list = [ 1e-9, 10*1e-9, 100*1e-9, 1e-6, 10*1e-6, 100*1e-6,
                         1e-3, 10*1e-3, 100*1e-3, 1.0 ]
@@ -238,6 +250,11 @@ class Component():
         self.nl = netlink
         self.interfaces = []
         self.uuid = uuid4() if uuid is None else uuid
+        self._num_vcs = None
+        self._req_vcat_sz = None
+        self._rsp_vcat_sz = None
+        self._ssdt_sz = None
+        self._comp_dest = None
         fab.components[self.uuid] = self
         fab.add_node(self)
 
@@ -247,9 +264,11 @@ class Component():
     def __eq__(self, other):
         return self.uuid == other.uuid
 
+    # for LLMUTO, NLMUTO, NIRT, FPST, REQNIRTO, REQABNIRTO
     def timeout_val(self, time):
         return int(time / Component.timer_unit_list[self.timer_unit])
 
+    # for ControlTO, ControlDRTO
     def ctl_timeout_val(self, time):
         return int(time / Component.ctl_timer_unit_list[self.ctl_timer_unit])
 
@@ -271,13 +290,14 @@ class Component():
         cmd_name = self.nl.cfg.get('ADD_FAB_COMP')
         data = {'gcid':     self.gcid.val,
                 'br_gcid':  self.br_gcid.val,
-                'tmp_gcid': self.tmp_gcid.val,
+                'tmp_gcid': self.tmp_gcid.val if self.tmp_gcid else INVALID_GCID.val,
                 'dr_gcid':  self.dr.gcid.val if self.dr else INVALID_GCID.val,
                 'dr_iface': self.dr.iface.num if self.dr else 0,
                 'mgr_uuid': self.mgr_uuid,
         }
         msg = self.nl.build_msg(cmd=cmd_name, data=data)
         ret = self.nl.sendmsg(msg)
+        self.fab.update_path('/sys/devices/genz1')  # Revisit: hardcoded path
         self.update_path()
         return ret
 
@@ -287,7 +307,7 @@ class Component():
                 'br_gcid':  self.br_gcid.val,
                 'tmp_gcid': INVALID_GCID.val,
                 'dr_gcid':  self.dr.gcid.val,
-                'dr_iface': self.dr.iface.num if self.dr else 0,
+                'dr_iface': self.dr.iface.num,
                 'mgr_uuid': self.mgr_uuid,
         }
         msg = self.nl.build_msg(cmd=cmd_name, data=data)
@@ -307,10 +327,25 @@ class Component():
         return gcid
 
     # Returns True if component is usable - is C-Up/C-LP/C-DLP, not C-Down
-    def comp_init(self, pfm_gcid, prefix='control'):
+    def comp_init(self, pfm_gcid, prefix='control', ingress_iface=None):
         self.usable = False
         if self.local_br:
             self.br_gcid = self.gcid
+        self.comp_dest_dir = list((self.path / prefix).glob(
+            'component_destination_table@*'))[0]
+        self.ssdt_dir = list(self.comp_dest_dir.glob('ssdt@*'))[0]
+        try:
+            self.req_vcat_dir = list(self.comp_dest_dir.glob('req_vcat@*'))[0]
+        except IndexError:
+            self.req_vcat_dir = None
+        try:
+            self.rsp_vcat_dir = list(self.comp_dest_dir.glob('rsp_vcat@*'))[0]
+        except IndexError:
+            self.rsp_vcat_dir = None
+        try:
+            self.rit_dir = list(self.comp_dest_dir.glob('rit@*'))[0]
+        except IndexError:
+            self.rit_dir = None
         core_file = self.path / prefix / 'core@0x0/core'
         with core_file.open(mode='rb+') as f:
             data = bytearray(f.read())
@@ -322,7 +357,7 @@ class Component():
             cap1 = genz.CAP1(core.CAP1, core)
             self.timer_unit = cap1.field.TimerUnit
             self.ctl_timer_unit = cap1.field.CtlTimerUnit
-            # set CV/CID0/SID0
+            # set CV/CID0/SID0 - first Gen-Z control write if !local_br
             # Revisit: support subnets and multiple CIDs
             core.CID0 = self.gcid.cid
             core.CV = 1
@@ -335,18 +370,21 @@ class Component():
             core.MGRUUIDh = int.from_bytes(self.mgr_uuid.bytes[8:16],
                                            byteorder='little')
             self.control_write(core, genz.CoreStructure.MGRUUIDl, sz=16)
-            # Revisit: read back something, to confirm we own component
+            # Revisit: read back MGRUUID, to confirm we own component
             # set HostMgrMGRUUIDEnb, MGRUUIDEnb
             cap1ctl = genz.CAP1Control(core.CAP1Control, core)
-            cap1ctl.field.HostMgrMGRUUIDEnb = 1 # Revisit: enum
+            if self.local_br:
+                cap1ctl.field.HostMgrMGRUUIDEnb = 1 # Revisit: enum
             cap1ctl.field.MGRUUIDEnb = 1
             # set ManagerType, PrimaryFabMgrRole
             # clear PrimaryMgrRole, SecondaryFabMgrRole, PwrMgrEnb
             cap1ctl.field.ManagerType = 1
             cap1ctl.field.PrimaryMgrRole = 0
-            cap1ctl.field.PrimaryFabMgrRole = 1
+            if self.local_br:
+                cap1ctl.field.PrimaryFabMgrRole = 1
             cap1ctl.field.SecondaryFabMgrRole = 0
             cap1ctl.field.PwrMgrEnb = 0
+            # Revisit: set OOBMgmtDisable
             # set sticky SWMgmtBits[3:0] to FabricManaged=0x1
             cap1ctl.field.SWMgmt0 = 1
             cap1ctl.field.SWMgmt1 = 0
@@ -372,23 +410,48 @@ class Component():
             core.CAP2Control = cap2ctl.val
             self.control_write(core, genz.CoreStructure.CAP2Control, sz=8)
             # check that at least 1 interface can be brought Up
-            # Revisit: special handling of ingress iface for non-local-br
+            # Revisit: need special handling of ingress iface for non-local-br
             for iface in range(0, core.MaxInterface):
                 self.interfaces.append(Interface(self, iface))
-                iup = self.interfaces[iface].iface_init()
+                iup = self.interfaces[iface].iface_init(prefix=prefix)
                 if iup:
                     self.usable = True
-            # Revisit: set LLMUTO, UNREQ, UNRSP, UERT, NIRT, FPST, NLMUTO
+            # set LLMUTO  # Revisit: how to compute reasonable values?
+            core.LLMUTO = self.timeout_val(60e-3)  # 60ms
+            self.control_write(core, genz.CoreStructure.LLMUTO, sz=2)
+            # Revisit: set UNREQ, UNRSP, UERT, NIRT, FPST, NLMUTO
             # Revisit: set REQNIRTO, REQABNIRTO
             # Revisit: set LLReqDeadline, NLLReqDeadline, DeadlineTick
             # Revisit: set LLRspDeadline, NLLRspDeadline, RspDeadline, DRReqDeadline
             # Revisit: set ControlTO, ControlDRTO
             # set MaxRequests
             # Revisit: Why would FM choose < MaxREQSuppReqs? Only for P2P?
+            # Revisit: only for requesters
             core.MaxRequests = core.MaxREQSuppReqs
             self.control_write(core, genz.CoreStructure.MaxRequests, sz=8)
             # Revisit: set MaxPwrCtl (to NPWR?)
-            # If component is usable, set ComponentEnb
+            # invalidate SSDT
+            for cid in range(0, self.ssdt_size(prefix=prefix)):
+                self.ssdt_write(cid, 0x780|cid, valid=0)  # Revisit: ei debug
+            # setup SSDT entry for route back to FM
+            if ingress_iface is not None:
+                self.ssdt_write(pfm_gcid.cid, ingress_iface.num)
+
+            # initialize REQ-VCAT
+            # Revisit: multiple Action columns
+            for vc in range(0, self.req_vcat_size(prefix=prefix)[0]):
+                # Revisit: vc policies
+                self.req_vcat_write(vc, 0x2)
+            # initialize RSP-VCAT
+            # Revisit: multiple Action columns
+            for vc in range(0, self.rsp_vcat_size(prefix=prefix)[0]):
+                # Revisit: vc policies
+                self.rsp_vcat_write(vc, 0x1)
+            # initialize RIT for each usable interface
+            for iface in self.interfaces:
+                if iface.usable:
+                    self.rit_write(iface, 1 << iface.num)
+            # If component is usable, set ComponentEnb - transition to C-Up
             if self.usable:
                 cctl = genz.CControl(core.CControl, core)
                 cctl.field.ComponentEnb = 1
@@ -406,17 +469,114 @@ class Component():
                     print('add_fab_comp failed with exception {}'.format(e))
                 self.usable = False
         # end with
-        self.comp_dest_dir = list((self.path / prefix).glob(
-            'component_destination_table@*'))[0]
-        self.ssdt_dir = list(self.comp_dest_dir.glob('ssdt@*'))[0]
-        #set_trace()  # Revisit: temp debug
-        # invalidate SSDT
-        for cid in range(0, self.ssdt_size):
-            self.ssdt_write(cid, 0x780|cid, valid=0)  # Revisit: ei debug
         return self.usable
 
+    def comp_dest_read(self, prefix='control'):
+        if self._comp_dest is not None:
+            return self._comp_dest
+        comp_dest_dir = list((self.path / prefix).glob(
+            'component_destination_table@*'))[0]
+        comp_dest_file = comp_dest_dir / 'component_destination_table'
+        with comp_dest_file.open(mode='rb') as f:
+            data = bytearray(f.read())
+            self._comp_dest = self.map.fileToStruct(
+                'component_destination_table',
+                data, fd=f.fileno(), verbosity=self.verbosity)
+        # end with
+        return self._comp_dest
+
+    def num_vcs(self, prefix='control'):
+        if self._num_vcs is not None:
+            return self._num_vcs
+        max_hvs = max(self.interfaces, key=lambda i: i.hvs).hvs
+        self._num_vcs = max_hvs + 1
+        if self.verbosity:
+            print('num_vcs={}'.format(self._num_vcs))
+        return self._num_vcs
+
+    def rit_write(self, iface, eim):
+        if self.rit_dir is None:
+            return
+        # Revisit: avoid open/close (via "with") on every write?
+        rit_file = self.rit_dir / 'rit'
+        with rit_file.open(mode='rb+', buffering=0) as f:
+            data = bytearray(f.read())
+            self.rit = self.map.fileToStruct('rit', data, path=rit_file,
+                                fd=f.fileno(), verbosity=self.verbosity)
+            # Revisit: more than 32 interfaces
+            self.rit[iface.num].EIM = eim
+            self.control_write(self.rit, self.rit.element.EIM,
+                               off=4*iface.num, sz=4)
+        # end with
+
+    def req_vcat_size(self, prefix='control'):
+        if self._req_vcat_sz is not None:
+            return self._req_vcat_sz
+        comp_dest = self.comp_dest_read(prefix=prefix)
+        rows = 16  # Revisit: enum
+        cols = comp_dest.REQVCATSZ
+        self._req_vcat_sz = (rows, cols)
+        if self.verbosity:
+            print('req_vcat_sz={}'.format(self._req_vcat_sz))
+        return self._req_vcat_sz
+
+    def req_vcat_write(self, vc, vcm, action=0, th=None):
+        if self.req_vcat_dir is None:
+            return
+        # Revisit: avoid open/close (via "with") on every write?
+        req_vcat_file = self.req_vcat_dir / 'req_vcat'
+        with req_vcat_file.open(mode='rb+', buffering=0) as f:
+            data = bytearray(f.read())
+            self.req_vcat = self.map.fileToStruct('req_vcat', data,
+                                path=req_vcat_file,
+                                fd=f.fileno(), verbosity=self.verbosity)
+            # Revisit: multiple Action columns
+            # Revisit: TH support
+            self.req_vcat[vc].VCM = vcm
+            self.control_write(self.req_vcat, self.req_vcat.element.VCM,
+                               off=4*vc, sz=4)
+        # end with
+
+    def rsp_vcat_size(self, prefix='control'):
+        if self._rsp_vcat_sz is not None:
+            return self._rsp_vcat_sz
+        comp_dest = self.comp_dest_read(prefix=prefix)
+        rows = self.num_vcs(prefix='prefix')
+        cols = comp_dest.RSPVCATSZ
+        self._rsp_vcat_sz = (rows, cols)
+        if self.verbosity:
+            print('rsp_vcat_sz={}'.format(self._rsp_vcat_sz))
+        return self._rsp_vcat_sz
+
+    def rsp_vcat_write(self, vc, vcm, action=0, th=None):
+        if self.rsp_vcat_dir is None:
+            return
+        # Revisit: avoid open/close (via "with") on every write?
+        rsp_vcat_file = self.rsp_vcat_dir / 'rsp_vcat'
+        with rsp_vcat_file.open(mode='rb+', buffering=0) as f:
+            data = bytearray(f.read())
+            self.rsp_vcat = self.map.fileToStruct('rsp_vcat', data,
+                                path=rsp_vcat_file,
+                                fd=f.fileno(), verbosity=self.verbosity)
+            # Revisit: multiple Action columns
+            # Revisit: TH support
+            self.rsp_vcat[vc].VCM = vcm
+            self.control_write(self.rsp_vcat, self.rsp_vcat.element.VCM,
+                               off=4*vc, sz=4)
+        # end with
+
+    def ssdt_size(self, prefix='control'):
+        if self._ssdt_sz is not None:
+            return self._ssdt_sz
+        comp_dest = self.comp_dest_read(prefix=prefix)
+        self._ssdt_sz = comp_dest.SSDTSize
+        if self.verbosity:
+            print('ssdt_sz={}'.format(self._ssdt_sz))
+        return self._ssdt_sz
+
     def ssdt_write(self, cid, ei, valid=1, mhc=None, hc=None, vca=None):
-        # Revisit: should we not do open/close (via "with") on every write?
+        # Revisit: avoid open/close (via "with") on every write?
+        # Revisit: avoid reading entire SSDT on every write
         ssdt_file = self.ssdt_dir / 'ssdt'
         with ssdt_file.open(mode='rb+', buffering=0) as f:
             data = bytearray(f.read())
@@ -431,13 +591,61 @@ class Component():
                                off=4*cid, sz=4)
         # end with
 
+    def update_rit_dir(self, prefix='control'):
+        if self.rit_dir is None:
+            return
+        self.comp_dest_dir = list((self.path / prefix).glob(
+            'component_destination_table@*'))[0]
+        self.rit_dir = list(self.comp_dest_dir.glob('rit@*'))[0]
+        if self.verbosity:
+            print('new rit_dir = {}'.format(self.rit_dir))
+
+    def update_req_vcat_dir(self, prefix='control'):
+        if self.req_vcat_dir is None:
+            return
+        self.comp_dest_dir = list((self.path / prefix).glob(
+            'component_destination_table@*'))[0]
+        self.req_vcat_dir = list(self.comp_dest_dir.glob('req_vcat@*'))[0]
+        if self.verbosity:
+            print('new req_vcat_dir = {}'.format(self.req_vcat_dir))
+
+    def update_rsp_vcat_dir(self, prefix='control'):
+        if self.rsp_vcat_dir is None:
+            return
+        self.comp_dest_dir = list((self.path / prefix).glob(
+            'component_destination_table@*'))[0]
+        self.rsp_vcat_dir = list(self.comp_dest_dir.glob('rsp_vcat@*'))[0]
+        if self.verbosity:
+            print('new rsp_vcat_dir = {}'.format(self.rsp_vcat_dir))
+
+    def update_ssdt_dir(self, prefix='control'):
+        self.comp_dest_dir = list((self.path / prefix).glob(
+            'component_destination_table@*'))[0]
+        self.ssdt_dir = list(self.comp_dest_dir.glob('ssdt@*'))[0]
+        if self.verbosity:
+            print('new ssdt_dir = {}'.format(self.ssdt_dir))
+
+    def update_path(self):
+        if self.verbosity:
+            print('current path: {}'.format(self.path))
+        fabs = Path('/sys/bus/genz/fabrics')
+        self.path = fabs / 'fabric{f}/{f}:{s:04x}/{f}:{s:04x}:{c:03x}'.format(
+            f=self.fab.fabnum, s=self.gcid.sid, c=self.gcid.cid)
+        if self.verbosity:
+            print('new path: {}'.format(self.path))
+        self.update_ssdt_dir()
+        self.update_rit_dir()
+        self.update_req_vcat_dir()
+        self.update_rsp_vcat_dir()
+        for iface in self.interfaces:
+            iface.update_path(prefix='control')
+
 class Bridge(Component):
     def __init__(self, *args, brnum, **kwargs):
         self.brnum = brnum
-        self._ssdt_sz = None
         super().__init__(*args, **kwargs)
 
-    def explore_interfaces(self):
+    def explore_interfaces(self, pfm_gcid):
         # examine our bridge interfaces & init those components
         for iface in self.interfaces:
             if iface.usable:
@@ -448,7 +656,7 @@ class Bridge(Component):
                                  dr=dr, br_gcid=self.br_gcid,
                                  netlink=self.nl, verbosity=self.verbosity)
                 peer_iface = Interface(comp, iface.peer_iface_num)
-                gcid = self.fab.assign_gcid(comp, ssdt_sz=self.ssdt_size)
+                gcid = self.fab.assign_gcid(comp, ssdt_sz=self.ssdt_size())
                 if self.verbosity:
                     print('assigned gcid={}'.format(gcid))
                 self.fab.add_link(self, iface, comp, peer_iface)
@@ -459,30 +667,11 @@ class Bridge(Component):
                     if self.verbosity:
                         print('add_fab_dr_comp failed with exception {}'.format(e))
                     continue
-                set_trace()
-                comp.comp_init(self.pfm_gcid, prefix='dr')
+                comp.comp_init(pfm_gcid, prefix='dr', ingress_iface=peer_iface)
                 # Revisit: if switch, recurse
             else:
                 if self.verbosity:
                     print('interface{} is not usable'.format(iface.num))
-
-    # ssdt_size is used to limit the range of random CIDs
-    @property
-    def ssdt_size(self):
-        if self._ssdt_sz is not None:
-            return self._ssdt_sz
-        comp_dest_dir = list((self.path / 'control').glob(
-            'component_destination_table@*'))[0]
-        comp_dest_file = comp_dest_dir / 'component_destination_table'
-        with comp_dest_file.open(mode='rb') as f:
-            data = bytearray(f.read())
-            comp_dest = self.map.fileToStruct('component_destination_table',
-                                              data, fd=f.fileno(),
-                                              verbosity=self.verbosity)
-            self._ssdt_sz = comp_dest.SSDTSize
-            if self.verbosity:
-                print('ssdt_sz={}'.format(self._ssdt_sz))
-        return self._ssdt_sz
 
     def update_path(self):
         if self.verbosity:
@@ -495,8 +684,14 @@ class Bridge(Component):
                 br_num = component_num(br_path)
                 if self.brnum == br_num:
                     self.path = br_path
+                    self.update_ssdt_dir()
+                    self.update_rit_dir()
+                    self.update_req_vcat_dir()
+                    self.update_rsp_vcat_dir()
                     if self.verbosity:
                         print('new path: {}'.format(self.path))
+                    for iface in self.interfaces:
+                        iface.update_path()
                     return
                 # end if
             # end for br_path
@@ -555,12 +750,12 @@ class Fabric(nx.MultiGraph):
                         brnum=brnum, dr=None,
                         tmp_gcid=tmp_gcid, netlink=self.nl,
                         verbosity=self.verbosity)
-            gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size)
+            gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size())
             pfm_gcid = gcid
             print('{}:{} bridge{} {}'.format(self.fabnum, gcid, brnum, cuuid))
             br.comp_init(pfm_gcid)
             self.bridges.append(br)
-            br.explore_interfaces()
+            br.explore_interfaces(pfm_gcid)
         # end for br_path
 
     def shortest_path(self, fr: Component, to: Component) -> List[Component]:
@@ -573,16 +768,18 @@ class Fabric(nx.MultiGraph):
 
     def setup_routing(self, fr: Component, to: Component) -> None:
         route = self.route(fr, to)
-        dr = to.dr  # Revisit: delete?
         for rt in route:
             # add to's GCID to rt's SSDT
             rt.set_ssdt(to)
         # Revisit: add route to Connection
-        #set_trace()  # Revisit: temp debug
 
     def add_link(self, fr: Component, fr_iface: Interface,
                  to: Component, to_iface: Interface) -> None:
         self.add_edges_from([(fr, to, {fr.uuid: fr_iface, to.uuid: to_iface})])
+
+    def update_path(self, path):
+        self.path = path
+        self.fabnum = component_num(path)
 
 class RouteElement():
     def __init__(self, comp: Component, iface: Interface):
@@ -609,7 +806,6 @@ class DirectedRelay(RouteElement):
 class Route():
     def __init__(self, path: List[Component]):
         self._elems = []
-        #set_trace()  # Revisit: temp debug
         for fr, to in moving_window(2, path):
             edge_data = fr.fab.get_edge_data(fr, to)[0]
             iface = edge_data[fr.uuid]
@@ -648,7 +844,7 @@ def get_gcid(comp_path):
         return GCID(str=f.read().rstrip())
 
 def get_cuuid(comp_path):
-    cuuid = comp_path / 'cuuid'
+    cuuid = comp_path / 'c_uuid'
     with cuuid.open(mode='r') as f:
         return UUID(f.read().rstrip())
 
@@ -669,6 +865,7 @@ def moving_window(n, iterable):
 def main():
     global args
     global cols
+    global genz
     parser = argparse.ArgumentParser()
     parser.add_argument('-k', '--keyboard', action='store_true',
                         help='break to interactive keyboard at certain points')
@@ -686,7 +883,6 @@ def main():
     args = parser.parse_args()
     if args.verbosity > 5:
         print('Gen-Z version = {}'.format(args.genz_version))
-    global genz
     genz = __import__('genz_{}'.format(args.genz_version.replace('.', '_')))
     nl = NetlinkManager(config='./alpaka.conf')
     map = genz.ControlStructureMap()
