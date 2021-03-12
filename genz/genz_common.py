@@ -1,3 +1,4 @@
+# Copyright  ©  2020-2021 IntelliProp Inc.
 # Copyright (c) 2020 Hewlett Packard Enterprise Development LP
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -114,6 +115,12 @@ class SpecialField():
 
 class Opcodes(SpecialField):
     _subfield_name = ['', 'Req', 'Rsp', 'ReqRsp']
+
+    def opCode(self, name):
+        return self._map[name]
+
+    def name(self, opc):
+        return self._inverted_map[opc]
 
     def __str__(self):
         r = ''

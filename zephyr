@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# Copyright  ©  2021 IntelliProp Inc.
 # Copyright (c) 2020 Hewlett Packard Enterprise Development LP
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -20,6 +21,6 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-cwd=$(dirname "$0")
+cwd="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 export PYTHONPATH=$PYTHONPATH:$cwd
-sudo $cwd/zephyr_subsys.py $*
+exec ./zephyr-fm/zephyr_subsys.py $*

@@ -1,0 +1,6 @@
+#!/bin/bash
+
+cwd=$(dirname "$0")
+export PYTHONPATH=$PYTHONPATH:$cwd
+exec $cwd/genz_pkt.py $*
+j

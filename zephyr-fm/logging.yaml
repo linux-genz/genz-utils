@@ -1,0 +1,29 @@
+version: 1
+disable_existing_loggers: False
+formatters:
+  full:
+    format: '%(pathname)s : %(lineno)d : %(levelname)s : %(message)s'
+  simple:
+    format: '%(levelname)s | - %(message)s'
+handlers:
+  console:
+    class: logging.StreamHandler
+    formatter: simple
+    stream: ext://sys.stdout
+  info_file_handler:
+    class: logging.handlers.RotatingFileHandler
+    level: DEBUG # Revisit: default log level
+    formatter: full
+    filename: /var/log/zephyr.log
+    maxBytes: 10485760 # 10MB
+    backupCount: 20
+    encoding: utf8
+
+loggers:
+  FlaskFatLog:
+    level: DEBUG # Revisit: default log level
+    handlers: [console, info_file_handler]
+    propagate: no
+
+root:
+    handlers: [console, info_file_handler]

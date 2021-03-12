@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+# Copyright  ©  2020-2021 IntelliProp Inc.
 # Copyright (c) 2020 Hewlett Packard Enterprise Development LP
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -27,7 +28,8 @@ import ctypes
 import re
 from uuid import UUID
 from pathlib import Path
-from genz_common import GCID
+from importlib import import_module
+from genz.genz_common import GCID
 from pdb import set_trace, post_mortem
 import traceback
 
@@ -57,6 +59,20 @@ def component_num(comp_path):
     match = comp_num_re.match(str(comp_path))
     return int(match.group(2))
 
+from functools import wraps
+from time import time
+
+def timing(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        start = time()
+        result = f(*args, **kwargs)
+        end = time()
+        print(' [{} elapsed time: {}] '.format(f.__name__, end-start), end='')
+        return result
+    return wrapper
+
+@timing
 def get_struct(fpath, map, parent=None, core=None, verbosity=0):
     fname = fpath.name
     with fpath.open(mode='rb') as f:
@@ -136,7 +152,7 @@ def main():
     args = parser.parse_args()
     if args.verbosity > 5:
         print('Gen-Z version = {}'.format(args.genz_version))
-    genz = __import__('genz_{}'.format(args.genz_version.replace('.', '_')))
+    genz = import_module('genz.genz_{}'.format(args.genz_version.replace('.', '_')))
     map = genz.ControlStructureMap()
     if args.struct:
         fpath = Path(args.struct)
@@ -155,7 +171,8 @@ def main():
             cclass = get_cclass(br)
             serial = get_serial(br)
             brnum = component_num(br)
-            print('{}:{} bridge{} {}:{:#x}'.format(fabnum, gcid, brnum,
+            print('{}:{} {:9s} {}:{:#018x}'.format(fabnum, gcid,
+                                                   'bridge{}'.format(brnum),
                                                    cuuid, serial))
             if args.verbosity < 1:
                 continue
@@ -175,8 +192,8 @@ def main():
         cuuid = get_cuuid(comp)
         cclass = get_cclass(comp)
         serial = get_serial(comp)
-        print('{} {} {}:{:#x}'.format(comp.name, genz.cclass_name[cclass],
-                                      cuuid, serial))
+        print('{} {:9s} {}:{:#018x}'.format(comp.name, genz.cclass_name[cclass],
+                                            cuuid, serial))
         if args.verbosity < 1:
             continue
         ctl = comp / 'control'

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+# Copyright  ©  2020 IntelliProp Inc.
 # Copyright (c) 2020 Hewlett Packard Enterprise Development LP
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -28,10 +29,16 @@ import ctypes
 import random
 import time
 import json
+import requests
+import logging
+import flask_fat
+from flask_fat import ConfigBuilder
+import flask_fat
 import networkx as nx
 from uuid import UUID, uuid4
 from pathlib import Path
-from genz_common import GCID
+from importlib import import_module
+from genz.genz_common import GCID
 from middleware.netlink_mngr import NetlinkManager
 from typing import List
 from pdb import set_trace, post_mortem
@@ -39,6 +46,25 @@ import traceback
 
 INVALID_GCID = GCID(val=0xffffffff)
 TEMP_SUBNET = 0xffff  # where we put uninitialized local bridges
+
+logging.basicConfig(level=logging.DEBUG)
+
+class FMServer(flask_fat.APIBaseline):
+    def __init__(self, conf, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.conf = conf
+        self.add_callback = {}
+
+def cmd_add(url, **args):
+    from datetime import datetime
+    data = {
+        'timestamp' : datetime.now()
+    }
+    data.update(args)
+    resp = requests.post(url, data)
+    if resp is None:
+        return {}
+    return json.loads(resp.text).get('data', {})
 
 class Interface():
     def __init__(self, component, num):
@@ -49,9 +75,15 @@ class Interface():
     # Returns True if interface is usable - is I-Up/I-LP, not I-Down/I-CFG
     def iface_init(self, prefix='control'):
         self._prefix = prefix
-        self.iface_dir = list((self.comp.path / prefix / 'interface').glob(
-            'interface{}@*'.format(self.num)))[0]
-        iface_file = self.iface_dir / 'interface'
+        try:
+            self.iface_dir = list((self.comp.path / prefix / 'interface').glob(
+                'interface{}@*'.format(self.num)))[0]
+            iface_file = self.iface_dir / 'interface'
+        except IndexError:
+            if self.comp.verbosity:
+                print('interface{} does not exist'.format(self.num))
+            self.usable = False
+            raise
         with iface_file.open(mode='rb+') as f:
             data = bytearray(f.read())
             if len(data) >= ctypes.sizeof(genz.InterfaceXStructure):
@@ -66,7 +98,7 @@ class Interface():
             if not self.phy_init():
                 if self.comp.verbosity:
                     print('interface{} is not PHY-Up'.format(self.num))
-                    self.usable = False
+                self.usable = False
                 return False
 
             icap1 = genz.ICAP1(iface.ICAP1, iface)
@@ -299,6 +331,7 @@ class Component():
         ret = self.nl.sendmsg(msg)
         self.fab.update_path('/sys/devices/genz1')  # Revisit: hardcoded path
         self.update_path()
+        self.fru_uuid = get_fru_uuid(self.path)
         return ret
 
     def add_fab_dr_comp(self):
@@ -333,7 +366,10 @@ class Component():
             self.br_gcid = self.gcid
         self.comp_dest_dir = list((self.path / prefix).glob(
             'component_destination_table@*'))[0]
-        self.ssdt_dir = list(self.comp_dest_dir.glob('ssdt@*'))[0]
+        try:
+            self.ssdt_dir = list(self.comp_dest_dir.glob('ssdt@*'))[0]
+        except IndexError:
+            self.ssdt_dir = None
         try:
             self.req_vcat_dir = list(self.comp_dest_dir.glob('req_vcat@*'))[0]
         except IndexError:
@@ -357,6 +393,7 @@ class Component():
             cap1 = genz.CAP1(core.CAP1, core)
             self.timer_unit = cap1.field.TimerUnit
             self.ctl_timer_unit = cap1.field.CtlTimerUnit
+            self.cclass = core.BaseCClass
             # set CV/CID0/SID0 - first Gen-Z control write if !local_br
             # Revisit: support subnets and multiple CIDs
             core.CID0 = self.gcid.cid
@@ -413,17 +450,40 @@ class Component():
             # Revisit: need special handling of ingress iface for non-local-br
             for iface in range(0, core.MaxInterface):
                 self.interfaces.append(Interface(self, iface))
-                iup = self.interfaces[iface].iface_init(prefix=prefix)
-                if iup:
-                    self.usable = True
+                try:
+                    iup = self.interfaces[iface].iface_init(prefix=prefix)
+                    if iup:
+                        self.usable = True
+                except IndexError:
+                    del self.interfaces[-1]
             # set LLMUTO  # Revisit: how to compute reasonable values?
-            core.LLMUTO = self.timeout_val(60e-3)  # 60ms
+            # Revisit: this should be <=20us, but orthus is timing control ops
+            # with the wrong timer
+            #core.LLMUTO = self.timeout_val(20e-6)  # 20us
+            core.LLMUTO = self.timeout_val(3e-3)  # 3ms [2ms: bad, 3ms: good]
             self.control_write(core, genz.CoreStructure.LLMUTO, sz=2)
             # Revisit: set UNREQ, UNRSP, UERT, NIRT, FPST, NLMUTO
             # Revisit: set REQNIRTO, REQABNIRTO
-            # Revisit: set LLReqDeadline, NLLReqDeadline, DeadlineTick
-            # Revisit: set LLRspDeadline, NLLRspDeadline, RspDeadline, DRReqDeadline
-            # Revisit: set ControlTO, ControlDRTO
+            # set LLReqDeadline, NLLReqDeadline, DeadlineTick
+            # Revisit: compute values depending on topology
+            # Revisit: only for requesters
+            core.LLReqDeadline = 600
+            core.NLLReqDeadline = 1000
+            core.DeadlineTick = 10
+            self.control_write(core, genz.CoreStructure.LLReqDeadline, sz=8)
+            # Revisit: set LLRspDeadline, NLLRspDeadline, RspDeadline
+            # Revisit: compute values depending on topology
+            # Revisit: only for responders
+            core.LLRspDeadline = 601
+            core.NLLRspDeadline = 1001
+            core.RspDeadLine = 800
+            # Revisit: set DRReqDeadline
+            self.control_write(core, genz.CoreStructure.LLRspDeadline, sz=8)
+            # set ControlTO, ControlDRTO
+            # Revisit: how to compute reasonable values?
+            core.ControlTO = self.ctl_timeout_val(3e-3)    # 3ms
+            core.ControlDRTO = self.ctl_timeout_val(10e-3) # 10ms
+            self.control_write(core, genz.CoreStructure.ControlTO, sz=4)
             # set MaxRequests
             # Revisit: Why would FM choose < MaxREQSuppReqs? Only for P2P?
             # Revisit: only for requesters
@@ -575,6 +635,8 @@ class Component():
         return self._ssdt_sz
 
     def ssdt_write(self, cid, ei, valid=1, mhc=None, hc=None, vca=None):
+        if self.ssdt_dir is None:
+            return
         # Revisit: avoid open/close (via "with") on every write?
         # Revisit: avoid reading entire SSDT on every write
         ssdt_file = self.ssdt_dir / 'ssdt'
@@ -619,6 +681,8 @@ class Component():
             print('new rsp_vcat_dir = {}'.format(self.rsp_vcat_dir))
 
     def update_ssdt_dir(self, prefix='control'):
+        if self.ssdt_dir is None:
+            return
         self.comp_dest_dir = list((self.path / prefix).glob(
             'component_destination_table@*'))[0]
         self.ssdt_dir = list(self.comp_dest_dir.glob('ssdt@*'))[0]
@@ -639,6 +703,9 @@ class Component():
         self.update_rsp_vcat_dir()
         for iface in self.interfaces:
             iface.update_path(prefix='control')
+
+    def __repr__(self):
+        return '{}({})'.format(self.__class__.__name__, self.gcid)
 
 class Bridge(Component):
     def __init__(self, *args, brnum, **kwargs):
@@ -668,6 +735,10 @@ class Bridge(Component):
                         print('add_fab_dr_comp failed with exception {}'.format(e))
                     continue
                 comp.comp_init(pfm_gcid, prefix='dr', ingress_iface=peer_iface)
+                cuuid = get_cuuid(comp.path)
+                serial = get_serial(comp.path)
+                cuuid_serial = str(cuuid) + ':' + serial
+                comp.fab.cuuid_serial[cuuid_serial] = comp
                 # Revisit: if switch, recurse
             else:
                 if self.verbosity:
@@ -711,6 +782,7 @@ class Fabric(nx.MultiGraph):
         self.verbosity = verbosity
         self.bridges = []
         self.components = {}
+        self.cuuid_serial = {}
         self.rand_list = []
         self.gcid = GCID(cid=1)  # Revisit: grand plan
         super().__init__()
@@ -743,6 +815,8 @@ class Fabric(nx.MultiGraph):
         # Revisit: deal with multiple bridges that may or may not be on same fabric
         for br_path in br_paths:
             cuuid = get_cuuid(br_path)
+            serial = get_serial(br_path)
+            cuuid_serial = str(cuuid) + ':' + serial
             cur_gcid = get_gcid(br_path)
             brnum = component_num(br_path)
             tmp_gcid = cur_gcid if cur_gcid.sid == TEMP_SUBNET else INVALID_GCID
@@ -752,7 +826,8 @@ class Fabric(nx.MultiGraph):
                         verbosity=self.verbosity)
             gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size())
             pfm_gcid = gcid
-            print('{}:{} bridge{} {}'.format(self.fabnum, gcid, brnum, cuuid))
+            print('{}:{} bridge{} {}'.format(self.fabnum, gcid, brnum, cuuid_serial))
+            self.cuuid_serial[cuuid_serial] = br
             br.comp_init(pfm_gcid)
             self.bridges.append(br)
             br.explore_interfaces(pfm_gcid)
@@ -768,6 +843,8 @@ class Fabric(nx.MultiGraph):
 
     def setup_routing(self, fr: Component, to: Component) -> None:
         route = self.route(fr, to)
+        if self.verbosity:
+            print('adding route from {} to {}'.format(fr, to))
         for rt in route:
             # add to's GCID to rt's SSDT
             rt.set_ssdt(to)
@@ -835,8 +912,33 @@ class Conf():
         with open(self.file, 'w') as f:
             json.dump(self.data, f, indent=2)
 
+    def add_resources(self, fab):
+        add = {}
+        for conf_add in self.data['add_resources']:
+            add_args = {}
+            try:
+                prod_comp = fab.cuuid_serial[conf_add['producer']]
+            except KeyError:
+                print('{}: producer component {} not found in fabric{}'.format(
+                    self.file, conf_add['producer'], fab.fabnum))
+                continue
+            add_args['gcid']     = prod_comp.gcid.val
+            add_args['cclass']   = prod_comp.cclass
+            add_args['fru_uuid'] = str(prod_comp.fru_uuid)
+            add_args['mgr_uuid'] = str(prod_comp.mgr_uuid)
+            for res in conf_add['resources']:
+                res['instance_uuid'] = str(prod_comp.uuid)
+            add_args['resources'] = conf_add['resources']
+            for con in conf_add['consumers']:
+                if not con in add:
+                    add[con] = []
+                add[con].append(add_args)
+
+        self.add = add
+        return add
+
     def __repr__(self):
-        return repr(self.data)
+        return 'Conf(' + repr(self.data) + ')'
 
 def get_gcid(comp_path):
     gcid = comp_path / 'gcid'
@@ -847,6 +949,21 @@ def get_cuuid(comp_path):
     cuuid = comp_path / 'c_uuid'
     with cuuid.open(mode='r') as f:
         return UUID(f.read().rstrip())
+
+def get_fru_uuid(comp_path):
+    fru_uuid = comp_path / 'fru_uuid'
+    with fru_uuid.open(mode='r') as f:
+        return UUID(f.read().rstrip())
+
+def get_serial(comp_path):
+    serial = comp_path / 'serial'
+    with serial.open(mode='r') as f:
+        return f.read().rstrip()
+
+def get_cclass(comp_path):
+    cclass = comp_path / 'cclass'
+    with cclass.open(mode='r') as f:
+        return f.read().rstrip()
 
 comp_num_re = re.compile(r'.*/([^0-9]+)([0-9]+)')
 
@@ -861,6 +978,7 @@ def moving_window(n, iterable):
         yield iterable[start:stop]
         start += 1
         stop += 1
+
 
 def main():
     global args
@@ -881,12 +999,13 @@ def main():
     parser.add_argument('-P', '--post_mortem', action='store_true',
                         help='enter debugger on uncaught exception')
     args = parser.parse_args()
+    args_vars = vars(args)
     if args.verbosity > 5:
         print('Gen-Z version = {}'.format(args.genz_version))
-    genz = __import__('genz_{}'.format(args.genz_version.replace('.', '_')))
-    nl = NetlinkManager(config='./alpaka.conf')
+    genz = import_module('genz.genz_{}'.format(args.genz_version.replace('.', '_')))
+    nl = NetlinkManager(config='./zephyr-fm/alpaka.conf')
     map = genz.ControlStructureMap()
-    conf = Conf('zephyr.conf')
+    conf = Conf('zephyr-fm/zephyr-fabric.conf')
     try:
         data = conf.read_conf_file()
         fab_uuid = UUID(data['fabric_uuid'])
@@ -903,6 +1022,7 @@ def main():
         set_trace()
     sys_devices = Path('/sys/devices')
     fab_paths = sys_devices.glob('genz*')
+    fab = None
     for fab_path in fab_paths:
         fab = Fabric(nl, map, fab_path, random_cids=args.random_cids,
                      accept_cids=args.accept_cids, fab_uuid=fab_uuid,
@@ -910,8 +1030,20 @@ def main():
         fabrics[fab_path] = fab
         fab.fab_init()
 
+    if fab is None:
+        print('no local Gen-Z bridges found')
+        return
+
     if args.keyboard:
         set_trace()
+
+    conf.add_resources(fab)  # Revisit: multiple fabrics
+    mainapp = FMServer(conf, 'zephyr', **args_vars)
+
+    if args.keyboard:
+        set_trace()
+
+    mainapp.run()
 
 if __name__ == '__main__':
     try:

@@ -1,3 +1,4 @@
+# Copyright  ©  2020-2021 IntelliProp Inc.
 # Copyright (c) 2020 Hewlett Packard Enterprise Development LP
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -21,7 +22,7 @@
 import textwrap
 import shutil
 from pdb import set_trace
-from genz_common import *
+from .genz_common import *
 
 cols, lines = shutil.get_terminal_size()
 
@@ -737,6 +738,52 @@ class PTEATTRl(SpecialField, Union):
     def field(self):
         return self.rsp if self.zmmuType == 1 else self.req
 
+class SwitchCAP1(SpecialField, Union):
+    class SwitchCAP1Fields(Structure):
+        _fields_ = [('CtlOpClassPktFilteringSup',         c_u32,  1),
+                    ('ULATScale',                         c_u32,  1),
+                    ('MLATScale',                         c_u32,  1),
+                    ('PCOCommSup',                        c_u32,  1),
+                    ('UnreliableCtlWrMSGPktFilteringSup', c_u32,  1),
+                    ('DefaultCollPktRelaySup',            c_u32,  1),
+                    ('Rv',                                c_u32, 26),
+        ]
+
+    _fields_    = [('field', SwitchCAP1Fields), ('val', c_u32)]
+    _scale   = ['ps', 'ns']
+    _special = {'ULATScale': _scale, 'MLATScale': _scale}
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class SwitchCAP1Control(SpecialField, Union):
+    class SwitchCAP1ControlFields(Structure):
+        _fields_ = [('MCPRTEnb',                          c_u32,  1),
+                    ('MSMCPRTEnb',                        c_u32,  1),
+                    ('DefaultMCPktRelayEnb',              c_u32,  1),
+                    ('DefaultCollPktRelayEnb',            c_u32,  1),
+                    ('Rv',                                c_u32, 28),
+        ]
+
+    _fields_    = [('field', SwitchCAP1ControlFields), ('val', c_u32)]
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class SwitchOpCTL(SpecialField, Union):
+    class SwitchOpCTLFields(Structure):
+        _fields_ = [('PktRelayEnb',                       c_u16,  1),
+                    ('Rv',                                c_u16, 15),
+        ]
+
+    _fields_    = [('field', SwitchOpCTLFields), ('val', c_u16)]
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
 class VCAT4(SpecialField, Union):
     class VCAT4Fields(Structure):
         _fields_ = [('VCM',             c_u32,   32)]
@@ -759,6 +806,39 @@ class VCAT8(SpecialField, Union):
     def __init__(self, value, parent, verbosity=0):
         super().__init__(value, parent, verbosity=verbosity)
         self.val = value
+
+class OpClasses():
+    _map = {  'Core64'                              : 0x00,
+              'Control'                             : 0x01,
+              'Atomic1'                             : 0x02,
+              'LDM1'                                : 0x03,
+              'Adv1'                                : 0x04,
+              'Adv2'                                : 0x05,
+              'DR'                                  : 0x14,
+              'CtxId'                               : 0x15,
+              'Multicast'                           : 0x16,
+              'SOD'                                 : 0x17,
+              'VDOpc1'                              : 0x18,
+              'VDOpc2'                              : 0x19,
+              'VDOpc3'                              : 0x1a,
+              'VDOpc4'                              : 0x1b,
+              'VDOpc5'                              : 0x1c,
+              'VDOpc6'                              : 0x1d,
+              'VDOpc7'                              : 0x1e,
+              'VDOpc8'                              : 0x1f,
+    }
+
+    _inverted_map = {v : k for k, v in _map.items()}
+
+    def ocl(self, name):
+        return self._map[name]
+
+    def name(self, ocl):
+        return self._inverted_map[ocl]
+
+    def opClass(self, ocl):
+        opc = globals()[self.name(ocl) + 'Opcodes'](0, None)
+        return opc
 
 class P2P64Opcodes(Opcodes):
     _map = {  'StandaloneAck'                       : 0x00,
@@ -889,7 +969,7 @@ class LDM1Opcodes(Opcodes):
     _inverted_map = {v : k for k, v in _map.items()}
     _list = sorted(_map.items(), key=lambda x: x[1])
 
-class Advanced1Opcodes(Opcodes):
+class Adv1Opcodes(Opcodes):
     _map = {  'PatternResponse'                     : 0x00,
               'PatternSet'                          : 0x04,
               'PatternCount'                        : 0x05,
@@ -899,7 +979,7 @@ class Advanced1Opcodes(Opcodes):
     _inverted_map = {v : k for k, v in _map.items()}
     _list = sorted(_map.items(), key=lambda x: x[1])
 
-class Advanced2Opcodes(Opcodes):
+class Adv2Opcodes(Opcodes):
     _map = {  'EncapResponse'                       : 0x00,
               'PTRSP'                               : 0x01,
               'MACK'                                : 0x02,
@@ -1066,9 +1146,10 @@ class ControlStructureMap(LittleEndianStructure):
                 'rsp_vcat'                    : 'ResponderVCATTable',
                 'rit'                         : 'RITTable',
                 'ssdt'                        : 'SSDTTable',
-                'msdt'                        : 'SSDTTable',
-                'lprt'                        : 'SSDTTable',
-                'mprt'                        : 'SSDTTable',
+                'msdt'                        : 'MSDTTable',
+                'lprt'                        : 'LPRTTable',
+                'mprt'                        : 'MPRTTable',
+                'vcat'                        : 'VCATTable',
                 'c_access_r_key'              : 'CAccessRKeyTable',
                 'c_access_l_p2p'              : 'CAccessLP2PTable',
                 'pg_base'                     : 'PGTable',  # Revisit - delete
@@ -1079,9 +1160,9 @@ class ControlStructureMap(LittleEndianStructure):
                 'restricted_pte_table'        : 'PTETable',
                 'pa'                          : 'PATable',
                 'ssap'                        : 'SSAPTable',
-                'mcap'                        : 'SSAPTable',
-                'msap'                        : 'SSAPTable',
-                'msmcap'                      : 'SSAPTable',
+                'mcap'                        : 'MCAPTable',
+                'msap'                        : 'MSAPTable',
+                'msmcap'                      : 'MSMCAPTable',
     }
 
     def nameToId(self, name):
@@ -1553,8 +1634,8 @@ class OpCodeSetTable(ControlTable):
                       'EnabledAtomic1OpCodeSet'       : Atomic1Opcodes,
                       'SupportedLDM1OpCodeSet'        : LDM1Opcodes,
                       'EnabledLDM1OpCodeSet'          : LDM1Opcodes,
-                      'SupportedAdvanced1OpCodeSet'   : Advanced1Opcodes,
-                      'EnabledAdvanced1OpCodeSet'     : Advanced1Opcodes,
+                      'SupportedAdvanced1OpCodeSet'   : Adv1Opcodes,
+                      'EnabledAdvanced1OpCodeSet'     : Adv1Opcodes,
                       'SupportedDROpCodeSet'          : DROpcodes,
                       'EnabledDROpCodeSet'            : DROpcodes,
                       'SupportedCtxIdOpCodeSet'       : CTXIDOpcodes,
@@ -1973,6 +2054,68 @@ class ComponentPageTableStructure(ControlStructure):
 
     _special_dict = {'PTZMMUCAP1': PTZMMUCAP1, 'PTEATTRl': PTEATTRl}
 
+class ComponentSwitchStructure(ControlStructure):
+    _fields_ = [('Type',                       c_u64, 12),
+                ('Vers',                       c_u64,  4),
+                ('Size',                       c_u64, 16),
+                ('SwitchCAP1',                 c_u64, 32),
+                ('SwitchCAP1Control',          c_u64, 32),
+                ('SwitchStatus',               c_u64, 16),
+                ('SwitchOpCTL',                c_u64, 16),
+                ('LPRTSize',                   c_u64, 12),
+                ('HCSize',                     c_u64,  4),
+                ('MHCSize',                    c_u64,  4),
+                ('MaxRoutes',                  c_u64, 12),
+                ('UVCATSZ',                    c_u64,  5),
+                ('MVCATSZ',                    c_u64,  5),
+                ('MCPRTMSMCPRTPadSize',        c_u64,  5),
+                ('R0',                         c_u64, 17),
+                ('LPRTMPRTRowSize',            c_u64, 16),
+                ('MCPRTMSMCPRTRowSize',        c_u64, 16),
+                ('DefaultMCEgressIface',       c_u64, 12),
+                ('DefaultCollEgressIface',     c_u64, 12),
+                ('R1',                         c_u64,  8),
+                ('MaxULAT',                    c_u64, 16),
+                ('MaxMLAT',                    c_u64, 16),
+                ('MCPRTSize',                  c_u64, 12),
+                ('R2',                         c_u64, 20),
+                ('MPRTSize',                   c_u64, 16),
+                ('R3',                         c_u64, 16),
+                ('MSMCPRTSize',                c_u64, 28),
+                ('R4',                         c_u64,  4),
+                ('MVCATPTR',                   c_u64, 32),
+                ('RtCtlPTR',                   c_u64, 32),
+                ('MCPRTPTR',                   c_u64, 32),
+                ('MSMCPRTPTR',                 c_u64, 32),
+                ('MCEUUIDl',                   c_u64, 64),
+                ('MCEUUIDh',                   c_u64, 64),
+                ('MV0',                        c_u64,  1),
+                ('MGMTVC0',                    c_u64,  5),
+                ('MGMTIfaceID0',               c_u64, 12),
+                ('MV1',                        c_u64,  1),
+                ('MGMTVC1',                    c_u64,  5),
+                ('MGMTIfaceID1',               c_u64, 12),
+                ('MV2',                        c_u64,  1),
+                ('MGMTVC2',                    c_u64,  5),
+                ('MGMTIfaceID2',               c_u64, 12),
+                ('R5',                         c_u64, 10),
+                ('MV3',                        c_u64,  1),
+                ('MGMTVC3',                    c_u64,  5),
+                ('MGMTIfaceID3',               c_u64, 12),
+                ('R6',                         c_u64, 46),
+                ('R7',                         c_u64, 64),
+                ('R8',                         c_u64, 64),
+                ]
+
+    _uuid_fields = [('MCEUUIDh', 'MCEUUIDl')]
+
+    _uuid_dict = dict(zip([item for sublist in zip(*_uuid_fields) for item in sublist],
+                          _uuid_fields * 2))
+
+    _special_dict = {'SwitchCAP1': SwitchCAP1,
+                     'SwitchCAP1Control': SwitchCAP1Control,
+                     'SwitchOpCTL': SwitchOpCTL}
+
 class VendorDefinedStructure(ControlStructure):
     _fields_ = [('Type',                       c_u32, 12), #0x0
                 ('Vers',                       c_u32,  4),
@@ -2040,6 +2183,21 @@ class ResponderVCATTable(ControlTableArray):
         self.array = (VCAT * items).from_buffer(self.data)
         self.element = VCAT
 
+class VCATTable(ControlTableArray):
+    # Revisit: identical to RequesterVCATTable/ResponderVCATTable
+    def fileToStructInit(self):
+        super().fileToStructInit()
+        # Revisit: need parent/core so we can dynamically build VCAT based on
+        # HCS, max_hvs, etc.
+        fields = [('VCM',       c_u32, 32)
+        ]
+        VCAT = type('VCAT', (ControlStructure,), {'_fields_': fields,
+                                                  'verbosity': self.verbosity,
+                                                  'Size': 4}) # Revisit
+        items = self.Size // sizeof(VCAT)
+        self.array = (VCAT * items).from_buffer(self.data)
+        self.element = VCAT
+
 class RITTable(ControlTableArray):
     def fileToStructInit(self):
         super().fileToStructInit()
@@ -2054,8 +2212,8 @@ class RITTable(ControlTableArray):
         self.array = (RIT * items).from_buffer(self.data)
         self.element = RIT
 
-# also for MSDT, LPRT, and MPRT
-class SSDTTable(ControlTableArray):
+# for SSDT, MSDT, LPRT, and MPRT
+class SSDTMSDTLPRTMPRTTable(ControlTableArray):
     def fileToStructInit(self):
         super().fileToStructInit()
         # Revisit: need parent so we can dynamically build SSDT based on
@@ -2067,15 +2225,35 @@ class SSDTTable(ControlTableArray):
                   ('VCA',       c_u32,  5),
                   ('EI',        c_u32, 12),
         ]
-        SSDT = type('SSDT', (ControlStructure,), {'_fields_': fields,
+        SSDT = type(self._name, (ControlStructure,), {'_fields_': fields,
                                                   'verbosity': self.verbosity,
                                                   'Size': 4}) # Revisit
         items = self.Size // sizeof(SSDT)
         self.array = (SSDT * items).from_buffer(self.data)
         self.element = SSDT
 
-# also for MCAP, MSAP, and MSMCAP
-class SSAPTable(ControlTableArray):
+class SSDTTable(SSDTMSDTLPRTMPRTTable):
+    def fileToStructInit(self):
+        self._name = 'SSDT'
+        super().fileToStructInit()
+
+class MSDTTable(SSDTMSDTLPRTMPRTTable):
+    def fileToStructInit(self):
+        self._name = 'MSDT'
+        super().fileToStructInit()
+
+class LPRTTable(SSDTMSDTLPRTMPRTTable):
+    def fileToStructInit(self):
+        self._name = 'LPRT'
+        super().fileToStructInit()
+
+class MPRTTable(SSDTMSDTLPRTMPRTTable):
+    def fileToStructInit(self):
+        self._name = 'MPRT'
+        super().fileToStructInit()
+
+# for SSAP, MCAP, MSAP, and MSMCAP
+class SSAPMCAPMSAPMSMCAPTable(ControlTableArray):
     def fileToStructInit(self):
         super().fileToStructInit()
         # use parent to dynamically build SSAP entry based on PAIdxSz & PadSz
@@ -2090,13 +2268,32 @@ class SSAPTable(ControlTableArray):
         fields.append(('ACRSP',           c_u32,  2))
         if pad_sz > 0:
             fields.append(('Pad',         c_u32,  pad_sz))
-        # Revisit: class name
-        SSAP = type('SSAP', (ControlStructure,), {'_fields_': fields,
+        SSAP = type(self._name, (ControlStructure,), {'_fields_': fields,
                                                   'verbosity': self.verbosity,
                                                   'Size': 4})
         items = self.Size // sizeof(SSAP)
         self.array = (SSAP * items).from_buffer(self.data)
         self.element = SSAP
+
+class SSAPTable(SSAPMCAPMSAPMSMCAPTable):
+    def fileToStructInit(self):
+        self._name = 'SSAP'
+        super().fileToStructInit()
+
+class MCAPTable(SSAPMCAPMSAPMSMCAPTable):
+    def fileToStructInit(self):
+        self._name = 'MCAP'
+        super().fileToStructInit()
+
+class MSAPTable(SSAPMCAPMSAPMSMCAPTable):
+    def fileToStructInit(self):
+        self._name = 'MSAP'
+        super().fileToStructInit()
+
+class MSMCAPTable(SSAPMCAPMSAPMSMCAPTable):
+    def fileToStructInit(self):
+        self._name = 'MSMCAP'
+        super().fileToStructInit()
 
 class CAccessRKeyTable(ControlTableArray):
     def fileToStructInit(self):
@@ -2283,8 +2480,9 @@ class PTETable(ControlTableArray):
         # but any field below might need to be split across two c_u64s
         if attr.field.RKeySup:
             fields.extend(self.splitField(('RORKey',  c_u64, 32), bits))
+            bits += 32
             fields.extend(self.splitField(('RWRKey',  c_u64, 32), bits))
-            bits += 64
+            bits += 32
         a_sz = attr.field.ASz
         if a_sz > 0: # max 64 bits
             fields.extend(self.splitField(('ADDR',    c_u64, a_sz), bits))
@@ -2299,16 +2497,525 @@ class PTETable(ControlTableArray):
     def fileToStructInit(self):
         super().fileToStructInit()
         # use parent to dynamically build PTE based on PTESz, PTEATTRl, etc.
-        pte_sz = self.parent.PTESz
+        pte_sz = self.parent.PTESz  # in bits, guaranteed to be 32-bit multiple
+        pte_bytes = pte_sz // 8
         cap1 = PGZMMUCAP1(self.parent.PGZMMUCAP1, self.parent)
         attr = PTEATTRl(self.parent.PTEATTRl, self.parent)
         if attr.zmmuType == 0:
             fields = self.reqPteFields(pte_sz, cap1, attr)
+            pfx = 'Req'
         else:
             fields = self.rspPteFields(pte_sz, cap1, attr)
-        PTE = type('PTE', (ControlStructure,), {'_fields_': fields,
-                                                'verbosity': self.verbosity,
-                                                'Size': 32}) # Revisit
+            pfx = 'Rsp'
+        PTE = type('{}PTE'.format(pfx), (ControlStructure,),
+                   {'_fields_': fields,
+                    'verbosity': self.verbosity,
+                    'Size': pte_bytes})
         items = self.Size // sizeof(PTE)
         self.array = (PTE * items).from_buffer(self.data)
         self.element = PTE
+
+class Packet(LittleEndianStructure):
+    _ocl = OpClasses()
+
+    def __init__(self):
+        super().__init__()
+        bitOffset = 0
+        for field in self._fields_:
+            width = field[2]
+            byteOffset, highBit, lowBit, hexWidth = self.bitField(width, bitOffset)
+            field.byteOffset = byteOffset
+
+    def bitField(self, width, bitOffset):
+        byteOffset = bitOffset // 32 * 8
+        lowBit = bitOffset % 32
+        highBit = lowBit + width - 1
+        hexWidth = (width + 3) // 4
+        return (byteOffset, highBit, lowBit, hexWidth)
+
+    def dataToPkt(data, verbosity=0, csv=False):
+        # Revisit: other packet types (like P2P)
+        pkt = ExplicitReqPkt.from_buffer(data)
+        pkt.data = data
+        pkt.verbosity = verbosity
+        pkt.csv = csv
+        return pkt.dataToPktInit(data, verbosity, csv)
+
+    def uuid(self, uuidField):
+        # Revisit: this is wrong for packets
+        # UUIDs are stored big-endian, but this class is a
+        # LittleEndianStructure, so use byteorder='little'
+        w0 = getattr(self, uuidField[0])
+        w1 = getattr(self, uuidField[1])
+        w2 = getattr(self, uuidField[2])
+        w3 = getattr(self, uuidField[3])
+        return uuid.UUID(bytes=(w3 << 96 | w2 << 64 | w1 << 32 | w0).to_bytes(
+            16, byteorder='little'))
+
+    @property
+    def uuids(self):
+        if hasattr(self, '_uuid_fields'):
+            for uuidField in self._uuid_fields:
+                uu = self.uuid(uuidField)
+                yield (uuidField[0], uuidField[1], uuidField[2], uuidField[3], uu)
+
+    def isUuid(self, field):
+        if hasattr(self, '_uuid_dict'):
+            uuid_tuple = self._uuid_dict.get(field)
+            if uuid_tuple is not None:
+                return self.uuid(uuid_tuple)
+        return None
+
+class ExplicitHdr(Packet):
+    hd_fields = [('DCIDl',                      c_u32,  5), # Byte 0
+                 ('LENl',                       c_u32,  3),
+                 ('DCIDm',                      c_u32,  4),
+                 ('LENh',                       c_u32,  4),
+                 ('DCIDh',                      c_u32,  3),
+                 ('VC',                         c_u32,  5),
+                 ('OpCodel',                    c_u32,  2),
+                 ('PCRC',                       c_u32,  6),
+                 ('OpCodeh',                    c_u32,  3), # Byte 4
+                 ('OCL',                        c_u32,  5),
+                 ('Tag',                        c_u32, 12),
+                 ('SCID',                       c_u32, 12),
+                 ('AKey',                       c_u32,  6), # Byte 8
+                 ('Deadline',                   c_u32, 10),
+                 ('ECN',                        c_u32,  1),
+                 ('GC',                         c_u32,  1),
+                 ('NH',                         c_u32,  1),
+                 ('PM',                         c_u32,  1)]
+    # OS1 is in each individual packet format
+    ms_fields = [('DSID',                       c_u32, 16),
+                 ('SSID',                       c_u32, 16)]
+    rk_fields = [('RKey',                       c_u32, 32)]
+    # Revisit: LPD fields
+    nh_fields = [('NextHdr0',                   c_u32, 32),
+                 ('NextHdr1',                   c_u32, 32),
+                 ('NextHdr2',                   c_u32, 32),
+                 ('NextHdr3',                   c_u32, 32)]
+
+    def dataToPktInit(self, data, verbosity, csv):
+        try:
+            oclName = self.oclName
+            opcName = self.opcName
+            pkt = globals()[oclName + opcName + 'Pkt'].dataToPktInit(
+                self, data, verbosity)
+            pkt.data = data
+            pkt.verbosity = verbosity
+            pkt.csv = csv
+            return pkt
+        except:
+            return self
+
+    @property
+    def DCID(self):
+        return self.DCIDh << 9 | self.DCIDm << 5 | self.DCIDl
+
+    @property
+    def LEN(self):
+        return self.LENh << 3 | self.LENl
+
+    @property
+    def OpCode(self):
+        return self.OpCodeh << 2 | self.OpCodel
+
+    @property
+    def oclName(self):
+        #return self._ocl.name(self.OCL)
+        try:
+            name = self._ocl.name(self.OCL)
+        except KeyError:
+            name = 'Unknown'
+        return name
+
+    @property
+    def DGCID(self):
+        return self.DCID if not self.GC else (self.DSID << 12) | self.DCID
+
+    @property
+    def SGCID(self):
+        return self.SCID if not self.GC else (self.SSID << 12) | self.SCID
+
+    @property
+    def isRequest(self):
+        return self.OpCode >= 4
+
+    @property
+    def isResponse(self):
+        return not self.isRequest
+
+    @property
+    def uniqueness(self):
+        if self.isRequest:
+            return (self.SGCID << 40) | (self.DGCID << 12) | self.Tag
+        else: # isResponse - swap SGCID/DGCID so it matches request
+            return (self.DGCID << 40) | (self.SGCID << 12) | self.Tag
+
+    @property
+    def opcName(self):
+        #return self._ocl.opClass(self.OCL).name(self.OpCode)
+        try:
+            name = self._ocl.opClass(self.OCL).name(self.OpCode)
+        except KeyError:
+            name = 'Unknown'
+        return name
+
+    def __str__(self):
+        r = ('{}' if self.csv else '{:>22s}').format(type(self).__name__)
+        if self.csv or type(self).__name__[0:8] != 'Explicit':
+            r += (',{},{}' if self.csv else '[{:02x}:{:02x}]').format(self.OCL, self.OpCode)
+        else:
+            r += ' OpClass: {}({:02x}), OpCode: {}({:02x})'.format(
+                self.oclName, self.OCL, self.opcName, self.OpCode)
+        r += (',{}' if self.csv else ', Length: {:2d}').format(self.LEN)
+        if self.GC:
+            # Revisit: CSV format
+            try: # Revisit: workaround for Unknown packets
+                r += ', SGCID: {:04x}:{:03x}, DGCID: {:04x}:{:03x}'.format(
+                    self.SSID, self.SCID, self.DSID, self.DCID)
+            except AttributeError:
+                r += ', SGCID: ????:{:03x}, DGCID: ????:{:03x}'.format(
+                    self.SCID, self.DCID)
+        else:
+            r += (',{},{}' if self.csv else ', SCID: {:03x}, DCID: {:03x}').format(self.SCID, self.DCID)
+        r += (',{},{},{},{},{},{},{},{},{}' if self.csv else
+              ', Tag: {:03x}, VC: {}, PCRC: {:02x}, AKey: {:02x}, Deadline: {:4d}, ECN: {}, GC: {}, NH: {}, PM: {}').format(
+            self.Tag, self.VC, self.PCRC, self.AKey, self.Deadline,
+            self.ECN, self.GC, self.NH, self.PM)
+        return r
+
+class ExplicitReqHdr(ExplicitHdr):
+    rq_fields = [('LP',                         c_u32,  1),
+                 ('TA',                         c_u32,  1),
+                 ('RK',                         c_u32,  1)]
+    hd_fields = ExplicitHdr.hd_fields + rq_fields
+
+    def __str__(self):
+        r = super().__str__()
+        r += (',{},{},{}' if self.csv else ', LP: {}, TA: {}, RK: {}').format(self.LP, self.TA, self.RK)
+        return r
+
+class ExplicitPkt(ExplicitHdr):
+    _fields_ = ExplicitHdr.hd_fields
+
+class ExplicitReqPkt(ExplicitReqHdr):
+    _fields_ = ExplicitHdr.hd_fields + ExplicitReqHdr.rq_fields
+
+class Core64ReadPkt(ExplicitReqHdr):
+    os1_fields = [('RDSize',                     c_u32,  9)]
+    os2_fields = [('Addrh',                      c_u32, 32), # Byte 12
+                  ('Addrl',                      c_u32, 32)] # Byte 16
+    os3_fields = [('R0',                         c_u32,  5), # Byte 20
+                  ('PD',                         c_u32,  1),
+                  ('FPS',                        c_u32,  2),
+                  ('ECRC',                       c_u32, 24)]
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        fields = ExplicitReqHdr.hd_fields + Core64ReadPkt.os1_fields
+        if exp_pkt.GC:
+            fields.extend(ExplicitHdr.ms_fields)
+        if exp_pkt.RK:
+            fields.extend(ExplicitHdr.rk_fields)
+        fields.extend(Core64ReadPkt.os2_fields)
+        if exp_pkt.NH:
+            fields.extend(ExplicitHdr.nh_fields)
+        fields.extend(Core64ReadPkt.os3_fields)
+        pkt_type = type('Core64Read', (Core64ReadPkt,),
+                        {'_fields_': fields,
+                         'data': exp_pkt.data,
+                         'verbosity': exp_pkt.verbosity})
+        pkt = pkt_type.from_buffer(exp_pkt.data)
+        return pkt
+
+    @property
+    def Addr(self):
+        return self.Addrh << 32 | self.Addrl
+
+    def __str__(self):
+        r = super().__str__()
+        r += (',,,{},,{}' if self.csv else ', RDSize: {:3d}, Addr: {:016x}').format(self.RDSize, self.Addr)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R0: {:02x}'.format(self.R0)
+        r += (',,,,,,,,{},{},,,,,{}' if self.csv else ', PD: {}, FPS: {}, ECRC: {:06x}').format(self.PD, self.FPS, self.ECRC)
+        return r
+
+class Core64ReadResponsePkt(ExplicitHdr):
+    os1_fields = [('LP',                         c_u32,  1),
+                  ('R0',                         c_u32,  3),
+                  ('PadCNT',                     c_u32,  2),
+                  ('MS',                         c_u32,  2),
+                  ('RRSPReason',                 c_u32,  4)]
+    os3_fields = [('R1',                         c_u32,  8),
+                  ('ECRC',                       c_u32, 24)]
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        fields = ExplicitHdr.hd_fields + Core64ReadResponsePkt.os1_fields
+        if exp_pkt.GC:
+            fields.extend(ExplicitHdr.ms_fields)
+        # Revisit: LP (LPD) field
+        # Revisit: MS (Meta) field
+        pay_len = exp_pkt.LEN - 4  # Revisit: constant 4
+        fields.append(('Payload', c_u32 * pay_len))
+        if exp_pkt.NH:
+            fields.extend(ExplicitHdr.nh_fields)
+        fields.extend(Core64ReadResponsePkt.os3_fields)
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type = type(className, (Core64ReadResponsePkt,),
+                        {'_fields_': fields,
+                         'data': exp_pkt.data,
+                         'verbosity': exp_pkt.verbosity,
+                         'pay_len': pay_len})
+        pkt = pkt_type.from_buffer(exp_pkt.data)
+        return pkt
+
+    def __str__(self):
+        r = super().__str__()
+        r += (',{}' if self.csv else ', LP: {}').format(self.LP)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R0: {}'.format(self.R0)
+        r += (',,,,,,{},,,,,,,,{},,,{}' if self.csv else ', PadCNT: {:3d}, MS: {}, RRSPReason: {}').format(
+            self.PadCNT, self.MS, self.RRSPReason)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R1: {:02x}'.format(self.R1)
+        r += (',,,,{}' if self.csv else ', ECRC: {:06x}').format(self.ECRC)
+        if self.verbosity:
+            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
+            for i in reversed(range(self.pay_len)):
+                r += ' {:08x}'.format(self.Payload[i])
+        return r
+
+class Core64WritePkt(ExplicitReqHdr):
+    os1_fields = [('TC',                         c_u32,  1),
+                  ('NS',                         c_u32,  1),
+                  ('UN',                         c_u32,  1),
+                  ('PU',                         c_u32,  1),
+                  ('RC',                         c_u32,  1),
+                  ('MS',                         c_u32,  2),
+                  ('PadCNT',                     c_u32,  2)]
+    os2_fields = [('Addrh',                      c_u32, 32), # Byte 12
+                  ('Addrl',                      c_u32, 32)] # Byte 16
+    os3_fields = [('R0',                         c_u32,  5), # Byte YY
+                  ('PD',                         c_u32,  1),
+                  ('FPS',                        c_u32,  2),
+                  ('ECRC',                       c_u32, 24)]
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        fields = ExplicitReqHdr.hd_fields + Core64WritePkt.os1_fields
+        hdr_len = 6 # Revisit: constant 6
+        if exp_pkt.NH:
+            hdr_len += 4
+        if exp_pkt.GC:
+            fields.extend(ExplicitHdr.ms_fields)
+            hdr_len += 1
+        if exp_pkt.RK:
+            fields.extend(ExplicitHdr.rk_fields)
+            hdr_len += 1
+        fields.extend(Core64WritePkt.os2_fields)
+        # Revisit: MS (Meta) field
+        pay_len = exp_pkt.LEN - hdr_len
+        fields.append(('Payload', c_u32 * pay_len))
+        if exp_pkt.NH:
+            fields.extend(ExplicitHdr.nh_fields)
+        fields.extend(Core64WritePkt.os3_fields)
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type = type(className, (Core64WritePkt,),
+                        {'_fields_': fields,
+                         'data': exp_pkt.data,
+                         'verbosity': exp_pkt.verbosity,
+                         'pay_len': pay_len})
+        pkt = pkt_type.from_buffer(exp_pkt.data)
+        return pkt
+
+    @property
+    def Addr(self):
+        return self.Addrh << 32 | self.Addrl
+
+    def __str__(self):
+        r = super().__str__()
+        r += (',,,,{},{}' if self.csv else ', PadCNT: {:3d}, Addr: {:016x}').format(self.PadCNT, self.Addr)
+        r += (',,{},{},{},{},{},{}' if self.csv else
+              ', TC: {}, NS: {}, UN: {}, PU: {}, RC: {}, MS: {}').format(
+            self.TC, self.NS, self.UN, self.PU, self.RC, self.MS)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R0: {:02x}'.format(self.R0)
+        r += (',{},{},,,,,{}' if self.csv else ', PD: {}, FPS: {}, ECRC: {:06x}').format(self.PD, self.FPS, self.ECRC)
+        if self.verbosity:
+            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
+            for i in reversed(range(self.pay_len)):
+                r += ' {:08x}'.format(self.Payload[i])
+        return r
+
+class Core64StandaloneAckPkt(ExplicitHdr):
+    os1_fields = [('RNR_QD',                     c_u32,  3),
+                  ('RSl',                        c_u32,  3),
+                  ('Reason',                     c_u32,  6)]
+    os3_fields = [('RSh',                        c_u32,  8), # Byte 12
+                  ('ECRC',                       c_u32, 24)]
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        fields = ExplicitHdr.hd_fields + Core64StandaloneAckPkt.os1_fields
+        if exp_pkt.GC:
+            fields.extend(ExplicitHdr.ms_fields)
+        if exp_pkt.NH:
+            fields.extend(ExplicitHdr.nh_fields)
+        fields.extend(Core64StandaloneAckPkt.os3_fields)
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type = type(className, (Core64StandaloneAckPkt,),
+                        {'_fields_': fields,
+                         'data': exp_pkt.data,
+                         'verbosity': exp_pkt.verbosity})
+        pkt = pkt_type.from_buffer(exp_pkt.data)
+        return pkt
+
+    @property
+    def RS(self):
+        return self.RSh << 3 | self.RSl
+
+    def __str__(self):
+        r = super().__str__()
+        r += (',,,,,,,,,,,,,,,,,,,{},{},{}' if self.csv else ', RNR_QD: {}, RS: {}, Reason: {}').format(
+            self.RNR_QD, self.RS, self.Reason)
+        r += (',{}' if self.csv else ', ECRC: {:06x}').format(self.ECRC)
+        return r
+
+class ControlReadPkt(ExplicitHdr):
+    os1_fields = [('R0',                         c_u32,  2),
+                  ('RK',                         c_u32,  1),
+                  ('DR',                         c_u32,  1),
+                  ('RDSize',                     c_u32,  8)]
+    os2_fields = [('DRIface',                    c_u32, 12), # Byte 12
+                  ('Addrh',                      c_u32, 20),
+                  ('Addrl',                      c_u32, 32), # Byte 16
+                  ('MGRUUID0',                   c_u32, 32), # Byte 20
+                  ('MGRUUID1',                   c_u32, 32), # Byte 24
+                  ('MGRUUID2',                   c_u32, 32), # Byte 28
+                  ('MGRUUID3',                   c_u32, 32)] # Byte 32
+    os3_fields = [('R1',                         c_u32,  6), # Byte 36
+                  ('FPS',                        c_u32,  2),
+                  ('ECRC',                       c_u32, 24)]
+
+    _uuid_fields = [('MGRUUID0', 'MGRUUID1', 'MGRUUID2', 'MGRUUID3')]
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        fields = ExplicitHdr.hd_fields + ControlReadPkt.os1_fields
+        if exp_pkt.GC:
+            fields.extend(ExplicitHdr.ms_fields)
+        if exp_pkt.RK:
+            fields.extend(ExplicitHdr.rk_fields)
+        fields.extend(ControlReadPkt.os2_fields)
+        if exp_pkt.NH:
+            fields.extend(ExplicitHdr.nh_fields)
+        fields.extend(ControlReadPkt.os3_fields)
+        pkt_type = type('ControlRead', (ControlReadPkt,),
+                        {'_fields_': fields,
+                         'data': exp_pkt.data,
+                         'verbosity': exp_pkt.verbosity})
+        pkt = pkt_type.from_buffer(exp_pkt.data)
+        return pkt
+
+    @property
+    def Addr(self):
+        return self.Addrh << 32 | self.Addrl
+
+    @property
+    def MGRUUID(self):
+        return self.uuid(self._uuid_fields[0])
+
+    def __str__(self):
+        r = super().__str__()
+        if self.verbosity > 1 and not self.csv:
+            r += ', R0: {}'.format(self.R0)
+        r += (',,,{},{}' if self.csv else ', RK: {}, DR: {}').format(self.RK, self.DR)
+        if self.DR:
+            r += (',{}' if self.csv else ', DRIface: {}').format(self.DRIface)
+        elif self.csv:
+            r += ','
+        r += (',{},,{},{}' if self.csv else ', RDSize: {:3d}, Addr: {:013x}, MGRUUID: {}').format(
+            self.RDSize, self.Addr, self.MGRUUID)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R1: {:02x}'.format(self.R1)
+        r += (',,,,,,,,{},,,,,{}' if self.csv else ', FPS: {}, ECRC: {:06x}').format(self.FPS, self.ECRC)
+        return r
+
+class ControlReadResponsePkt(Core64ReadResponsePkt):
+    pass
+
+class ControlWritePkt(ExplicitHdr):
+    os1_fields = [('R0',                         c_u32,  2),
+                  ('RK',                         c_u32,  1),
+                  ('DR',                         c_u32,  1),
+                  ('R1',                         c_u32,  8)]
+    os2_fields = [('DRIface',                    c_u32, 12), # Byte 12
+                  ('Addrh',                      c_u32, 20),
+                  ('Addrl',                      c_u32, 32)] # Byte 16
+    os2b_fields = [('MGRUUID0',                  c_u32, 32), # Byte NN
+                  ('MGRUUID1',                   c_u32, 32),
+                  ('MGRUUID2',                   c_u32, 32),
+                  ('MGRUUID3',                   c_u32, 32)]
+    os3_fields = [('PadCNT',                     c_u32,  2), # Byte YY
+                  ('R2',                         c_u32,  4),
+                  ('FPS',                        c_u32,  2),
+                  ('ECRC',                       c_u32, 24)]
+
+    _uuid_fields = [('MGRUUID0', 'MGRUUID1', 'MGRUUID2', 'MGRUUID3')]
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        fields = ExplicitHdr.hd_fields + ControlWritePkt.os1_fields
+        hdr_len = 10 # Revisit: constant 10
+        if exp_pkt.NH:
+            hdr_len += 4
+        if exp_pkt.GC:
+            fields.extend(ExplicitHdr.ms_fields)
+            hdr_len += 1
+        if exp_pkt.RK:
+            fields.extend(ExplicitHdr.rk_fields)
+            hdr_len += 1
+        fields.extend(ControlWritePkt.os2_fields)
+        pay_len = exp_pkt.LEN - hdr_len
+        fields.append(('Payload', c_u32 * pay_len))
+        fields.extend(ControlWritePkt.os2b_fields)
+        if exp_pkt.NH:
+            fields.extend(ExplicitHdr.nh_fields)
+        fields.extend(ControlWritePkt.os3_fields)
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type = type(className, (ControlWritePkt,),
+                        {'_fields_': fields,
+                         'data': exp_pkt.data,
+                         'verbosity': exp_pkt.verbosity,
+                         'pay_len': pay_len})
+        pkt = pkt_type.from_buffer(exp_pkt.data)
+        return pkt
+
+    @property
+    def Addr(self):
+        return self.Addrh << 32 | self.Addrl
+
+    @property
+    def MGRUUID(self):
+        return self.uuid(self._uuid_fields[0])
+
+    def __str__(self):
+        r = super().__str__()
+        if self.verbosity > 1 and not self.csv:
+            r += ', R0: {}'.format(self.R0)
+        r += (',,,{},{}' if self.csv else ', RK: {}, DR: {}').format(self.RK, self.DR)
+        if self.DR:
+            r += (',{}' if self.csv else ', DRIface: {}').format(self.DRIface)
+        elif self.csv:
+            r += ','
+        if self.verbosity > 1 and not self.csv:
+            r += ', R1: {:02x}'.format(self.R1)
+        r += (',,{},{},{}' if self.csv else ', PadCNT: {:3d}, Addr: {:013x}, MGRUUID: {}').format(
+            self.PadCNT, self.Addr, self.MGRUUID)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R2: {:02x}'.format(self.R2)
+        r += (',,,,,,,,{},,,,,{}' if self.csv else ', FPS: {}, ECRC: {:06x}').format(self.FPS, self.ECRC)
+        if self.verbosity:
+            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
+            for i in reversed(range(self.pay_len)):
+                r += ' {:08x}'.format(self.Payload[i])
+        return r
+
+class ControlStandaloneAckPkt(Core64StandaloneAckPkt):
+    pass
