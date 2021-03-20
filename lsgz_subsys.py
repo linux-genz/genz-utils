@@ -109,8 +109,11 @@ def ls_comp(ctl, map, ignore_dr=True):
     # do core structure first
     core_path = ctl / 'core@0x0' / 'core'
     core = get_struct(core_path, map, verbosity=args.verbosity)
-    print('  {}='.format('core@0x0'), end='')
-    print(core)
+    try:
+        print('  {}='.format('core@0x0'), end='')
+        print(core)
+    except BrokenPipeError:
+        return drs
     parents['core@0x0'] = core
     for dir, dirnames, filenames in os.walk(ctl):
         #print('{}, {}, {}'.format(dir, dirnames, filenames))
@@ -123,12 +126,15 @@ def ls_comp(ctl, map, ignore_dr=True):
         for file in filenames:
             if file == 'core':  # we already did core
                 continue
-            print('  {}='.format(dpath.name), end='')
-            fpath = dpath / file
-            parent = get_parent(fpath, dpath, parents)
-            struct = get_struct(fpath, map, core=core, parent=parent,
-                                verbosity=args.verbosity)
-            print(struct)
+            try:
+                print('  {}='.format(dpath.name), end='')
+                fpath = dpath / file
+                parent = get_parent(fpath, dpath, parents)
+                struct = get_struct(fpath, map, core=core, parent=parent,
+                                    verbosity=args.verbosity)
+                print(struct)
+            except BrokenPipeError:
+                return drs
             parents[dpath.name] = struct
         # end for filenames
     # end for dir
