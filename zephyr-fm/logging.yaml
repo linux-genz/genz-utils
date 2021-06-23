@@ -2,15 +2,18 @@ version: 1
 disable_existing_loggers: False
 formatters:
   full:
-    format: '%(pathname)s : %(lineno)d : %(levelname)s : %(message)s'
+    format: '%(asctime)s %(name)s %(filename)s:%(lineno)d | %(levelname)s | %(message)s'
+  extended:
+    format: '%(asctime)s %(name)s %(levelname)s: %(message)s'
   simple:
-    format: '%(levelname)s | - %(message)s'
+    format: '%(levelname)s | %(name)s: %(message)s'
 handlers:
   console:
     class: logging.StreamHandler
+    level: DEBUG # Revisit: default log level
     formatter: simple
     stream: ext://sys.stdout
-  info_file_handler:
+  file_handler:
     class: logging.handlers.RotatingFileHandler
     level: DEBUG # Revisit: default log level
     formatter: full
@@ -18,12 +21,14 @@ handlers:
     maxBytes: 10485760 # 10MB
     backupCount: 20
     encoding: utf8
-
 loggers:
+  zephyr:
+    level: DEBUG # Revisit: default log level
+    handlers: [console, file_handler]
+    propagate: false
   FlaskFatLog:
     level: DEBUG # Revisit: default log level
-    handlers: [console, info_file_handler]
-    propagate: no
-
+    handlers: [console, file_handler]
+    propagate: false
 root:
-    handlers: [console, info_file_handler]
+    handlers: [console, file_handler]

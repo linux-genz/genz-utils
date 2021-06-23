@@ -72,7 +72,7 @@ def timing(f):
         return result
     return wrapper
 
-@timing
+#@timing
 def get_struct(fpath, map, parent=None, core=None, verbosity=0):
     fname = fpath.name
     with fpath.open(mode='rb') as f:
@@ -103,35 +103,47 @@ def get_parent(fpath, dpath, parents):
             break
     return parent
 
-def ls_comp(ctl, map, ignore_dr=True):
+def get_cstate(ctl, map):
+    core_path = ctl / 'core@0x0' / 'core'
+    core = get_struct(core_path, map)
+    cs = genz.CStatus(core.CStatus, core)
+    cstate = cs._c_state[cs.field.CState]
+    return cstate
+
+def ls_comp(ctl, map, ignore_dr=True, verbosity=1):
     parents = {}
     drs = []
     # do core structure first
     core_path = ctl / 'core@0x0' / 'core'
-    core = get_struct(core_path, map, verbosity=args.verbosity)
+    core = get_struct(core_path, map, verbosity=verbosity)
     try:
-        print('  {}='.format('core@0x0'), end='')
-        print(core)
+        if verbosity > 1:
+            print('  {}='.format('core@0x0'), end='')
+            print(core)
     except BrokenPipeError:
         return drs
     parents['core@0x0'] = core
     for dir, dirnames, filenames in os.walk(ctl):
-        #print('{}, {}, {}'.format(dir, dirnames, filenames))
+        dirnames.sort()
+        #print('dir={}, dirnames={}, filenames={}'.format(dir, dirnames, filenames))
         if dir[-3:] == '/dr':
             drs.append(Path(dir))
             continue
         elif ignore_dr and dir.find('/dr/') >= 0:
             continue
         dpath = Path(dir)
-        for file in filenames:
+        for file in sorted(filenames):
             if file == 'core':  # we already did core
                 continue
+            if verbosity < 2 and file != 'interface': # ignore non-interfaces
+                continue;
             try:
-                print('  {}='.format(dpath.name), end='')
+                equals = verbosity > 1
+                print('  {}{}'.format(dpath.name, '=' if equals else ' '), end='')
                 fpath = dpath / file
                 parent = get_parent(fpath, dpath, parents)
                 struct = get_struct(fpath, map, core=core, parent=parent,
-                                    verbosity=args.verbosity)
+                                    verbosity=verbosity)
                 print(struct)
             except BrokenPipeError:
                 return drs
@@ -172,44 +184,46 @@ def main():
         #print('fabric: {}, num={}'.format(fab, fabnum))
         bridges = fab.glob('bridge*')
         for br in bridges:
+            ctl = br / 'control'
             gcid = get_gcid(br)
             cuuid = get_cuuid(br)
             cclass = get_cclass(br)
             serial = get_serial(br)
+            cstate = get_cstate(ctl, map)
             brnum = component_num(br)
-            print('{}:{} {:9s} {}:{:#018x}'.format(fabnum, gcid,
-                                                   'bridge{}'.format(brnum),
-                                                   cuuid, serial))
+            print('{}:{} {:10s} {}:{:#018x} {}'.format(fabnum, gcid,
+                                                       'bridge{}'.format(brnum),
+                                                       cuuid, serial, cstate))
             if args.verbosity < 1:
                 continue
-            ctl = br / 'control'
-            drs = ls_comp(ctl, map)
+            drs = ls_comp(ctl, map, verbosity=args.verbosity)
             for dr in drs:
                 print('dr: {}'.format(dr))  # Revisit: better format
                 if args.verbosity < 1:
                     continue
                 # Revist: handle nested drs?
-                _ = ls_comp(dr, map, ignore_dr=False)
+                _ = ls_comp(dr, map, ignore_dr=False, verbosity=args.verbosity)
         # end for br
     # end for fab
     genz_fabrics = Path('/sys/bus/genz/fabrics')
     fab_comps = genz_fabrics.glob('fabric*/*:*/*:*:*')
-    for comp in fab_comps:
+    for comp in sorted(fab_comps):
+        ctl = comp / 'control'
         cuuid = get_cuuid(comp)
         cclass = get_cclass(comp)
         serial = get_serial(comp)
-        print('{} {:9s} {}:{:#018x}'.format(comp.name, genz.cclass_name[cclass],
-                                            cuuid, serial))
+        cstate = get_cstate(ctl, map)
+        print('{} {:10s} {}:{:#018x} {}'.format(comp.name, genz.cclass_name[cclass],
+                                                cuuid, serial, cstate))
         if args.verbosity < 1:
             continue
-        ctl = comp / 'control'
-        drs = ls_comp(ctl, map)
+        drs = ls_comp(ctl, map, verbosity=args.verbosity)
         for dr in drs:
             print('dr: {}'.format(dr))  # Revisit: better format
             if args.verbosity < 1:
                 continue
             # Revist: handle nested drs?
-            _ = ls_comp(dr, map, ignore_dr=False)
+            _ = ls_comp(dr, map, ignore_dr=False, verbosity=args.verbosity)
         # end for dr
     # end for comp
 

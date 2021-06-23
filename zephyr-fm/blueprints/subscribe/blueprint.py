@@ -16,6 +16,7 @@ from blueprints.resource.blueprint import send_resource
 import flask_fat
 
 Journal = self = flask_fat.Journal(__file__)
+log = logging.getLogger('zephyr')
 
 """ ------------------------------- ROUTES ------------------------------- """
 
@@ -63,13 +64,13 @@ def add_subscribe():
                 try:
                     add = Journal.mainapp.conf.add[br]
                 except KeyError:
-                    logging.debug('bridge {} has no Conf resources'.format(br))
+                    log.debug('bridge {} has no Conf resources'.format(br))
                     continue
                 for res in add:
                     resp = send_resource(res, [callback_endpoint])
                     # Revisit: do something with resp
 
-        logging.info('subscribe/add_event: %s' % status)
+        log.info('subscribe/add_event: %s' % status)
     response['status'] = status
 
     return flask.make_response(flask.jsonify(response), code)

@@ -10,6 +10,7 @@ from pdb import set_trace
 import flask_fat
 
 Journal = self = flask_fat.Journal(__file__)
+log = logging.getLogger('zephyr')
 
 """ ----------------------- ROUTES --------------------- """
 
@@ -17,11 +18,11 @@ Journal = self = flask_fat.Journal(__file__)
 def create_resource():
     """
         Accepts POST request with a json body describing the resource and the
-    list of endpoints (optional. Aliases or urls) to notify about the resource.
+    fabric_uuid the resource belongs to.
     Body model:
     {
-        'endpoint' : 'array',
-        'resource' : 'object'
+        'fabric_uuid' : 'string',
+        'resource'    : 'object'
     }
 
     Refer to "get_resource_schema()" for the "resource" model
@@ -35,24 +36,35 @@ def create_resource():
         return flask.make_response(flask.jsonify(msg), 400)
 
     resource = body.get('resource', None)
-    endpoints = body.get('endpoint', [])
+    fabric_uuid = body.get('fabric_uuid', None)
 
-    # If nobody subscribed to this "create" event, then nobody will be notified.
-    # TODO: save the target endpoints that have not subscribed yet and call them
-    # with the shared resource once they subscribe.
-    if not mainapp.add_callback:
-        msg = { 'error' : 'Nothing happened. There are No subscribers to this event, yet.' }
-        return flask.make_response(flask.jsonify(msg), 304)
-
-    # Gets the list of endpoint targets to share resource with.
-    endpoints = extract_target_endpoints(endpoints, mainapp.add_callback)
-
-    if not mainapp.add_callback:
-        msg = { 'error' : 'Targeted endpoints not found in the subscription list!' }
+    # Check that the fabric_uuid matches ours
+    if fabric_uuid != mainapp.conf.data['fabric_uuid']:
+        msg = { 'error' : 'Incorrect fabric_uuid: {}.'.format(fabric_uuid) }
         return flask.make_response(flask.jsonify(msg), 404)
 
-    resp = send_resource(resource, endpoints)
+    # Validate resource against schema
+    try:
+        jsonschema.validate(resource, schema=get_resource_schema())
+    except Exception as err:
+        msg = { 'error' : str(err) }
+        return flask.make_response(flask.jsonify(msg), 400)
 
+    add_res = mainapp.conf.add_resource(resource)
+    endpoints = []
+    for con in resource['consumers']:
+        try:
+            callback_endpoint = mainapp.add_callback[con]
+            endpoints.append(callback_endpoint)
+        except KeyError:
+            log.debug('consumer {} has no subscribed endpoint'.format(con))
+
+    # If nobody subscribed to this "create" event, then nobody will be notified.
+    if len(endpoints) == 0:
+        msg = { 'warning' : 'Nothing happened. There are no subscribers to this event, yet.' }
+        return flask.make_response(flask.jsonify(msg), 304)
+
+    resp = send_resource(add_res, endpoints)
     return resp
 
 
@@ -65,7 +77,7 @@ def send_resource(resource: dict, endpoints: list):
     response = {}
     response['callback'] = {'failed': [], 'success': []}
 
-    logging.debug('send_resource: endpoints={}'.format(endpoints))
+    log.debug('send_resource: endpoints={}'.format(endpoints))
     if resource is None:
         response['error'] = 'Missing "resource" object! (the one describing the resource..)'
         return flask.make_response(flask.jsonify(response), 400)
@@ -78,7 +90,7 @@ def send_resource(resource: dict, endpoints: list):
 
     for endpoint in endpoints:
         try:
-            logging.debug('Sending {} to {}'.format(resource, endpoint))
+            log.debug('Sending {} to {}'.format(resource, endpoint))
             msg = HTTP_REQUESTS.post(endpoint, json=resource)
             if msg.status_code < 300:
                 response['callback']['success'].append(endpoint)
@@ -93,51 +105,18 @@ def send_resource(resource: dict, endpoints: list):
     return flask.make_response(flask.jsonify(response), 200)
 
 
-def extract_target_endpoints(targets, known):
-    """
-        There are subscribed endpoints (@known) and there are targets that a user
-    wants to share the resource with. This function gets a "union" of the two and
-    will return only those targets that are in the known state.
-
-        @param targets: a list of urls or aliases to get urls from the the subscription list.
-        @param known: a subscription dictionary of { 'alias' : 'url' } pairs.
-    """
-    if not targets:
-        return known.values()
-
-    result = []
-    for target in targets:
-        url = None
-
-        #Check for the Alias match
-        if target in known:
-            url = known[target]
-
-        #Check for URL match
-        if url is None and target in known.values():
-            url = target
-
-        if url is not None and not url in result: # found and not duplicate
-            result.append(url)
-
-    return result
-
-
 def get_resource_schema():
     """
-    The Resource schema that is sent in the body by
-    the resource creator/FM and which is understood by LLaMaS service.
+    The Resource schema that is sent in the body by the resource creator.
     """
     return {
-        'gcid': 'number',
-        'cclass': 'number',
-        'mgr_uuid': 'string',
-        'fru_uuid': 'string',
-
+        'producer': 'string',
+        'consumers': [ 'string' ],
         'resources': [
             {
                 'class_uuid': 'string',
                 'instance_uuid': 'string',
+                'flags': 'number',
                 'class': 'number',
                 'memory': [
                     {

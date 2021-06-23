@@ -21,6 +21,7 @@
 
 from ctypes import *
 import uuid
+from enum import IntEnum
 
 c_u8  = c_ubyte
 c_u16 = c_ushort
@@ -29,11 +30,36 @@ c_u64 = c_ulonglong
 
 genzUUID = uuid.UUID('4813ea5f-074e-4be2-a355-a354145c9927')
 
+class CState(IntEnum):
+    CDown = 0
+    CCFG = 1
+    CUp = 2
+    CLP = 3
+    CDLP = 4
+
+    def __str__(self):
+        _c_state = ['C-Down', 'C-CFG', 'C-Up', 'C-LP', 'C-DLP']
+        return _c_state[self.value]
+
+class IState(IntEnum):
+    IDown = 0
+    ICFG = 1
+    IUp = 2
+    ILP = 3
+
+    def __str__(self):
+        _i_state = ['I-Down', 'I-CFG', 'I-Up', 'I-LP']
+        return _i_state[self.value]
+
 class GCID():
     def __init__(self, val=None, sid=0, cid=None, str=None):
         if val is not None:
             self.val = val
         elif cid is not None:
+            if cid < 0 or cid >= 1<<12:
+                raise(ValueError)
+            if sid < 0 or sid >= 1<<16:
+                raise(ValueError)
             self.val = (sid << 12) | cid
         elif str is not None:
             sid_str, cid_str = str.split(':')
@@ -42,22 +68,25 @@ class GCID():
             self.val = (sid << 12) | cid
         else:
             raise(TypeError)
+        # Revisit: this doesn't allow INVALID_GCID
+        #if self.val < 0 or self.val >= 1<<28:
+        #    raise(ValueError)
 
     @property
     def sid(self):
         return self.val >> 12
 
-    @sid.setter
-    def sid(self, x):
-        self.val = ((x & 0xffff) << 12) | self.cid
-
     @property
     def cid(self):
         return self.val & 0xfff
 
-    @cid.setter
-    def cid(self, x):
-        self.val = (self.sid << 12) | (x & 0xfff)
+    def __eq__(self, other):
+        if type(self) != type(other):
+            return NotImplemented
+        return self.val == other.val
+
+    def __hash__(self):
+        return hash(self.val)
 
     def __repr__(self):
         return '{:04x}:{:03x}'.format(self.sid, self.cid)

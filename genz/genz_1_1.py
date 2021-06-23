@@ -21,6 +21,7 @@
 
 import textwrap
 import shutil
+import crcmod
 from pdb import set_trace
 from .genz_common import *
 
@@ -293,6 +294,10 @@ class IStatus(SpecialField, Union):
     def __init__(self, value, parent, verbosity=0):
         super().__init__(value, parent, verbosity=verbosity)
         self.val = value
+
+    @property
+    def istate(self):
+        return self._i_state[self.field.IState]
 
 class IControl(SpecialField, Union):
     class IControlFields(Structure):
@@ -1183,6 +1188,9 @@ class ControlStructureMap(LittleEndianStructure):
         struct.fileToStructInit()
         return struct
 
+    def set_fd(self, f):
+        self.fd = f.fileno()
+
 #Revisit: jmh - this is almost totally version independent
 class ControlStructure(ControlStructureMap):
     def __init__(self):
@@ -1780,6 +1788,25 @@ class InterfaceStructure(ControlStructure):
                       'IErrorFaultInjection': IError, 'IErrorTrigger': IError,
                       'PeerState': PeerState, 'LinkCTLControl': LinkCTLControl}
 
+    def __str__(self):
+        r = super().__str__()
+        if self.verbosity == 1:
+            istatus = IStatus(self.IStatus, self)
+            r = '{:6s}'.format(istatus.istate)
+            peer_state = PeerState(self.PeerState, self)
+            peer_cid = self.PeerCID if peer_state.field.PeerCIDValid else None
+            peer_sid = (self.PeerSID if peer_state.field.PeerSIDValid else
+                        0) # Revisit
+            try:
+                peer_gcid = GCID(sid=peer_sid, cid=peer_cid)
+            except TypeError:
+                peer_gcid = None
+            peer_iface = (self.PeerInterfaceID
+                          if peer_state.field.PeerIfaceIDValid == 1 else None)
+            if peer_gcid:
+                r += ' Peer {}.{}'.format(peer_gcid, peer_iface)
+        return r
+
 class InterfaceXStructure(ControlStructure):
     '''InterafceXStructure is the same as InterfaceStructure, but with
     the optional fields included'''
@@ -1861,6 +1888,25 @@ class InterfaceXStructure(ControlStructure):
                       'IErrorStatus': IError, 'IErrorDetect': IError,
                       'IErrorFaultInjection': IError, 'IErrorTrigger': IError,
                       'PeerState': PeerState, 'LinkCTLControl': LinkCTLControl}
+
+    def __str__(self):
+        r = super().__str__()
+        if self.verbosity == 1:
+            istatus = IStatus(self.IStatus, self)
+            r = '{:6s}'.format(istatus.istate)
+            peer_state = PeerState(self.PeerState, self)
+            peer_cid = self.PeerCID if peer_state.field.PeerCIDValid else None
+            peer_sid = (self.PeerSID if peer_state.field.PeerSIDValid else
+                        0) # Revisit
+            try:
+                peer_gcid = GCID(sid=peer_sid, cid=peer_cid)
+            except TypeError:
+                peer_gcid = None
+            peer_iface = (self.PeerInterfaceID
+                          if peer_state.field.PeerIfaceIDValid == 1 else None)
+            if peer_gcid:
+                r += ' Peer {}.{}'.format(peer_gcid, peer_iface)
+        return r
 
 class InterfacePHYStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12),  # Basic PHY Fields
@@ -2567,6 +2613,8 @@ class Packet(LittleEndianStructure):
         return None
 
 class ExplicitHdr(Packet):
+    ecrc = crcmod.mkCrcFun(0xade27a<<1|1, initCrc=0, xorOut=0xffffff, rev=True)
+
     hd_fields = [('DCIDl',                      c_u32,  5), # Byte 0
                  ('LENl',                       c_u32,  3),
                  ('DCIDm',                      c_u32,  4),
@@ -2644,6 +2692,15 @@ class ExplicitHdr(Packet):
     @property
     def isResponse(self):
         return not self.isRequest
+
+    def chk_ecrc(self) -> int:
+        crc = ExplicitHdr.ecrc(self.data[0:self.LEN*4-3])
+        return 0 if crc == self.ECRC else 1 if crc == 0xc0ffee else -1
+
+    @property
+    def ecrc_sep(self) -> str:
+        chk = self.chk_ecrc()
+        return ' ' if chk == 0 else '?' if chk == 1 else '!'
 
     @property
     def uniqueness(self):
@@ -2737,7 +2794,7 @@ class Core64ReadPkt(ExplicitReqHdr):
         r += (',,,{},,{}' if self.csv else ', RDSize: {:3d}, Addr: {:016x}').format(self.RDSize, self.Addr)
         if self.verbosity > 1 and not self.csv:
             r += ', R0: {:02x}'.format(self.R0)
-        r += (',,,,,,,,{},{},,,,,{}' if self.csv else ', PD: {}, FPS: {}, ECRC: {:06x}').format(self.PD, self.FPS, self.ECRC)
+        r += (',,,,,,,,,{},{},,,,,{}' if self.csv else ', PD: {0}, FPS: {1}, ECRC:{3}{2:06x}').format(self.PD, self.FPS, self.ECRC, self.ecrc_sep)
         return r
 
 class Core64ReadResponsePkt(ExplicitHdr):
@@ -2774,11 +2831,11 @@ class Core64ReadResponsePkt(ExplicitHdr):
         r += (',{}' if self.csv else ', LP: {}').format(self.LP)
         if self.verbosity > 1 and not self.csv:
             r += ', R0: {}'.format(self.R0)
-        r += (',,,,,,{},,,,,,,,{},,,{}' if self.csv else ', PadCNT: {:3d}, MS: {}, RRSPReason: {}').format(
+        r += (',,,,,,{},,,,,,,,,{},,,{}' if self.csv else ', PadCNT: {:3d}, MS: {}, RRSPReason: {}').format(
             self.PadCNT, self.MS, self.RRSPReason)
         if self.verbosity > 1 and not self.csv:
             r += ', R1: {:02x}'.format(self.R1)
-        r += (',,,,{}' if self.csv else ', ECRC: {:06x}').format(self.ECRC)
+        r += (',,,,{}' if self.csv else ', ECRC:{1}{0:06x}').format(self.ECRC, self.ecrc_sep)
         if self.verbosity:
             r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
             for i in reversed(range(self.pay_len)):
@@ -2834,14 +2891,80 @@ class Core64WritePkt(ExplicitReqHdr):
     def __str__(self):
         r = super().__str__()
         r += (',,,,{},{}' if self.csv else ', PadCNT: {:3d}, Addr: {:016x}').format(self.PadCNT, self.Addr)
-        r += (',,{},{},{},{},{},{}' if self.csv else
+        r += (',,,{},{},{},{},{},{}' if self.csv else
               ', TC: {}, NS: {}, UN: {}, PU: {}, RC: {}, MS: {}').format(
             self.TC, self.NS, self.UN, self.PU, self.RC, self.MS)
         if self.verbosity > 1 and not self.csv:
             r += ', R0: {:02x}'.format(self.R0)
-        r += (',{},{},,,,,{}' if self.csv else ', PD: {}, FPS: {}, ECRC: {:06x}').format(self.PD, self.FPS, self.ECRC)
+        r += (',{},{},,,,,{}' if self.csv else ', PD: {0}, FPS: {1}, ECRC:{3}{2:06x}').format(self.PD, self.FPS, self.ECRC, self.ecrc_sep)
         if self.verbosity:
             r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
+            for i in reversed(range(self.pay_len)):
+                r += ' {:08x}'.format(self.Payload[i])
+        return r
+
+class Core64WritePartialPkt(ExplicitReqHdr):
+    os1_fields = [('TC',                         c_u32,  1),
+                  ('NS',                         c_u32,  1),
+                  ('UN',                         c_u32,  1),
+                  ('PU',                         c_u32,  1),
+                  ('RC',                         c_u32,  1),
+                  ('R0',                         c_u32,  4)]
+    os2_fields = [('Addrh',                      c_u32, 32), # Byte 12
+                  ('Addrl',                      c_u32, 32), # Byte 16
+                  ('Maskl',                      c_u32, 32), # Byte 20
+                  ('Maskh',                      c_u32, 32)] # Byte 24
+    os3_fields = [('R1',                         c_u32,  5), # Byte YY
+                  ('PD',                         c_u32,  1),
+                  ('FPS',                        c_u32,  2),
+                  ('ECRC',                       c_u32, 24)]
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        fields = ExplicitReqHdr.hd_fields + Core64WritePartialPkt.os1_fields
+        hdr_len = 8 # Revisit: constant 8
+        if exp_pkt.NH:
+            hdr_len += 4
+        if exp_pkt.GC:
+            fields.extend(ExplicitHdr.ms_fields)
+            hdr_len += 1
+        if exp_pkt.RK:
+            fields.extend(ExplicitHdr.rk_fields)
+            hdr_len += 1
+        fields.extend(Core64WritePartialPkt.os2_fields)
+        # Revisit: MS (Meta) field
+        pay_len = exp_pkt.LEN - hdr_len
+        fields.append(('Payload', c_u32 * pay_len))
+        if exp_pkt.NH:
+            fields.extend(ExplicitHdr.nh_fields)
+        fields.extend(Core64WritePartialPkt.os3_fields)
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type = type(className, (Core64WritePartialPkt,),
+                        {'_fields_': fields,
+                         'data': exp_pkt.data,
+                         'verbosity': exp_pkt.verbosity,
+                         'pay_len': pay_len})
+        pkt = pkt_type.from_buffer(exp_pkt.data)
+        return pkt
+
+    @property
+    def Addr(self):
+        return self.Addrh << 32 | self.Addrl
+
+    @property
+    def Mask(self):
+        return self.Maskh << 32 | self.Maskl
+
+    def __str__(self):
+        r = super().__str__()
+        r += (',,,,,{},,{}' if self.csv else ', PadCNT: N/A, Addr: {:016x}, Mask: {:016x}').format(self.Addr, self.Mask)
+        r += (',{},{},{},{},{},' if self.csv else
+              ', TC: {}, NS: {}, UN: {}, PU: {}, RC: {}').format(
+            self.TC, self.NS, self.UN, self.PU, self.RC)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R0: {:02x}, R1: {:02x}'.format(self.R0, self.R1)
+        r += (',{},{},,,,,{}' if self.csv else ', PD: {0}, FPS: {1}, ECRC:{3}{2:06x}').format(self.PD, self.FPS, self.ECRC, self.ecrc_sep)
+        if self.verbosity:
+            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4))
             for i in reversed(range(self.pay_len)):
                 r += ' {:08x}'.format(self.Payload[i])
         return r
@@ -2874,9 +2997,9 @@ class Core64StandaloneAckPkt(ExplicitHdr):
 
     def __str__(self):
         r = super().__str__()
-        r += (',,,,,,,,,,,,,,,,,,,{},{},{}' if self.csv else ', RNR_QD: {}, RS: {}, Reason: {}').format(
+        r += (',,,,,,,,,,,,,,,,,,,,{},{},{}' if self.csv else ', RNR_QD: {}, RS: {}, Reason: {}').format(
             self.RNR_QD, self.RS, self.Reason)
-        r += (',{}' if self.csv else ', ECRC: {:06x}').format(self.ECRC)
+        r += (',{}' if self.csv else ', ECRC:{1}{0:06x}').format(self.ECRC, self.ecrc_sep)
         return r
 
 class ControlReadPkt(ExplicitHdr):
@@ -2935,7 +3058,7 @@ class ControlReadPkt(ExplicitHdr):
             self.RDSize, self.Addr, self.MGRUUID)
         if self.verbosity > 1 and not self.csv:
             r += ', R1: {:02x}'.format(self.R1)
-        r += (',,,,,,,,{},,,,,{}' if self.csv else ', FPS: {}, ECRC: {:06x}').format(self.FPS, self.ECRC)
+        r += (',,,,,,,,,{},,,,,{}' if self.csv else ', FPS: {0}, ECRC:{2}{1:06x}').format(self.FPS, self.ECRC, self.ecrc_sep)
         return r
 
 class ControlReadResponsePkt(Core64ReadResponsePkt):
@@ -3010,7 +3133,7 @@ class ControlWritePkt(ExplicitHdr):
             self.PadCNT, self.Addr, self.MGRUUID)
         if self.verbosity > 1 and not self.csv:
             r += ', R2: {:02x}'.format(self.R2)
-        r += (',,,,,,,,{},,,,,{}' if self.csv else ', FPS: {}, ECRC: {:06x}').format(self.FPS, self.ECRC)
+        r += (',,,,,,,,,{},,,,,{}' if self.csv else ', FPS: {0}, ECRC:{2}{1:06x}').format(self.FPS, self.ECRC, self.ecrc_sep)
         if self.verbosity:
             r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
             for i in reversed(range(self.pay_len)):
