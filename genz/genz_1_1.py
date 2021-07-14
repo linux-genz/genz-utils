@@ -264,6 +264,68 @@ class CAP2Control(SpecialField, Union):
         super().__init__(value, parent, verbosity=verbosity)
         self.val = value
 
+class OpCodeSetCAP1(SpecialField, Union):
+    class CAP1Fields(Structure):
+        _fields_ = [('P2PVdefSup',          c_u64,  1),
+                    ('VDO1Sup',             c_u64,  1),
+                    ('VDO2Sup',             c_u64,  1),
+                    ('VDO3Sup',             c_u64,  1),
+                    ('VDO4Sup',             c_u64,  1),
+                    ('VDO5Sup',             c_u64,  1),
+                    ('VDO6Sup',             c_u64,  1),
+                    ('VDO7Sup',             c_u64,  1),
+                    ('VDO8Sup',             c_u64,  1),
+                    ('AtomicEndian',        c_u64,  2),
+                    ('ProtocolVersion',     c_u64,  4),
+                    ('InterruptRole',       c_u64,  2),
+                    ('MultiOpCodeSetSup',   c_u64,  1),
+                    ('PerDestOpCodeSetSup', c_u64,  1),
+                    ('LDM1ReadRspMetaSup',  c_u64,  1),
+                    ('UniformOpClassSup',   c_u64,  1),
+                    ('Rv',                  c_u64, 43),
+        ]
+
+    _fields_    = [('field', CAP1Fields), ('val', c_u64)]
+    _endian     = ['Unsup', 'Little', 'Big', 'LittleBig']
+    _prot       = ['V1']
+    _role       = ['Unsup', 'Req', 'Rsp', 'ReqRsp']
+    _special = {'AtomicEndian': _endian, 'ProtocolVersion': _prot,
+                'InterruptRole': _role,
+    }
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class OpCodeSetCAP1Control(SpecialField, Union):
+    class CAP1ControlFields(Structure):
+        _fields_ = [('EnbCacheLineSz',             c_u32,  3),
+                    ('IfaceUniformOpClass',        c_u32,  2),
+                    ('Rv',                         c_u32, 27),
+        ]
+
+    _fields_     = [('field', CAP1ControlFields), ('val', c_u32)]
+    _cache_sz    = ['Disabled', '32B', '64B', '128B', '256B']
+    _uniform     = ['None', 'Explicit', 'P2P64', 'P2PVdef']
+    _special = {'EnbCacheLineSz': _cache_sz, 'IfaceUniformOpClass': _uniform,
+    }
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class OpCodeSetIDControl1(SpecialField, Union):
+    class Control1Fields(Structure):
+        _fields_ = [('OpCodeSetEnb',               c_u16,  1),
+                    ('Rv',                         c_u16, 15),
+        ]
+
+    _fields_     = [('field', Control1Fields), ('val', c_u16)]
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
 class IStatus(SpecialField, Union):
     class IStatusFields(Structure):
         _fields_ = [('IState',                     c_u32,  3),
@@ -1568,6 +1630,9 @@ class OpCodeSetStructure(ControlStructure):
                 ('R1',                         c_u64, 64)
     ]
 
+
+    _special_dict = {'CAP1': OpCodeSetCAP1, 'CAP1Control': OpCodeSetCAP1Control}
+
 class OpCodeSetTable(ControlTable):
     _fields_ = [('SetID',                          c_u64,  3),
                 ('R0',                             c_u64, 13),
@@ -1632,7 +1697,8 @@ class OpCodeSetTable(ControlTable):
 
     _ptr_fields = ['NextOpcodeSetPtr']
 
-    _special_dict = { 'SupportedCore64OpCodeSet'      : Core64Opcodes,
+    _special_dict = { 'Control1'                      : OpCodeSetIDControl1,
+                      'SupportedCore64OpCodeSet'      : Core64Opcodes,
                       'EnabledCore64OpCodeSet'        : Core64Opcodes,
                       'SupportedControlOpCodeSet'     : ControlOpcodes,
                       'EnabledControlOpCodeSet'       : ControlOpcodes,

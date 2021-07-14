@@ -144,7 +144,6 @@ class Interface():
             icap1 = genz.ICAP1(iface.ICAP1, iface)
             # Revisit: select compatible LLR/P2PNextHdr/P2PEncrypt settings
             # Revisit: set CtlOpClassPktFiltEnb, if Switch (for now)
-            # Revisit: select Core64 & Control OpClass
             # enable Explicit OpCodes, and LPRT (if Switch)
             icap1ctl = genz.ICAP1Control(iface.ICAP1Control, iface)
             icap1ctl.field.OpClassSelect = 0x1
@@ -564,6 +563,12 @@ class Component():
     def setup_paths(self, prefix):
         self.comp_dest_dir = list((self.path / prefix).glob(
             'component_destination_table@*'))[0]
+        self.opcode_set_dir = list((self.path / prefix).glob('opcode_set@*'))[0]
+        try:
+            self.opcode_set_table_dir = list(self.opcode_set_dir.glob(
+                'opcode_set_table/opcode_set_table0@*'))[0]
+        except IndexError:
+            self.opcode_set_table_dir = None
         try:
             self.ssdt_dir = list(self.comp_dest_dir.glob('ssdt@*'))[0]
         except IndexError:
@@ -778,6 +783,8 @@ class Component():
             for iface in self.interfaces:
                 if iface.usable:
                     self.rit_write(iface, 1 << iface.num)
+            # initialize OpCode Set structure
+            self.opcode_set_init()
             # if component is usable, set ComponentEnb - transition to C-Up
             if self.usable:
                 # Revisit: before setting ComponentEnb, once again check that
@@ -798,6 +805,46 @@ class Component():
             self.switch_init(core)
         return self.usable
 
+    def opcode_set_init(self):
+        # Revisit: support multiple OpCode Set tables
+        # Revisit: handle Vendor-Defined OpClasses
+        opcode_set_file = self.opcode_set_dir / 'opcode_set'
+        with opcode_set_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            opcode_set = self.map.fileToStruct('opcode_set', data, fd=f.fileno(),
+                                               verbosity=self.verbosity)
+            log.debug('{}: {}'.format(self.gcid, opcode_set))
+            cap1 = genz.OpCodeSetCAP1(opcode_set.CAP1, opcode_set)
+            cap1ctl = genz.OpCodeSetCAP1Control(opcode_set.CAP1Control,
+                                                opcode_set)
+            # Revisit: set cap1ctl.EnbCacheLineSz
+            if cap1.field.UniformOpClassSup:
+                # set Uniform Explicit OpClasses
+                cap1ctl.field.IfaceUniformOpClass = 0x1 # Revisit: enum
+                opcode_set.CAP1Control = cap1ctl.val
+                self.control_write(opcode_set,
+                            genz.OpCodeSetStructure.CAP1Control, sz=4, off=4)
+        # end with
+        opcode_set_table_file = self.opcode_set_table_dir / 'opcode_set_table'
+        with opcode_set_table_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            opcode_set_table = self.map.fileToStruct('opcode_set_table',
+                                                     data, fd=f.fileno(),
+                                                     path=opcode_set_table_file,
+                                                     verbosity=self.verbosity)
+            log.debug('{}: {}'.format(self.gcid, opcode_set_table))
+            # Enable all Supported OpCodes for Core64/Control/DR OpClasses
+            opcode_set_table.EnabledCore64OpCodeSet = (
+                opcode_set_table.SupportedCore64OpCodeSet)
+            opcode_set_table.EnabledControlOpCodeSet = (
+                opcode_set_table.SupportedControlOpCodeSet)
+            opcode_set_table.EnabledDROpCodeSet = (
+                opcode_set_table.SupportedDROpCodeSet)
+            # Revisit: add support for other OpClasses
+            self.control_write(opcode_set_table, genz.OpCodeSetTable.SetID,
+                               sz=opcode_set_table.Size, off=0)
+        # end with
+
     def switch_init(self, core):
         switch_file = self.switch_dir / 'component_switch'
         with switch_file.open(mode='rb+') as f:
@@ -813,6 +860,7 @@ class Component():
             switch.SwitchOpCTL = sw_op_ctl.val
             self.control_write(
                 switch, genz.ComponentSwitchStructure.SwitchCAP1Control, sz=8)
+        # end with
 
     def comp_dest_read(self, prefix='control'):
         if self._comp_dest is not None:
@@ -970,6 +1018,18 @@ class Component():
         self.ssdt_dir = list(self.comp_dest_dir.glob('ssdt@*'))[0]
         log.debug('new ssdt_dir = {}'.format(self.ssdt_dir))
 
+    def update_opcode_set_dir(self, prefix='control'):
+        if self.opcode_set_dir is None:
+            return
+        self.opcode_set_dir = list((self.path / prefix).glob(
+            'opcode_set@*'))[0]
+        log.debug('new opcode_set_dir = {}'.format(self.opcode_set_dir))
+        if self.opcode_set_table_dir is None:
+            return
+        self.opcode_set_table_dir = list(self.opcode_set_dir.glob(
+                'opcode_set_table/opcode_set_table0@*'))[0]
+        log.debug('new opcode_set_table_dir = {}'.format(self.opcode_set_table_dir))
+
     def update_switch_dir(self, prefix='control'):
         if self.switch_dir is None:
             return
@@ -988,6 +1048,7 @@ class Component():
         self.update_req_vcat_dir()
         self.update_rsp_vcat_dir()
         self.update_switch_dir()
+        self.update_opcode_set_dir()
         for iface in self.interfaces:
             iface.update_path(prefix='control')
 
@@ -1152,6 +1213,7 @@ class LocalBridge(Bridge):
                     self.update_req_vcat_dir()
                     self.update_rsp_vcat_dir()
                     self.update_switch_dir()
+                    self.update_opcode_set_dir()
                     log.debug('new path: {}'.format(self.path))
                     for iface in self.interfaces:
                         iface.update_path()
