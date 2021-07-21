@@ -91,6 +91,57 @@ class GCID():
     def __repr__(self):
         return '{:04x}:{:03x}'.format(self.sid, self.cid)
 
+class RKey():
+    # Revisit: add a random generator (per rkd), perhaps based on
+    # the solutions by orange or aak318, here:
+    # https://stackoverflow.com/questions/9755538/how-do-i-create-a-list-of-random-numbers-without-duplicates
+    def __init__(self, val=None, rkd=None, os=None, str=None):
+        if val is not None:
+            self.val = val
+        elif rkd is not None and os is not None:
+            if os < 0 or os >= 1<<20:
+                raise(ValueError)
+            if rkd < 0 or rkd >= 1<<12:
+                raise(ValueError)
+            self.val = (rkd << 20) | os
+        elif str is not None:
+            rkd_str, os_str = str.split(':')
+            rkd = int(rkd_str, 16)
+            os = int(os_str, 16)
+            self.val = (rkd << 20) | os
+        else:
+            raise(TypeError)
+        if self.val < 0 or self.val >= 1<<32:
+            raise(ValueError)
+
+    @property
+    def rkd(self):
+        return self.val >> 20
+
+    @rkd.setter
+    def rkd(self, val):
+        if val < 0 or val > 1<<12:
+            raise(ValueError)
+        self.val = (val << 12) | self.os
+
+    @property
+    def os(self):
+        return self.val & 0xfffff
+
+    @os.setter
+    def os(self, val):
+        if val < 0 or val > 1<<20:
+            raise(ValueError)
+        self.val = (self.rkd << 20) | (val & 0xfffff)
+
+    def __eq__(self, other):
+        if type(self) != type(other):
+            return NotImplemented
+        return self.val == other.val
+
+    def __repr__(self):
+        return '{:03x}:{:05x}'.format(self.rkd, self.os)
+
 class SpecialField():
     def __init__(self, value, parent, verbosity=0):
         self.value = value

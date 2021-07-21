@@ -40,8 +40,9 @@ import networkx as nx
 from itertools import islice
 from uuid import UUID, uuid4
 from pathlib import Path
+from math import ceil, log2
 from importlib import import_module
-from genz.genz_common import GCID, CState, IState
+from genz.genz_common import GCID, CState, IState, RKey
 from middleware.netlink_mngr import NetlinkManager
 from typing import List
 from pdb import set_trace, post_mortem
@@ -50,6 +51,11 @@ import traceback
 INVALID_GCID = GCID(val=0xffffffff)
 TEMP_SUBNET = 0xffff  # where we put uninitialized local bridges
 INVALID_UUID = UUID(int=0xffffffffffffffffffffffffffffffff)
+ALL_RKD = 0 # all requesters are granted this RKD
+FM_RKD = 1  # only the FM is granted this RKD
+FM_RKEY = RKey(rkd=FM_RKD, os=0) # for FM-only control structs
+NO_ACCESS_RKEY = RKey(rkd=FM_RKD, os=1) # no-access: rsp RO+RW; read-only: rsp RW
+DEFAULT_RKEY = RKey(rkd=ALL_RKD, os=0)
 fabs = Path('/sys/bus/genz/fabrics')
 randgen = random.SystemRandom() # crypto secure random numbers from os.urandom
 
@@ -75,6 +81,9 @@ def cmd_add(url, **args):
     if resp is None:
         return {}
     return json.loads(resp.text).get('data', {})
+
+def ceil_log2(x):
+    return ceil(log2(x))
 
 class Interface():
     def __init__(self, component, num, peer_iface=None):
@@ -785,6 +794,8 @@ class Component():
                     self.rit_write(iface, 1 << iface.num)
             # initialize OpCode Set structure
             self.opcode_set_init()
+            # initialize Responder Page Grid structure
+            self.rsp_page_grid_init(core, valid=1)
             # if component is usable, set ComponentEnb - transition to C-Up
             if self.usable:
                 # Revisit: before setting ComponentEnb, once again check that
@@ -861,6 +872,9 @@ class Component():
             self.control_write(
                 switch, genz.ComponentSwitchStructure.SwitchCAP1Control, sz=8)
         # end with
+
+    def rsp_page_grid_init(self, core, valid=0):
+        return # default implementation does nothing
 
     def comp_dest_read(self, prefix='control'):
         if self._comp_dest is not None:
@@ -1187,8 +1201,107 @@ class Component():
 class Memory(Component):
     cclasses = (0x1, 0x2)
 
+    def setup_paths(self, prefix):
+        super().setup_paths(prefix)
+        try:
+            self.rsp_pg_dir = list((self.path / prefix / 'component_page_grid').glob(
+                'component_page_grid0@*'))[0]
+            self.rsp_pg_table_dir = list(self.rsp_pg_dir.glob(
+                'pg_table@*'))[0]
+            self.rsp_pte_table_dir = list(self.rsp_pg_dir.glob(
+                'pte_table@*'))[0]
+        except IndexError:
+            self.rsp_pg_dir = None
+
+    def update_rsp_page_grid_dir(self, prefix='control'):
+        if self.rsp_pg_dir is None:
+            return
+        self.rsp_pg_dir = list((self.path / prefix / 'component_page_grid').glob(
+            'component_page_grid0@*'))[0]
+        self.rsp_pg_table_dir = list(self.rsp_pg_dir.glob('pg_table@*'))[0]
+        self.rsp_pte_table_dir = list(self.rsp_pg_dir.glob('pte_table@*'))[0]
+        log.debug('new rsp_pg_dir = {}'.format(self.rsp_pg_dir))
+
+    def update_path(self):
+        super().update_path()
+        self.update_rsp_page_grid_dir()
+
+    def rsp_page_grid_init(self, core, valid=0):
+        if self.rsp_pg_dir is None:
+            return
+        rsp_pg_file = self.rsp_pg_dir / 'component_page_grid'
+        with rsp_pg_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            pg = self.map.fileToStruct('component_page_grid', data,
+                                       fd=f.fileno(),
+                                       verbosity=self.verbosity)
+            log.debug('{}: {}'.format(self.gcid, pg))
+            # Revisit: verify the PG-PTE-UUID
+        # end with
+        # Cover all of data space using 2 page grids each with half the
+        # available PTEs, one for direct-mapped pages and one for interleave
+        pte_cnt = pg.PTETableSz // 2
+        ps = ceil_log2(core.MaxData / pte_cnt)
+        # Revisit: verify pg.PGTableSz >= 2
+        rsp_pg_table_file = self.rsp_pg_table_dir / 'pg_table'
+        with rsp_pg_table_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            pg_table = self.map.fileToStruct('pg_table', data,
+                                             path=rsp_pg_table_file,
+                                             fd=f.fileno(), parent=pg,
+                                             verbosity=self.verbosity)
+            log.debug('{}: {}'.format(self.gcid, pg_table))
+            pg_table[0].PGBaseAddr = 0
+            pg_table[0].PageSz = ps
+            pg_table[0].RES = 0
+            pg_table[0].PageCount = pte_cnt
+            pg_table[0].BasePTEIdx = 0
+            pg_table[1].PGBaseAddr = 1 << (63 - 12)
+            pg_table[1].PageSz = ps
+            pg_table[1].RES = 0
+            pg_table[1].PageCount = pte_cnt
+            pg_table[1].BasePTEIdx = pte_cnt
+            for i in range(2, pg.PGTableSz):
+                pg_table[i].PageCount = 0
+            for i in range(0, pg.PGTableSz):
+                self.control_write(pg_table, pg_table.element.R0,
+                                   off=16*i, sz=16)
+        # end with
+        rsp_pte_table_file = self.rsp_pte_table_dir / 'pte_table'
+        with rsp_pte_table_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            pte_table = self.map.fileToStruct('pte_table', data,
+                                              path=rsp_pte_table_file,
+                                              fd=f.fileno(), parent=pg,
+                                              verbosity=self.verbosity)
+            log.debug('{}: {}'.format(self.gcid, pte_table))
+            for i in range(0, pte_cnt):
+                pte_table[i].V = valid
+                pte_table[i].RORKey = NO_ACCESS_RKEY.val
+                pte_table[i].RWRKey = NO_ACCESS_RKEY.val
+                # Revisit: non-zero-based addressing
+                pte_table[i].ADDR = i * (1 << ps)
+                # Revisit: add PA/CCE/CE/WPE/PSE/LPE/IE/PFE/RKMGR/PASID/RK_MGR
+            for i in range(pte_cnt, pg.PTETableSz):
+                pte_table[i].V = 0
+            for i in range(0, pg.PTETableSz):
+                self.control_write(pte_table, pte_table.element.V,
+                                   off=pte_table.element.Size*i,
+                                   sz=pte_table.element.Size)
+        # end with
+
 class Switch(Component):
     cclasses = (0x3, 0x4, 0x5)
+
+class Accelerator(Component):
+    cclasses = (0x8, 0x9, 0xA, 0xB)
+
+class IO(Component):
+    cclasses = (0xC, 0xD, 0xE, 0xF)
+
+class MultiClass(Component):
+    # Revisit: verify that the required Service UUID structure exists
+    cclasses = (0x13,)
 
 class Bridge(Component):
     cclasses = (0x14, 0x15)

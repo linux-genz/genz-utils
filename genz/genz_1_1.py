@@ -23,11 +23,15 @@ import textwrap
 import shutil
 import crcmod
 from pdb import set_trace
+from uuid import UUID
 from .genz_common import *
 
 cols, lines = shutil.get_terminal_size()
 
 # Based on Gen-Z revision 1.1 final
+
+reqPgPteUUID = UUID(hex='d2b57c49a98c42e68118f75aadbeb69c')
+rspPgPteUUID = UUID(hex='acb0e6c1053d4afcb29de003bc234e13')
 
 # Revisit: this should be auto-generated from the v1.1.xml file
 
@@ -1219,8 +1223,6 @@ class ControlStructureMap(LittleEndianStructure):
                 'vcat'                        : 'VCATTable',
                 'c_access_r_key'              : 'CAccessRKeyTable',
                 'c_access_l_p2p'              : 'CAccessLP2PTable',
-                'pg_base'                     : 'PGTable',  # Revisit - delete
-                'restricted_pg_base'          : 'PGTable',  # Revisit - delete
                 'pg_table'                    : 'PGTable',
                 'restricted_pg_table'         : 'PGTable',
                 'pte_table'                   : 'PTETable',
@@ -2452,6 +2454,27 @@ class PGTable(ControlTableArray):
         self.array = (PG * items).from_buffer(self.data)
         self.element = PG
 
+def pte_ro_rkey_get(self):
+    return (self.RORKeyh << self.ro_rkey_l_bits) | self.RORKeyl
+
+def pte_ro_rkey_set(self, val):
+    self.RORKeyl = val & ((1 << self.ro_rkey_l_bits) - 1)
+    self.RORKeyh = val >> self.ro_rkey_l_bits
+
+def pte_rw_rkey_get(self):
+    return (self.RWRKeyh << self.rw_rkey_l_bits) | self.RWRKeyl
+
+def pte_rw_rkey_set(self, val):
+    self.RWRKeyl = val & ((1 << self.rw_rkey_l_bits) - 1)
+    self.RWRKeyh = val >> self.rw_rkey_l_bits
+
+def pte_addr_get(self):
+    return (self.ADDRh << self.addr_l_bits) | self.ADDRl
+
+def pte_addr_set(self, val):
+    self.ADDRl = val & ((1 << self.addr_l_bits) - 1)
+    self.ADDRh = val >> self.addr_l_bits
+
 class PTETable(ControlTableArray):
     def splitField(self, fld, bits):
         fld_bits = fld[2]
@@ -2541,7 +2564,8 @@ class PTETable(ControlTableArray):
         fields.extend(self.splitField(('ADDR',        c_u64, 52), bits))
         bits += 52
         fields.extend(self.padFields(bits, pte_sz))
-        return fields
+        # Revisit: return "need" values like rspPteFields
+        return (fields, 0, 0, 0)
 
     def rspPteFields(self, pte_sz, cap1, attr):
         bits = 0
@@ -2591,20 +2615,31 @@ class PTETable(ControlTableArray):
         # everything above is guaranteed to fit in the first c_u64
         # but any field below might need to be split across two c_u64s
         if attr.field.RKeySup:
-            fields.extend(self.splitField(('RORKey',  c_u64, 32), bits))
+            s = self.splitField(('RORKey',  c_u64, 32), bits)
+            needRORKey = s[0][2] if len(s) > 1 else 0
+            fields.extend(s)
             bits += 32
-            fields.extend(self.splitField(('RWRKey',  c_u64, 32), bits))
+            s = self.splitField(('RWRKey',  c_u64, 32), bits)
+            needRWRKey = s[0][2] if len(s) > 1 else 0
+            fields.extend(s)
             bits += 32
+        else:
+            needRORKey = 0
+            needRWRKey = 0
         a_sz = attr.field.ASz
         if a_sz > 0: # max 64 bits
-            fields.extend(self.splitField(('ADDR',    c_u64, a_sz), bits))
+            s = self.splitField(('ADDR',    c_u64, a_sz), bits)
+            needADDR = s[0][2] if len(s) > 1 else 0
+            fields.extend(s)
             bits += a_sz
+        else:
+            needADDR = 0
         w_sz = attr.field.WSz
         if w_sz > 0: # max 64 bits
             fields.extend(self.splitField(('WinSz',   c_u64, w_sz), bits))
             bits += w_sz
         fields.extend(self.padFields(bits, pte_sz))
-        return fields
+        return (fields, needRORKey, needRWRKey, needADDR)
 
     def fileToStructInit(self):
         super().fileToStructInit()
@@ -2614,15 +2649,24 @@ class PTETable(ControlTableArray):
         cap1 = PGZMMUCAP1(self.parent.PGZMMUCAP1, self.parent)
         attr = PTEATTRl(self.parent.PTEATTRl, self.parent)
         if attr.zmmuType == 0:
-            fields = self.reqPteFields(pte_sz, cap1, attr)
+            (fields, needRORKey, needRWRKey, needADDR) = self.reqPteFields(pte_sz, cap1, attr)
             pfx = 'Req'
         else:
-            fields = self.rspPteFields(pte_sz, cap1, attr)
+            (fields, needRORKey, needRWRKey, needADDR) = self.rspPteFields(pte_sz, cap1, attr)
             pfx = 'Rsp'
-        PTE = type('{}PTE'.format(pfx), (ControlStructure,),
-                   {'_fields_': fields,
+        pte_dict = {'_fields_': fields,
                     'verbosity': self.verbosity,
-                    'Size': pte_bytes})
+                    'Size': pte_bytes}
+        if needRORKey:
+            pte_dict['ro_rkey_l_bits'] = needRORKey
+            pte_dict['RORKey'] = property(pte_ro_rkey_get, pte_ro_rkey_set)
+        if needRWRKey:
+            pte_dict['rw_rkey_l_bits'] = needRWRKey
+            pte_dict['RWRKey'] = property(pte_rw_rkey_get, pte_rw_rkey_set)
+        if needADDR:
+            pte_dict['addr_l_bits'] = needADDR
+            pte_dict['ADDR'] = property(pte_addr_get, pte_addr_set)
+        PTE = type('{}PTE'.format(pfx), (ControlStructure,), pte_dict)
         items = self.Size // sizeof(PTE)
         self.array = (PTE * items).from_buffer(self.data)
         self.element = PTE
