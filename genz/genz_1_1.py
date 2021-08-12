@@ -809,6 +809,22 @@ class PTEATTRl(SpecialField, Union):
     def field(self):
         return self.rsp if self.zmmuType == 1 else self.req
 
+class RCCAP1(SpecialField, Union):
+    class RCCAP1Fields(Structure):
+        _fields_ = [('RtCtlTableSz',                      c_u16,  2),
+                    ('MSS',                               c_u16,  1),
+                    ('HCS',                               c_u16,  1),
+                    ('Rv',                                c_u16, 12),
+        ]
+
+    _fields_    = [('field', RCCAP1Fields), ('val', c_u16)]
+    _tbl_sz     = ['48B']
+    _special = {'RtCtlTableSz': _tbl_sz}
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
 class SwitchCAP1(SpecialField, Union):
     class SwitchCAP1Fields(Structure):
         _fields_ = [('CtlOpClassPktFilteringSup',         c_u32,  1),
@@ -1221,6 +1237,7 @@ class ControlStructureMap(LittleEndianStructure):
                 'lprt'                        : 'LPRTTable',
                 'mprt'                        : 'MPRTTable',
                 'vcat'                        : 'VCATTable',
+                'route_control'               : 'RouteControlTable',
                 'c_access_r_key'              : 'CAccessRKeyTable',
                 'c_access_l_p2p'              : 'CAccessLP2PTable',
                 'pg_table'                    : 'PGTable',
@@ -1591,7 +1608,7 @@ class ComponentDestinationTableStructure(ControlStructure):
                 ('MSDTSize',                   c_u64, 16),
                 ('RITSize',                    c_u64, 12),
                 ('R1',                         c_u64, 20),
-                ('RouteControlPTR',            c_u64, 32),
+                ('RtCtlPTR',                   c_u64, 32),
                 ('SSDTPTR',                    c_u64, 32),
                 ('MSDTPTR',                    c_u64, 32),
                 ('REQVCATPTR',                 c_u64, 32),
@@ -2670,6 +2687,28 @@ class PTETable(ControlTableArray):
         items = self.Size // sizeof(PTE)
         self.array = (PTE * items).from_buffer(self.data)
         self.element = PTE
+
+class RouteControlTable(ControlTable):
+    _fields_ = [('RCCAP1',                         c_u64, 16),
+                ('R0',                             c_u64, 10),
+                ('DHC',                            c_u64,  6),
+                ('ReqSimulTable',                  c_u64, 16),
+                ('R1',                             c_u64, 16),
+                ('ReqLocalTableFirst',             c_u64, 16),
+                ('R2',                             c_u64, 16),
+                ('ReqThreshEnb',                   c_u64, 16),
+                ('R3',                             c_u64, 16),
+                ('RspSimulTable',                  c_u64, 32),
+                ('RspLocalTableFirst',             c_u64, 32),
+                ('RspThreshEnb',                   c_u64, 32),
+                ('RelaySimulTable',                c_u64, 32),
+                ('RelayLocalTableFirst',           c_u64, 32),
+                ('RelayThreshEnb',                 c_u64, 32),
+                ('R4',                             c_u64, 32),
+                ('R5',                             c_u64, 32),
+                ]
+
+    _special_dict = {'RCCAP1': RCCAP1}
 
 class Packet(LittleEndianStructure):
     _ocl = OpClasses()
