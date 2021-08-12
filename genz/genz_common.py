@@ -91,6 +91,9 @@ class GCID():
     def __repr__(self):
         return '{:04x}:{:03x}'.format(self.sid, self.cid)
 
+    def to_json(self):
+        return str(self)
+
 class RKey():
     # Revisit: add a random generator (per rkd), perhaps based on
     # the solutions by orange or aak318, here:
