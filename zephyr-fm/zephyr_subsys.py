@@ -59,6 +59,17 @@ DEFAULT_RKEY = RKey(rkd=ALL_RKD, os=0)
 fabs = Path('/sys/bus/genz/fabrics')
 randgen = random.SystemRandom() # crypto secure random numbers from os.urandom
 
+# Magic to get JSONEncoder to call to_json method, if it exists
+def _default(self, obj):
+    return getattr(obj.__class__, 'to_json', _default.default)(obj)
+
+_default.default = json.JSONEncoder().default
+json.JSONEncoder.default = _default
+
+def uuid_to_json(self):
+    return str(self)
+UUID.to_json = uuid_to_json
+
 with open('zephyr-fm/logging.yaml', 'r') as f:
     yconf = yaml.safe_load(f.read())
     logging.config.dictConfig(yconf)
@@ -448,6 +459,9 @@ class Interface():
         self.update_lprt_dir()
         self.update_vcat_dir()
 
+    def to_json(self):
+        return str(self)
+
     def __repr__(self):
         return '{}({}.{})'.format(self.__class__.__name__,
                                   self.comp.gcid, self.num)
@@ -485,6 +499,7 @@ class Component():
         self.interfaces = []
         self.uuid = uuid4() if uuid is None else uuid
         self.nonce = fab.generate_nonce()
+        self.cuuid_serial = None
         self._num_vcs = None
         self._req_vcat_sz = None
         self._rsp_vcat_sz = None
@@ -493,13 +508,17 @@ class Component():
         self.ssdt = None
         self.rit = None
         fab.components[self.uuid] = self
-        fab.add_node(self)
+        fab.add_node(self, instance_uuid=self.uuid, cclass=self.cclass,
+                     mgr_uuid=self.mgr_uuid)
 
     def __hash__(self):
         return hash(self.uuid)
 
     def __eq__(self, other):
         return self.uuid == other.uuid
+
+    def to_json(self):
+        return self.cuuid_serial
 
     # for LLMUTO, NLMUTO, NIRT, FPST, REQNIRTO, REQABNIRTO
     def timeout_val(self, time):
@@ -622,6 +641,8 @@ class Component():
             self.timer_unit = cap1.field.TimerUnit
             self.ctl_timer_unit = cap1.field.CtlTimerUnit
             self.cclass = core.BaseCClass
+            self.max_data = core.MaxData
+            self.max_iface = core.MaxInterface
             # create and read (but do not HW init) all interfaces
             for ifnum in range(0, core.MaxInterface):
                 if (ingress_iface is not None) and (ingress_iface.num == ifnum):
@@ -695,6 +716,10 @@ class Component():
                 self.usable = False
                 return self.usable
         # end with
+        cuuid = get_cuuid(self.path)
+        serial = get_serial(self.path)
+        self.cuuid_serial = str(cuuid) + ':' + serial
+        self.fab.add_comp(self)
         # re-open core file at (potential) new location set by add_fab_comp()
         core_file = self.path / prefix / 'core@0x0/core'
         with core_file.open(mode='rb+') as f:
@@ -780,9 +805,11 @@ class Component():
             self.control_write(core, genz.CoreStructure.MaxRequests, sz=8)
             # Revisit: set MaxPwrCtl (to NPWR?)
             # invalidate SSDT (except PFM CID written earlier)
-            for cid in range(0, self.ssdt_size(prefix=prefix)):
+            rows, cols = self.ssdt_size(prefix=prefix)
+            for cid in range(0, rows):
                 if cid != pfm.gcid.cid or ingress_iface is None:
-                    self.ssdt_write(cid, 0x780|cid, valid=0) # Revisit: ei debug
+                    for rt in range(0, cols):
+                        self.ssdt_write(cid, 0x780|cid, rt=rt, valid=0) # Revisit: ei debug
             # initialize REQ-VCAT
             # Revisit: multiple Action columns
             for vc in range(0, self.req_vcat_size(prefix=prefix)[0]):
@@ -974,11 +1001,13 @@ class Component():
         if self._ssdt_sz is not None:
             return self._ssdt_sz
         comp_dest = self.comp_dest_read(prefix=prefix)
-        self._ssdt_sz = comp_dest.SSDTSize
+        rows = comp_dest.SSDTSize
+        cols = comp_dest.MaxRoutes
+        self._ssdt_sz = (rows, cols)
         log.debug('{}: ssdt_sz={}'.format(self.gcid, self._ssdt_sz))
         return self._ssdt_sz
 
-    def ssdt_write(self, cid, ei, valid=1, mhc=None, hc=None, vca=None):
+    def ssdt_write(self, cid, ei, valid=1, rt=0, mhc=None, hc=None, vca=None):
         if self.ssdt_dir is None:
             return
         # Revisit: avoid open/close (via "with") on every write?
@@ -1116,7 +1145,7 @@ class Component():
             if peer_gcid in self.fab.comp_gcids: # another path
                 comp = self.fab.comp_gcids[peer_gcid]
                 peer_iface = comp.interfaces[iface.peer_iface_num]
-                self.fab.add_link(self, iface, comp, peer_iface)
+                self.fab.add_link(iface, peer_iface)
                 route = self.fab.setup_routing(pfm, comp)
                 self.fab.setup_routing(comp, pfm, route=route.invert())
                 msg += ' additional path to {}'.format(peer_iface)
@@ -1135,7 +1164,7 @@ class Component():
                     return
                 msg += ' retaining gcid={}'.format(gcid)
                 log.info(msg)
-                self.fab.add_link(self, iface, comp, peer_iface)
+                self.fab.add_link(iface, peer_iface)
                 route = self.fab.setup_routing(pfm, comp)
                 self.fab.setup_routing(comp, pfm, write_ssdt=False,
                                        route=route.invert())
@@ -1145,11 +1174,6 @@ class Component():
                     log.error('add_fab_comp failed with exception {}'.format(e))
                     return
                 comp.comp_init(pfm, ingress_iface=peer_iface)
-                cuuid = get_cuuid(comp.path)
-                serial = get_serial(comp.path)
-                cuuid_serial = str(cuuid) + ':' + serial
-                comp.fab.cuuid_serial[cuuid_serial] = comp
-                comp.fab.comp_gcids[comp.gcid] = comp
                 if comp.has_switch:  # if switch, recurse
                     comp.explore_interfaces(pfm, ingress_iface=peer_iface)
         if peer_cstate is CState.CCFG:
@@ -1162,7 +1186,7 @@ class Component():
             gcid = self.fab.assign_gcid(comp)
             msg += 'assigned gcid={}'.format(gcid)
             log.info(msg)
-            self.fab.add_link(self, iface, comp, peer_iface)
+            self.fab.add_link(iface, peer_iface)
             log.debug('sleeping 2 seconds to help with perf problems')
             time.sleep(2.0) # Revisit: why does this help?
             route = self.fab.setup_routing(pfm, comp)
@@ -1174,11 +1198,6 @@ class Component():
                 log.error('add_fab_dr_comp failed with exception {}'.format(e))
                 return
             comp.comp_init(pfm, prefix='dr', ingress_iface=peer_iface)
-            cuuid = get_cuuid(comp.path)
-            serial = get_serial(comp.path)
-            cuuid_serial = str(cuuid) + ':' + serial
-            comp.fab.cuuid_serial[cuuid_serial] = comp
-            comp.fab.comp_gcids[comp.gcid] = comp
             if comp.has_switch:  # if switch, recurse
                 comp.explore_interfaces(pfm, ingress_iface=peer_iface)
         # end if peer_cstate
@@ -1354,7 +1373,7 @@ class Fabric(nx.MultiGraph):
         self.assigned_gcids = []
         self.refill_gcids = True
         self.nonce_list = [ 0 ]
-        super().__init__()
+        super().__init__(fab_uuid=self.fab_uuid, mgr_uuids=[self.mgr_uuid])
         log.info('fabric: {}, num={}, fab_uuid={}, mgr_uuid={}'.format(
             path, self.fabnum, self.fab_uuid, self.mgr_uuid))
 
@@ -1380,7 +1399,15 @@ class Fabric(nx.MultiGraph):
                 comp.gcid = None
         if comp.gcid is not None:
             self.assigned_gcids.append(comp.gcid)
+            self.nodes[comp]['gcids'] = [ comp.gcid ]
         return comp.gcid
+
+    def add_comp(self, comp):
+        self.cuuid_serial[comp.cuuid_serial] = comp
+        self.comp_gcids[comp.gcid] = comp
+        self.nodes[comp]['fru_uuid'] = comp.fru_uuid
+        self.nodes[comp]['max_data'] = comp.max_data
+        self.nodes[comp]['max_iface'] = comp.max_iface
 
     def generate_nonce(self):
         while True:
@@ -1404,11 +1431,9 @@ class Fabric(nx.MultiGraph):
                              local_br=True, brnum=brnum, dr=None,
                              tmp_gcid=tmp_gcid, netlink=self.nl,
                              verbosity=self.verbosity)
-            gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size())
+            gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size()[0])
             pfm = br
             log.info('{}:{} bridge{} {}'.format(self.fabnum, gcid, brnum, cuuid_serial))
-            self.cuuid_serial[cuuid_serial] = br
-            self.comp_gcids[br.gcid] = br
             br.comp_init(pfm)
             self.bridges.append(br)
             br.explore_interfaces(pfm)
@@ -1450,11 +1475,26 @@ class Fabric(nx.MultiGraph):
         self.write_route(route, write_ssdt)
         return route
 
-    # Revisit: could derive fr/to from fr_iface.comp/to_iface.comp
-    def add_link(self, fr: Component, fr_iface: Interface,
-                 to: Component, to_iface: Interface) -> None:
-        # Revisit: need to prevent adding same link multiple times
-        self.add_edges_from([(fr, to, {fr.uuid: fr_iface, to.uuid: to_iface})])
+    def has_link(self, fr_iface: Interface, to_iface: Interface) -> bool:
+        fr = fr_iface.comp
+        to = to_iface.comp
+        num_edges = self.number_of_edges(fr, to)
+        if num_edges == 0:
+            return False
+        edge_data = self.get_edge_data(fr, to)
+        for key in range(num_edges):
+            if (edge_data[key][str(fr.uuid)] == fr_iface and
+                edge_data[key][str(to.uuid)] == to_iface):
+                return True
+        return False
+
+    def add_link(self, fr_iface: Interface, to_iface: Interface) -> None:
+        fr = fr_iface.comp
+        to = to_iface.comp
+        # prevent adding same link multiple times
+        if not self.has_link(fr_iface, to_iface):
+            self.add_edges_from([(fr, to, {str(fr.uuid): fr_iface,
+                                           str(to.uuid): to_iface})])
 
     def make_path(self, gcid):
         return fabs / 'fabric{f}/{f}:{s:04x}/{f}:{s:04x}:{c:03x}'.format(
@@ -1463,6 +1503,11 @@ class Fabric(nx.MultiGraph):
     def update_path(self, path):
         self.path = path
         self.fabnum = component_num(path)
+
+    def to_json(self):
+        nl = nx.node_link_data(self)
+        js = json.dumps(nl, indent=2) # Revisit: indent
+        return js
 
 class RouteElement():
     def __init__(self, comp: Component,
@@ -1509,8 +1554,8 @@ class Route():
         for fr, to in moving_window(2, path):
             # Revisit: MultiGraph
             edge_data = fr.fab.get_edge_data(fr, to)[0]
-            egress_iface = edge_data[fr.uuid]
-            to_iface = edge_data[to.uuid]
+            egress_iface = edge_data[str(fr.uuid)]
+            to_iface = edge_data[str(to.uuid)]
             elem = RouteElement(fr, ingress_iface, egress_iface, to_iface)
             self._elems.append(elem)
             ingress_iface = to_iface
@@ -1544,6 +1589,7 @@ class Conf():
     def __init__(self, file):
         self.file = file
         self.add = {}
+        self.fab = None  # set by add_resources()
 
     def read_conf_file(self):
         with open(self.file, 'r') as f:
