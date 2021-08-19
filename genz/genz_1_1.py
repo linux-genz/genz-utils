@@ -606,7 +606,7 @@ class PHYStatus(SpecialField, Union):
                     ('Rv',                       c_u32, 16),
         ]
 
-    _fields_    = [('field', PHYStatusFields), ('val', c_u64)]
+    _fields_    = [('field', PHYStatusFields), ('val', c_u32)]
     _phy_op_status = ['PHY-Down', 'PHY-Up', 'PHY-Down-Retrain',
                       'PHY-Up-LP1', 'PHY-Up-LP2', 'PHY-Up-LP3', 'PHY-Up-LP4',
                       'PHY-LP1', 'PHY-LP2', 'PHY-LP3', 'PHY-LP4',]

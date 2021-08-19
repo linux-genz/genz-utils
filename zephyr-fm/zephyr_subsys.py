@@ -42,7 +42,7 @@ from uuid import UUID, uuid4
 from pathlib import Path
 from math import ceil, log2
 from importlib import import_module
-from genz.genz_common import GCID, CState, IState, RKey
+from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus
 from middleware.netlink_mngr import NetlinkManager
 from typing import List
 from pdb import set_trace, post_mortem
@@ -391,10 +391,15 @@ class Interface():
                 self.comp.gcid, self.num))
             return True # Revisit
 
-    # Returns True if interface PHY is usable - is PHY-Up/PHY-Up-LP*/PHY-LP*
+    # Returns True if interface PHY is usable - is PHY-Up/PHY-Up-LP*
+    # Also sets phy_status/phy[tx|rx]_lwr, for use by to_json()
     def phy_status_ok(self, phy):
-        op_status = genz.PHYStatus(phy.PHYStatus, phy).field.PHYLayerOpStatus
-        return op_status in [1, 3, 4, 5, 6]
+        phy_status = genz.PHYStatus(phy.PHYStatus, phy)
+        op_status = phy_status.field.PHYLayerOpStatus
+        self.phy_status = PHYOpStatus(op_status)
+        self.phy_tx_lwr = phy_status.field.PHYTxLinkWidthReduced
+        self.phy_rx_lwr = phy_status.field.PHYRxLinkWidthReduced
+        return self.phy_status.up_or_uplp()
 
     def lprt_write(self, cid, ei, valid=1, mhc=None, hc=None, vca=None):
         if self.lprt_dir is None:
@@ -460,7 +465,12 @@ class Interface():
         self.update_vcat_dir()
 
     def to_json(self):
-        return str(self)
+        return { 'num': str(self),
+                 'state': str(self.istate),
+                 'phy': { 'status': str(self.phy_status),
+                          'tx_LWR': self.phy_tx_lwr,
+                          'rx_LWR': self.phy_rx_lwr }
+                }
 
     def __repr__(self):
         return '{}({}.{})'.format(self.__class__.__name__,
@@ -559,7 +569,6 @@ class Component():
             self.setup_paths('control')
         else:
             self.update_path()
-        self.fru_uuid = get_fru_uuid(self.path)
         return ret
 
     def add_fab_dr_comp(self):
@@ -719,6 +728,7 @@ class Component():
         cuuid = get_cuuid(self.path)
         serial = get_serial(self.path)
         self.cuuid_serial = str(cuuid) + ':' + serial
+        self.fru_uuid = get_fru_uuid(self.path)
         self.fab.add_comp(self)
         # re-open core file at (potential) new location set by add_fab_comp()
         core_file = self.path / prefix / 'core@0x0/core'
@@ -1349,6 +1359,7 @@ class LocalBridge(Bridge):
                     log.debug('new path: {}'.format(self.path))
                     for iface in self.interfaces:
                         iface.update_path()
+                    self.fru_uuid = get_fru_uuid(self.path)
                     return
                 # end if
             # end for br_path
@@ -1408,6 +1419,7 @@ class Fabric(nx.MultiGraph):
         self.nodes[comp]['fru_uuid'] = comp.fru_uuid
         self.nodes[comp]['max_data'] = comp.max_data
         self.nodes[comp]['max_iface'] = comp.max_iface
+        self.nodes[comp]['cstate'] = str(comp.cstate) # Revisit: to_json() doesn't work
 
     def generate_nonce(self):
         while True:
@@ -1432,12 +1444,16 @@ class Fabric(nx.MultiGraph):
                              tmp_gcid=tmp_gcid, netlink=self.nl,
                              verbosity=self.verbosity)
             gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size()[0])
-            pfm = br
+            self.set_pfm(br)
             log.info('{}:{} bridge{} {}'.format(self.fabnum, gcid, brnum, cuuid_serial))
-            br.comp_init(pfm)
+            br.comp_init(self.pfm)
             self.bridges.append(br)
-            br.explore_interfaces(pfm)
+            br.explore_interfaces(self.pfm)
         # end for br_path
+
+    def set_pfm(self, pfm):
+        self.pfm = pfm
+        self.graph['pfm'] = pfm
 
     def shortest_path(self, fr: Component, to: Component) -> List[Component]:
         return nx.shortest_path(self, fr, to)

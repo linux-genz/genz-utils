@@ -41,6 +41,9 @@ class CState(IntEnum):
         _c_state = ['C-Down', 'C-CFG', 'C-Up', 'C-LP', 'C-DLP']
         return _c_state[self.value]
 
+    def to_json(self):
+        return str(self)
+
 class IState(IntEnum):
     IDown = 0
     ICFG = 1
@@ -50,6 +53,30 @@ class IState(IntEnum):
     def __str__(self):
         _i_state = ['I-Down', 'I-CFG', 'I-Up', 'I-LP']
         return _i_state[self.value]
+
+class PHYOpStatus(IntEnum):
+    PHYDown = 0
+    PHYUp = 1
+    PHYDownRetrain = 2
+    PHYUpLP1 = 3
+    PHYUpLP2 = 4
+    PHYUpLP3 = 5
+    PHYUpLP4 = 6
+    PHYLP1 = 7
+    PHYLP2 = 8
+    PHYLP3 = 9
+    PHYLP4 = 10
+
+    def __str__(self):
+        _phy_status = ['PHY-Down', 'PHY-Up', 'PHY-Down-Retrain',
+                       'PHY-Up-LP1', 'PHY-Up-LP2', 'PHY-Up-LP3', 'PHY-Up-LP4',
+                       'PHY-LP1', 'PHY-LP2', 'PHY-LP3', 'PHY-LP4']
+        return _phy_status[self.value]
+
+    def up_or_uplp(self):
+        return (self.value == PHYOpStatus.PHYUp or
+                (self.value >= PHYOpStatus.PHYUpLP1 and
+                 self.value <= PHYOpStatus.PHYUpLP4))
 
 class GCID():
     def __init__(self, val=None, sid=0, cid=None, str=None):
