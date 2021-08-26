@@ -74,7 +74,7 @@ def timing(f):
 
 #@timing
 def get_struct(fpath, map, parent=None, core=None, verbosity=0):
-    fname = fpath.name
+    fname = fpath.name.replace(fpath.suffix, '')
     with fpath.open(mode='rb') as f:
         try:  # Revisit: workaround for zero-length files
             data = bytearray(f.read())
