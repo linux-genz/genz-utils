@@ -1187,7 +1187,8 @@ class ControlStructureMap(LittleEndianStructure):
 
     _inverted_map = {v : k for k, v in _map.items()}
 
-    _struct = { 'core'                        : 'CoreStructure',
+    _struct = { 'header'                      : 'ControlHeader',
+                'core'                        : 'CoreStructure',
                 'opcode_set'                  : 'OpCodeSetStructure',
                 'interface'                   : 'InterfaceStructure',
                 # interfaceX has the optional fields
@@ -1258,9 +1259,15 @@ class ControlStructureMap(LittleEndianStructure):
         return self._inverted_map[id]
 
     def fileToStruct(self, file, data, verbosity=0, fd=None, path=None,
-                     parent=None, core=None):
-        struct = globals()[self._struct[file]].from_buffer(data)
+                     parent=None, core=None, offset=0):
+        try:
+            # first try file as a file name, e.g., 'core'
+            struct = globals()[self._struct[file]].from_buffer(data, offset)
+        except KeyError:
+            # next try file as a structure name, e.g., 'CoreStructure'
+            struct = globals()[file].from_buffer(data, offset)
         struct.data = data
+        struct.offset = offset
         struct.verbosity = verbosity
         struct.fd = fd
         struct.path = path
