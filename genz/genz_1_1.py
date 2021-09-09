@@ -1259,7 +1259,7 @@ class ControlStructureMap(LittleEndianStructure):
         return self._inverted_map[id]
 
     def fileToStruct(self, file, data, verbosity=0, fd=None, path=None,
-                     parent=None, core=None, offset=0):
+                     parent=None, core=None, offset=0, size=None):
         try:
             # first try file as a file name, e.g., 'core'
             struct = globals()[self._struct[file]].from_buffer(data, offset)
@@ -1273,6 +1273,8 @@ class ControlStructureMap(LittleEndianStructure):
         struct.path = path
         struct.parent = parent
         struct.core = core
+        struct._stat = None
+        struct._size = size
         struct.fileToStructInit()
         return struct
 
@@ -1288,6 +1290,13 @@ class ControlStructure(ControlStructureMap):
             width = field[2]
             byteOffset, highBit, lowBit, hexWidth = self.bitField(width, bitOffset)
             field.byteOffset = byteOffset
+
+    @property
+    def sz_bytes(self):
+        return self.Size << 4
+
+    def ptr_off(self, ptr):
+        return ptr << 4
 
     @property
     def ptrs(self):
@@ -1389,11 +1398,15 @@ class ControlStructure(ControlStructureMap):
 
 class ControlTable(ControlStructure):
     def fileToStructInit(self):
-        self.stat = self.path.stat()
+        if self.path is not None:
+            self._stat = self.path.stat()
 
     @property
     def Size(self):
-        return self.stat.st_size
+        if self._size is not None:
+            return self._size
+        self._size = self._stat.st_size
+        return self._size
 
 class ControlTableArray(ControlTable):
     def __getitem__(self, key):
@@ -1431,6 +1444,9 @@ class ControlHeader(ControlStructure):
                 ('Vers',          c_u64,  4),
                 ('Size',          c_u64, 16),
                 ]
+
+    def __str__(self):
+        return self.__repr__()
 
 class CoreStructure(ControlStructure):
     _fields_ = [('Type',          c_u64, 12), # 0x0
