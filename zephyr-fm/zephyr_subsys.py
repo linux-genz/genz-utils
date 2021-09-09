@@ -517,6 +517,7 @@ class Component():
         self._comp_dest = None
         self.ssdt = None
         self.rit = None
+        self.rsp_page_grid_ps = 0
         fab.components[self.uuid] = self
         fab.add_node(self, instance_uuid=self.uuid, cclass=self.cclass,
                      mgr_uuid=self.mgr_uuid)
@@ -851,6 +852,7 @@ class Component():
         # end with
         if self.has_switch:
             self.switch_init(core)
+        self.fab.update_comp(self)
         return self.usable
 
     def opcode_set_init(self):
@@ -1224,6 +1226,16 @@ class Component():
                 log.info('{}: interface{} is not usable'.format(
                     self.gcid, iface.num))
 
+    def update_cstate(self, prefix='control'):
+        core_file = self.path / prefix / 'core@0x0/core'
+        with core_file.open(mode='rb+') as f:
+            # Revisit: optimize this to avoid reading entire Core struct
+            data = bytearray(f.read())
+            core = self.map.fileToStruct('core', data, fd=f.fileno(),
+                                         verbosity=self.verbosity)
+            cstatus = genz.CStatus(core.CStatus, core)
+            self.cstate = CState(cstatus.field.CState)
+
     def __repr__(self):
         return '{}({})'.format(self.__class__.__name__, self.gcid)
 
@@ -1271,6 +1283,7 @@ class Memory(Component):
         # available PTEs, one for direct-mapped pages and one for interleave
         pte_cnt = pg.PTETableSz // 2
         ps = ceil_log2(core.MaxData / pte_cnt)
+        self.rsp_page_grid_ps = ps
         # Revisit: verify pg.PGTableSz >= 2
         rsp_pg_table_file = self.rsp_pg_table_dir / 'pg_table'
         with rsp_pg_table_file.open(mode='rb+') as f:
@@ -1416,9 +1429,14 @@ class Fabric(nx.MultiGraph):
     def add_comp(self, comp):
         self.cuuid_serial[comp.cuuid_serial] = comp
         self.comp_gcids[comp.gcid] = comp
+        self.update_comp(comp)
+
+    def update_comp(self, comp):
         self.nodes[comp]['fru_uuid'] = comp.fru_uuid
         self.nodes[comp]['max_data'] = comp.max_data
         self.nodes[comp]['max_iface'] = comp.max_iface
+        self.nodes[comp]['rsp_page_grid_ps'] = comp.rsp_page_grid_ps
+        comp.update_cstate()
         self.nodes[comp]['cstate'] = str(comp.cstate) # Revisit: to_json() doesn't work
 
     def generate_nonce(self):
@@ -1737,6 +1755,7 @@ def main():
         data = {}
         fab_uuid = uuid4()
         data['fabric_uuid'] = str(fab_uuid)
+        data['add_resources'] = []
         conf.write_conf_file(data)
     log.debug('conf={}'.format(conf))
     fabrics = {}
