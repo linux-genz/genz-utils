@@ -1295,6 +1295,9 @@ class ControlStructure(ControlStructureMap):
     def sz_bytes(self):
         return self.Size << 4
 
+    def sz_0_special(self, fld_val, fld_bits):
+        return fld_val if fld_val != 0 else (1 << fld_bits)
+
     def ptr_off(self, ptr):
         return ptr << 4
 
@@ -1408,6 +1411,8 @@ class ControlTable(ControlStructure):
         self._size = self._stat.st_size
         return self._size
 
+# for PATable, RIT, SSAP, MCAP, MSAP, MSMCAP,
+# CAccessRKeyTable, CAccessLP2PTable, PGTable, PTETable
 class ControlTableArray(ControlTable):
     def __getitem__(self, key):
         return self.array[key]
@@ -1416,7 +1421,6 @@ class ControlTableArray(ControlTable):
         return len(self.array)
 
     def __str__(self):
-        # Revisit: handle 2-dimensional arrays, like VCAT
         r = type(self).__name__
         if self.verbosity < 2:
             return r
@@ -1437,6 +1441,42 @@ class ControlTableArray(ControlTable):
 
     def __repr__(self):
         return repr(self.array)
+
+# for RequesterVCAT, ResponderVCAT, VCAT, SSDT, MSDT, LPRT, MPRT
+class ControlTable2DArray(ControlTableArray):
+    @property
+    def rows(self):
+        return len(self.array)
+
+    @property
+    def cols(self):
+        return len(self.array[0])
+
+    def cs_offset(self, row, col):
+        return sizeof(self.element) * ((row * self.cols) + col)
+
+    def __str__(self):
+        r = type(self).__name__
+        if self.verbosity < 2:
+            return r
+        r += ':\n'
+        if self.verbosity < 4:
+            return r
+        elif self.verbosity == 4:
+            name = type(self.array[0][0]).__name__
+            for i in range(self.rows):
+                for j in range(self.cols):
+                    r += '    {}[{}][{}]={}\n'.format(name, i, j,
+                                                      repr(self.array[i][j]))
+        else:
+            # Revisit: the str() output should be indented another 2 spaces
+            name = type(self.array[0][0]).__name__
+            for i in range(self.rows):
+                for j in range(self.cols):
+                    r += '    {}[{}][{}]={}\n'.format(name, i, j,
+                                                      str(self.array[i][j]))
+
+        return r
 
 #Revisit: jmh - this is version independent
 class ControlHeader(ControlStructure):
@@ -1612,6 +1652,10 @@ class CoreStructure(ControlStructure):
     _special_dict = { 'CStatus': CStatus, 'CControl': CControl,
                       'CAP1': CAP1, 'CAP1Control': CAP1Control,
                       'CAP2Control': CAP2Control }
+
+    def fileToStructInit(self):
+        self.sw = None
+        self.comp_dest = None
 
 class ComponentDestinationTableStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12),  # Basic OpCode Set Fields
@@ -2308,48 +2352,57 @@ class PATable(ControlTableArray):
         self.array = (PA * items).from_buffer(self.data)
         self.element = PA
 
-class RequesterVCATTable(ControlTableArray):
+class RequesterVCATTable(ControlTable2DArray):
     def fileToStructInit(self):
         super().fileToStructInit()
-        # Revisit: need parent/core so we can dynamically build VCAT based on
-        # HCS, max_hvs, etc.
         fields = [('VCM',       c_u32, 32)
         ]
+        sz = 4
+        if self.parent.HCS:
+            fields.extend([('TH', c_u32, 7), ('R0', c_u32, 25)])
+            sz = 8
         VCAT = type('VCAT', (ControlStructure,), {'_fields_': fields,
                                                   'verbosity': self.verbosity,
-                                                  'Size': 4}) # Revisit
-        items = self.Size // sizeof(VCAT)
-        self.array = (VCAT * items).from_buffer(self.data)
+                                                  'Size': sz})
+        rows = 16  # always 16 rows
+        cols = self.sz_0_special(self.parent.REQVCATSZ, 5)
+        self.array = ((VCAT * cols) * rows).from_buffer(self.data)
         self.element = VCAT
 
-class ResponderVCATTable(ControlTableArray):
-    # Revisit: identical to RequesterVCATTable
+class ResponderVCATTable(ControlTable2DArray):
     def fileToStructInit(self):
         super().fileToStructInit()
-        # Revisit: need parent/core so we can dynamically build VCAT based on
-        # HCS, max_hvs, etc.
         fields = [('VCM',       c_u32, 32)
         ]
+        sz = 4
+        if self.parent.HCS:
+            fields.extend([('TH', c_u32, 7), ('R0', c_u32, 25)])
+            sz = 8
         VCAT = type('VCAT', (ControlStructure,), {'_fields_': fields,
                                                   'verbosity': self.verbosity,
-                                                  'Size': 4}) # Revisit
+                                                  'Size': sz})
         items = self.Size // sizeof(VCAT)
-        self.array = (VCAT * items).from_buffer(self.data)
+        cols = self.sz_0_special(self.parent.RSPVCATSZ, 5)
+        rows = items // cols
+        self.array = ((VCAT * cols) * rows).from_buffer(self.data)
         self.element = VCAT
 
-class VCATTable(ControlTableArray):
-    # Revisit: identical to RequesterVCATTable/ResponderVCATTable
+class VCATTable(ControlTable2DArray):
     def fileToStructInit(self):
         super().fileToStructInit()
-        # Revisit: need parent/core so we can dynamically build VCAT based on
-        # HCS, max_hvs, etc.
         fields = [('VCM',       c_u32, 32)
         ]
+        sz = 4
+        if self.core.sw.HCS:
+            fields.extend([('TH', c_u32, 7), ('R0', c_u32, 25)])
+            sz = 8
         VCAT = type('VCAT', (ControlStructure,), {'_fields_': fields,
                                                   'verbosity': self.verbosity,
-                                                  'Size': 4}) # Revisit
+                                                  'Size': sz})
         items = self.Size // sizeof(VCAT)
-        self.array = (VCAT * items).from_buffer(self.data)
+        cols = self.sz_0_special(self.core.sw.UVCATSZ, 5)
+        rows = items // cols
+        self.array = ((VCAT * cols) * rows).from_buffer(self.data)
         self.element = VCAT
 
 class RITTable(ControlTableArray):
@@ -2367,11 +2420,9 @@ class RITTable(ControlTableArray):
         self.element = RIT
 
 # for SSDT, MSDT, LPRT, and MPRT
-class SSDTMSDTLPRTMPRTTable(ControlTableArray):
+class SSDTMSDTLPRTMPRTTable(ControlTable2DArray):
     def fileToStructInit(self):
         super().fileToStructInit()
-        # Revisit: need parent so we can dynamically build SSDT based on
-        # SSDTSize, SSDTMSDTRowSize, etc.
         fields = [('MHC',       c_u32,  6),
                   ('R0',        c_u32,  2),
                   ('V',         c_u32,  1),
@@ -2381,27 +2432,60 @@ class SSDTMSDTLPRTMPRTTable(ControlTableArray):
         ]
         SSDT = type(self._name, (ControlStructure,), {'_fields_': fields,
                                                   'verbosity': self.verbosity,
-                                                  'Size': 4}) # Revisit
-        items = self.Size // sizeof(SSDT)
-        self.array = (SSDT * items).from_buffer(self.data)
+                                                  'Size': 4})
+        rows = self.rows
+        cols = self.cols
+        self.array = ((SSDT * cols) * rows).from_buffer(self.data)
         self.element = SSDT
 
 class SSDTTable(SSDTMSDTLPRTMPRTTable):
+    @property
+    def rows(self):
+        return self.sz_0_special(self.parent.SSDTSize, 12)
+
+    @property
+    def cols(self):
+        return self.parent.MaxRoutes
+
     def fileToStructInit(self):
         self._name = 'SSDT'
         super().fileToStructInit()
 
 class MSDTTable(SSDTMSDTLPRTMPRTTable):
+    @property
+    def rows(self):
+        return self.sz_0_special(self.parent.MSDTSize, 16)
+
+    @property
+    def cols(self):
+        return self.parent.MaxRoutes
+
     def fileToStructInit(self):
         self._name = 'MSDT'
         super().fileToStructInit()
 
 class LPRTTable(SSDTMSDTLPRTMPRTTable):
+    @property
+    def rows(self):
+        return self.sz_0_special(self.core.sw.LPRTSize, 12)
+
+    @property
+    def cols(self):
+        return self.core.sw.MaxRoutes
+
     def fileToStructInit(self):
         self._name = 'LPRT'
         super().fileToStructInit()
 
 class MPRTTable(SSDTMSDTLPRTMPRTTable):
+    @property
+    def rows(self):
+        return self.sz_0_special(self.core.sw.MPRTSize, 12)
+
+    @property
+    def cols(self):
+        return self.core.sw.MaxRoutes
+
     def fileToStructInit(self):
         self._name = 'MPRT'
         super().fileToStructInit()

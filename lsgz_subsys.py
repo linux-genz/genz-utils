@@ -123,6 +123,43 @@ def ls_comp(ctl, map, ignore_dr=True, verbosity=1):
     except BrokenPipeError:
         return drs
     parents['core@0x0'] = core
+    # get (but don't print) the switch structure - save in core for later
+    try:
+        sw_dir = list(ctl.glob('component_switch@*'))[0]
+        sw_path = sw_dir / 'component_switch'
+        sw = get_struct(sw_path, map, verbosity=verbosity)
+        core.sw = sw
+    except IndexError:
+        core.sw = None
+    # also comp_dest
+    try:
+        cd_dir = list(ctl.glob('component_destination_table@*'))[0]
+        cd_path = cd_dir / 'component_destination_table'
+        cd = get_struct(cd_path, map, verbosity=verbosity)
+        core.comp_dest = cd
+    except IndexError:
+        core.comp_dest = None
+    rc_dir = None
+    if core.sw is not None:
+        try:  # Revisit: route control is required, but missing in current HW
+            rc_dir = list(sw_dir.glob('route_control_table@*'))[0]
+        except IndexError:
+            rc_dir = None
+    elif core.comp_dest is not None:
+        try:  # Revisit: route control is required, but missing in current HW
+            rc_dir = list(cd_dir.glob('route_control_table@*'))[0]
+        except IndexError:
+            rc_dir = None
+    if rc_dir is not None:
+        rc_path = rc_dir / 'route_control_table'
+        rc = get_struct(rc_path, map, verbosity=verbosity)
+        core.route_control = rc
+        core.sw.HCS = core.route_control.HCS
+        core.comp_dest.HCS = core.route_control.HCS
+    else:
+        core.route_control = None
+        core.sw.HCS = 0
+        core.comp_dest.HCS = 0
     for dir, dirnames, filenames in os.walk(ctl):
         dirnames.sort()
         #print('dir={}, dirnames={}, filenames={}'.format(dir, dirnames, filenames))
@@ -133,8 +170,13 @@ def ls_comp(ctl, map, ignore_dr=True, verbosity=1):
             continue
         dpath = Path(dir)
         for file in sorted(filenames):
+            struct = None
             if file == 'core':  # we already did core
                 continue
+            elif file == 'component_switch':
+                struct = core.sw
+            elif file == 'component_destination_table':
+                struct = core.comp_dest
             if verbosity < 2 and file != 'interface': # ignore non-interfaces
                 continue;
             try:
@@ -142,8 +184,9 @@ def ls_comp(ctl, map, ignore_dr=True, verbosity=1):
                 print('  {}{}'.format(dpath.name, '=' if equals else ' '), end='')
                 fpath = dpath / file
                 parent = get_parent(fpath, dpath, parents)
-                struct = get_struct(fpath, map, core=core, parent=parent,
-                                    verbosity=verbosity)
+                if struct is None:
+                    struct = get_struct(fpath, map, core=core, parent=parent,
+                                        verbosity=verbosity)
                 print(struct)
             except BrokenPipeError:
                 return drs

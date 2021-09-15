@@ -401,26 +401,27 @@ class Interface():
         self.phy_rx_lwr = phy_status.field.PHYRxLinkWidthReduced
         return self.phy_status.up_or_uplp()
 
-    def lprt_write(self, cid, ei, valid=1, mhc=None, hc=None, vca=None):
+    def lprt_write(self, cid, ei, rt=0, valid=1, mhc=None, hc=None, vca=None):
         if self.lprt_dir is None:
             return
         # Revisit: avoid open/close (via "with") on every write?
-        # Revisit: multiple routes
         lprt_file = self.lprt_dir / 'lprt'
         with lprt_file.open(mode='rb+', buffering=0) as f:
             if self.lprt is None:
                 data = bytearray(f.read())
-                self.lprt = self.comp.map.fileToStruct('lprt', data, path=lprt_file,
+                self.lprt = self.comp.map.fileToStruct('lprt', data,
+                                path=lprt_file, core=self.comp.core,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
             else:
                 self.lprt.set_fd(f)
-            self.lprt[cid].EI = ei
-            self.lprt[cid].V = valid
-            self.lprt[cid].MHC = mhc if mhc is not None else 0
-            self.lprt[cid].HC = hc if hc is not None else 0
-            self.lprt[cid].VCA = vca if vca is not None else 0
+            sz = ctypes.sizeof(self.lprt.element)
+            self.lprt[cid][rt].EI = ei
+            self.lprt[cid][rt].V = valid
+            self.lprt[cid][rt].MHC = mhc if (mhc is not None and rt == 0) else 0
+            self.lprt[cid][rt].HC = hc if hc is not None else 0
+            self.lprt[cid][rt].VCA = vca if vca is not None else 0
             self.comp.control_write(self.lprt, self.lprt.element.MHC,
-                                    off=4*cid, sz=4)
+                                    off=self.lprt.cs_offset(cid, rt), sz=sz)
         # end with
 
     def vcat_write(self, vc, vcm, action=0, th=None):
@@ -431,15 +432,17 @@ class Interface():
         with vcat_file.open(mode='rb+', buffering=0) as f:
             if self.vcat is None:
                 data = bytearray(f.read())
-                self.vcat = self.comp.map.fileToStruct('vcat', data, path=vcat_file,
+                self.vcat = self.comp.map.fileToStruct('vcat', data,
+                                path=vcat_file, core=self.comp.core,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
             else:
                 self.vcat.set_fd(f)
-            # Revisit: multiple Action columns
-            # Revisit: TH support
-            self.vcat[vc].VCM = vcm
+            sz = ctypes.sizeof(self.vcat.element)
+            self.vcat[vc][action].VCM = vcm
+            if th is not None and sz == 8:
+                self.vcat[vc][action].TH = th
             self.comp.control_write(self.vcat, self.vcat.element.VCM,
-                                    off=4*vc, sz=4)
+                                    off=self.vcat.cs_offset(vc, action), sz=sz)
         # end with
 
     def update_lprt_dir(self):
@@ -514,9 +517,11 @@ class Component():
         self._req_vcat_sz = None
         self._rsp_vcat_sz = None
         self._ssdt_sz = None
-        self._comp_dest = None
+        self.comp_dest = None
         self.ssdt = None
         self.rit = None
+        self.req_vcat = None
+        self.rsp_vcat = None
         self.rsp_page_grid_ps = 0
         fab.components[self.uuid] = self
         fab.add_node(self, instance_uuid=self.uuid, cclass=self.cclass,
@@ -642,6 +647,7 @@ class Component():
             core = self.map.fileToStruct('core', data, fd=f.fileno(),
                                          verbosity=self.verbosity)
             log.debug('{}: {}'.format(self.gcid, core))
+            self.core = core
             # Revisit: verify good data (check ZUUID?)
             # save cstate and use below to control writes (e.g., CID0)
             cstatus = genz.CStatus(core.CStatus, core)
@@ -653,6 +659,8 @@ class Component():
             self.cclass = core.BaseCClass
             self.max_data = core.MaxData
             self.max_iface = core.MaxInterface
+            # create and read (but do not HW init) the switch struct
+            self.switch_read(prefix=prefix)
             # create and read (but do not HW init) all interfaces
             for ifnum in range(0, core.MaxInterface):
                 if (ingress_iface is not None) and (ingress_iface.num == ifnum):
@@ -915,19 +923,57 @@ class Component():
     def rsp_page_grid_init(self, core, valid=0):
         return # default implementation does nothing
 
-    def comp_dest_read(self, prefix='control'):
-        if self._comp_dest is not None:
-            return self._comp_dest
+    def comp_dest_read(self, prefix='control', haveCore=True):
+        if self.comp_dest is not None:
+            return self.comp_dest
         comp_dest_dir = list((self.path / prefix).glob(
             'component_destination_table@*'))[0]
         comp_dest_file = comp_dest_dir / 'component_destination_table'
         with comp_dest_file.open(mode='rb') as f:
             data = bytearray(f.read())
-            self._comp_dest = self.map.fileToStruct(
+            comp_dest = self.map.fileToStruct(
                 'component_destination_table',
                 data, fd=f.fileno(), verbosity=self.verbosity)
         # end with
-        return self._comp_dest
+        if haveCore:
+            self.comp_dest = comp_dest
+            self.core.comp_dest = comp_dest # Revisit: two copies
+            self.core.comp_dest.HCS = self.route_control_read(prefix=prefix)
+        return comp_dest
+
+    # returns route_control.HCS
+    def route_control_read(self, prefix='control'):
+        try:  # Revisit: route control is required, but missing in current HW
+            rc_dir = list(self.switch_dir.glob('route_control_table@*'))[0]
+        except IndexError:
+            rc_dir = None
+        if rc_dir is not None:
+            rc_path = rc_dir / 'route_control_table'
+            with rc_path.open(mode='rb') as f:
+                data = bytearray(f.read())
+                rc = self.map.fileToStruct('route_control_table', data,
+                                parent=self.core.sw, core=self.core,
+                                fd=f.fileno(), verbosity=self.verbosity)
+                self.core.route_control = rc
+                hcs = self.core.route_control.HCS
+            # end with
+        else:  # Route Control is missing - assume HCS=0
+            self.core.route_control = None
+            hcs = 0
+
+        return hcs
+
+    def switch_read(self, prefix='control'):
+        if self.core.sw is not None or self.switch_dir is None:
+            return self.core.sw
+        switch_file = self.switch_dir / 'component_switch'
+        with switch_file.open(mode='rb') as f:
+            data = bytearray(f.read())
+            self.core.sw = self.map.fileToStruct('component_switch',
+                                data, fd=f.fileno(), verbosity=self.verbosity)
+        # end with
+        self.core.sw.HCS = self.route_control_read(prefix=prefix)
+        return self.core.sw
 
     def num_vcs(self, prefix='control'):
         if self._num_vcs is not None:
@@ -971,15 +1017,19 @@ class Component():
         # Revisit: avoid open/close (via "with") on every write?
         req_vcat_file = self.req_vcat_dir / 'req_vcat'
         with req_vcat_file.open(mode='rb+', buffering=0) as f:
-            data = bytearray(f.read())
-            self.req_vcat = self.map.fileToStruct('req_vcat', data,
-                                path=req_vcat_file,
-                                fd=f.fileno(), verbosity=self.verbosity)
-            # Revisit: multiple Action columns
-            # Revisit: TH support
-            self.req_vcat[vc].VCM = vcm
+            if self.req_vcat is None:
+                data = bytearray(f.read())
+                self.req_vcat = self.map.fileToStruct('req_vcat', data,
+                                    path=req_vcat_file, parent=self.comp_dest,
+                                    fd=f.fileno(), verbosity=self.verbosity)
+            else:
+                self.req_vcat.set_fd(f)
+            sz = ctypes.sizeof(self.req_vcat.element)
+            self.req_vcat[vc][action].VCM = vcm
+            if th is not None and sz == 8:
+                self.req_vcat[vc][action].TH = th
             self.control_write(self.req_vcat, self.req_vcat.element.VCM,
-                               off=4*vc, sz=4)
+                               off=self.req_vcat.cs_offset(vc, action), sz=sz)
         # end with
 
     def rsp_vcat_size(self, prefix='control'):
@@ -998,28 +1048,30 @@ class Component():
         # Revisit: avoid open/close (via "with") on every write?
         rsp_vcat_file = self.rsp_vcat_dir / 'rsp_vcat'
         with rsp_vcat_file.open(mode='rb+', buffering=0) as f:
-            data = bytearray(f.read())
-            self.rsp_vcat = self.map.fileToStruct('rsp_vcat', data,
-                                path=rsp_vcat_file,
-                                fd=f.fileno(), verbosity=self.verbosity)
-            # Revisit: multiple Action columns
-            # Revisit: TH support
-            self.rsp_vcat[vc].VCM = vcm
+            if self.rsp_vcat is None:
+                data = bytearray(f.read())
+                self.rsp_vcat = self.map.fileToStruct('rsp_vcat', data,
+                                    path=rsp_vcat_file, parent=self.comp_dest,
+                                    fd=f.fileno(), verbosity=self.verbosity)
+            else:
+                self.rsp_vcat.set_fd(f)
+            sz = ctypes.sizeof(self.rsp_vcat.element)
+            self.rsp_vcat[vc][action].VCM = vcm
             self.control_write(self.rsp_vcat, self.rsp_vcat.element.VCM,
-                               off=4*vc, sz=4)
+                               off=self.rsp_vcat.cs_offset(vc, action), sz=sz)
         # end with
 
-    def ssdt_size(self, prefix='control'):
+    def ssdt_size(self, prefix='control', haveCore=True):
         if self._ssdt_sz is not None:
             return self._ssdt_sz
-        comp_dest = self.comp_dest_read(prefix=prefix)
+        comp_dest = self.comp_dest_read(prefix=prefix, haveCore=haveCore)
         rows = comp_dest.SSDTSize
         cols = comp_dest.MaxRoutes
         self._ssdt_sz = (rows, cols)
         log.debug('{}: ssdt_sz={}'.format(self.gcid, self._ssdt_sz))
         return self._ssdt_sz
 
-    def ssdt_write(self, cid, ei, valid=1, rt=0, mhc=None, hc=None, vca=None):
+    def ssdt_write(self, cid, ei, rt=0, valid=1, mhc=None, hc=None, vca=None):
         if self.ssdt_dir is None:
             return
         # Revisit: avoid open/close (via "with") on every write?
@@ -1029,16 +1081,18 @@ class Component():
             if self.ssdt is None:
                 data = bytearray(f.read())
                 self.ssdt = self.map.fileToStruct('ssdt', data, path=ssdt_file,
-                                      fd=f.fileno(), verbosity=self.verbosity)
+                                    core=self.core, parent=self.comp_dest,
+                                    fd=f.fileno(), verbosity=self.verbosity)
             else:
                 self.ssdt.set_fd(f)
-            self.ssdt[cid].EI = ei
-            self.ssdt[cid].V = valid
-            self.ssdt[cid].MHC = mhc if mhc is not None else 0
-            self.ssdt[cid].HC = hc if hc is not None else 0
-            self.ssdt[cid].VCA = vca if vca is not None else 0
+            sz = ctypes.sizeof(self.ssdt.element)
+            self.ssdt[cid][rt].EI = ei
+            self.ssdt[cid][rt].V = valid
+            self.ssdt[cid][rt].MHC = mhc if (mhc is not None and rt == 0) else 0
+            self.ssdt[cid][rt].HC = hc if hc is not None else 0
+            self.ssdt[cid][rt].VCA = vca if vca is not None else 0
             self.control_write(self.ssdt, self.ssdt.element.MHC,
-                               off=4*cid, sz=4)
+                               off=self.ssdt.cs_offset(cid, rt), sz=sz)
         # end with
 
     def update_rit_dir(self, prefix='control'):
@@ -1461,7 +1515,7 @@ class Fabric(nx.MultiGraph):
                              local_br=True, brnum=brnum, dr=None,
                              tmp_gcid=tmp_gcid, netlink=self.nl,
                              verbosity=self.verbosity)
-            gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size()[0])
+            gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size(haveCore=False)[0])
             self.set_pfm(br)
             log.info('{}:{} bridge{} {}'.format(self.fabnum, gcid, brnum, cuuid_serial))
             br.comp_init(self.pfm)
