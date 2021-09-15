@@ -2975,6 +2975,7 @@ class ExplicitHdr(Packet):
         return name
 
     def __str__(self):
+        noTag = getattr(self, 'noTag', False)
         r = ('{}' if self.csv else '{:>22s}').format(type(self).__name__)
         if self.csv or type(self).__name__[0:8] != 'Explicit':
             r += (',{},{}' if self.csv else '[{:02x}:{:02x}]').format(self.OCL, self.OpCode)
@@ -2992,9 +2993,11 @@ class ExplicitHdr(Packet):
                     self.SCID, self.DCID)
         else:
             r += (',{},{}' if self.csv else ', SCID: {:03x}, DCID: {:03x}').format(self.SCID, self.DCID)
-        r += (',{},{},{},{},{},{},{},{},{}' if self.csv else
-              ', Tag: {:03x}, VC: {}, PCRC: {:02x}, AKey: {:02x}, Deadline: {:4d}, ECN: {}, GC: {}, NH: {}, PM: {}').format(
-            self.Tag, self.VC, self.PCRC, self.AKey, self.Deadline,
+        r += (',{}' if self.csv else ', R0:  {:03x}' if noTag else ', Tag: {:03x}').format(
+            self.Tag)
+        r += (',{},{},{},{},{},{},{},{}' if self.csv else
+              ', VC: {}, PCRC: {:02x}, AKey: {:02x}, Deadline: {:4d}, ECN: {}, GC: {}, NH: {}, PM: {}').format(
+            self.VC, self.PCRC, self.AKey, self.Deadline,
             self.ECN, self.GC, self.NH, self.PM)
         return r
 
@@ -3394,6 +3397,132 @@ class ControlWritePkt(ExplicitHdr):
             r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
             for i in reversed(range(self.pay_len)):
                 r += ' {:08x}'.format(self.Payload[i])
+        return r
+
+class ControlUnsolicitedEventPkt(ExplicitHdr):
+    # Revisit: ExplicitHdr has Tag, while UEP has R0
+    os1_fields = [('CV',                         c_u32,  1),
+                  ('SV',                         c_u32,  1),
+                  ('IV',                         c_u32,  1),
+                  ('Event',                      c_u32,  8),
+                  ('R1',                         c_u32,  1)]
+    os2_fields = [('RCCID',                      c_u32, 12), # Byte 12
+                  ('IfaceID',                    c_u32, 12),
+                  ('RCSIDl',                     c_u32,  8),
+                  ('RCSIDh',                     c_u32,  8), # Byte 16
+                  ('R2',                         c_u32,  8),
+                  ('EventID',                    c_u32, 16),
+                  ('ES',                         c_u32, 32)] # Byte 20
+    os3_fields = [('R3',                         c_u32,  8), # Byte 24
+                  ('ECRC',                       c_u32, 24)]
+
+    eventName = { 0x00: 'RecovProtocolErr',
+                  0x01: 'UnrecovProtocolErr',
+                  0x02: 'PossibleMaliciousPkt',
+                  0x03: 'IfaceErr',
+                  0x04: 'CompContainment',
+                  0x07: 'FullIfaceReset',
+                  0x08: 'WarmIfaceReset',
+                  0x09: 'NewPeerComp',
+                  0x0a: 'UnableToCommunicate',
+                  0x0b: 'ExcessiveRNRNAK',
+                  0x0c: 'BufferOverflow',
+                  0x0d: 'FatalMediaContainment',
+                  0x0e: 'PrimaryMediaLog',
+                  0x0f: 'SecondaryMediaLog',
+                  0x10: 'InvalidCompImage',
+                  0x11: 'CompThermShutdown',
+                  0x12: 'PeerCompC-DLP/C-LPExit',
+                  0x13: 'PowerFault',
+                  0x14: 'AuxPower',
+                  0x15: 'CompFWErr',
+                  0x16: 'CompLowPower',
+                  0x17: 'PeerCompC-DLP/C-LPEntry',
+                  0x18: 'EmergencyPowerReduction',
+                  0x19: 'CompPowerOffTransition',
+                  0x1a: 'CompPowerRestoration',
+                  0x1b: 'IfacePerfDegradation',
+                  0x1d: 'MediaMaintRequired',
+                  0x1e: 'MediaMaintOverride',
+                  0x1f: 'ExceededTransientErrThresh',
+                  0x20: 'VdefC-Event',
+                  0x21: 'VdefI-Event',
+                  0x22: 'NonFatalInternalCompErr',
+                  0x23: 'FatalInternalCompErr',
+                  0x24: 'CompThermPerfThrottle',
+                  0x25: 'CompThermThrottleRestore',
+                  0x26: 'PrimaryMediaMaint',
+                  0x27: 'SecondaryMediaMaint',
+                  0x28: 'Mechanical',
+                  0x29: 'ExcessiveE2ERetry',
+                  0x2a: 'BISTFailure',
+                  0x2b: 'P2PNonTransient',
+                  0xf0: 'VdefC-Error0',
+                  0xf1: 'VdefC-Error1',
+                  0xf2: 'VdefC-Error2',
+                  0xf3: 'VdefC-Error3',
+                  0xf4: 'Vdef0',
+                  0xf5: 'Vdef1',
+                  0xf6: 'Vdef2',
+                  0xf7: 'Vdef3',
+                  0xf8: 'Vdef4',
+                  0xf9: 'Vdef5',
+                  0xfa: 'Vdef6',
+                  0xfb: 'Vdef7',
+                  0xfc: 'Vdef8',
+                  0xfd: 'Vdef9',
+                  0xfe: 'VdefA',
+                  0xff: 'VdefB',
+                }
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        fields = ExplicitHdr.hd_fields + ControlUnsolicitedEventPkt.os1_fields
+        if exp_pkt.GC:
+            fields.extend(ExplicitHdr.ms_fields)
+        fields.extend(ControlUnsolicitedEventPkt.os2_fields)
+        if exp_pkt.NH:
+            fields.extend(ExplicitHdr.nh_fields)
+        fields.extend(ControlUnsolicitedEventPkt.os3_fields)
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type = type(className, (ControlUnsolicitedEventPkt,),
+                        {'_fields_': fields,
+                         'data': exp_pkt.data,
+                         'verbosity': exp_pkt.verbosity})
+        pkt = pkt_type.from_buffer(exp_pkt.data)
+        pkt.noTag = True
+        return pkt
+
+    @property
+    def RCSID(self):
+        return self.RCSIDh << 8 | self.RCSIDl
+
+    def __str__(self):
+        r = super().__str__()
+        try:
+            evName = self.eventName[self.Event]
+        except KeyError:
+            evName = 'Reserved'
+        # Revisit: fix csv columns
+        r += (',,,,,,,,,{},,,,,{}' if self.csv else ', CV: {}, SV: {}, IV: {}, Event: {}[{:02x}]').format(self.CV, self.SV, self.IV, evName, self.Event)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R1: {}'.format(self.R1)
+        if self.csv:
+            r += (',,{},{},{}' if self.csv else ', RCCID: {:03x}, IfaceID: {}, RCSID: {:04x}').format(
+                self.RCCID, self.IfaceID, self.RCSID)
+        else:
+            if self.CV and self.SV:
+                r += ', RCGCID: {:04x}:{:03x}'.format(self.RCSID, self.RCCID)
+            elif self.CV:
+                r += ', RCCID: {:03x}'.format(self.RCCID)
+            if self.IV:
+                r += ', IfaceID: {}'.format(self.IfaceID)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R2: {:02x}'.format(self.R2)
+        r += (',,{},{},{}' if self.csv else ', EventID: {:04x}, ES: {:08x}').format(
+            self.EventID, self.ES)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R3: {:02x}'.format(self.R3)
+        r += (',,,,,,,,,,,,,,{}' if self.csv else ', ECRC:{1}{0:06x}').format(self.ECRC, self.ecrc_sep)
         return r
 
 class ControlStandaloneAckPkt(Core64StandaloneAckPkt):
