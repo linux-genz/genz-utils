@@ -36,22 +36,22 @@ import traceback
 def get_gcid(comp_path):
     gcid = comp_path / 'gcid'
     with gcid.open(mode='r') as f:
-        return GCID(str=f.read().rstrip())
+        return GCID(str=f.readline().rstrip())
 
 def get_cuuid(comp_path):
     cuuid = comp_path / 'c_uuid'
     with cuuid.open(mode='r') as f:
-        return UUID(f.read().rstrip())
+        return UUID(f.readline().rstrip())
 
 def get_cclass(comp_path):
     cclass = comp_path / 'cclass'
     with cclass.open(mode='r') as f:
-        return int(f.read().rstrip())
+        return int(f.readline().rstrip())
 
 def get_serial(comp_path):
     serial = comp_path / 'serial'
     with serial.open(mode='r') as f:
-        return int(f.read().rstrip(), base=0)
+        return int(f.readline().rstrip(), base=0)
 
 comp_num_re = re.compile(r'.*/([^0-9]+)([0-9]+)')
 
@@ -200,9 +200,12 @@ def main():
     global cols
     global genz
     parser = argparse.ArgumentParser()
-    #parser.add_argument('file', help='the file containing control space')
+    parser.add_argument('-k', '--keyboard', action='store_true',
+                        help='break to interactive keyboard at certain points')
     parser.add_argument('-v', '--verbosity', action='count', default=0,
                         help='increase output verbosity')
+    parser.add_argument('-F', '--fake-root', action='store',
+                        help='fake root directory')
     parser.add_argument('-G', '--genz-version', choices=['1.1'],
                         default='1.1',
                         help='Gen-Z spec version of Control Space structures')
@@ -220,7 +223,12 @@ def main():
         struct = get_struct(fpath, map, verbosity=args.verbosity)
         print(struct)
         return
-    sys_devices = Path('/sys/devices')
+    if args.keyboard:
+        set_trace()
+    if args.fake_root is not None:
+        sys_devices = Path(args.fake_root) / 'sys/devices'
+    else:
+        sys_devices = Path('/sys/devices')
     dev_fabrics = sys_devices.glob('genz*')
     for fab in dev_fabrics:
         fabnum = component_num(fab)
@@ -228,6 +236,8 @@ def main():
         bridges = fab.glob('bridge*')
         for br in bridges:
             ctl = br / 'control'
+            if args.keyboard:
+                set_trace()
             gcid = get_gcid(br)
             cuuid = get_cuuid(br)
             cclass = get_cclass(br)
