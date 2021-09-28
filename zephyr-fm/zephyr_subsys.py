@@ -1253,8 +1253,6 @@ class Component():
             msg += 'assigned gcid={}'.format(gcid)
             log.info(msg)
             self.fab.add_link(iface, peer_iface)
-            log.debug('sleeping 2 seconds to help with perf problems')
-            time.sleep(2.0) # Revisit: why does this help?
             route = self.fab.setup_routing(pfm, comp)
             self.fab.setup_routing(comp, pfm, write_ssdt=False,
                                    route=route.invert())
