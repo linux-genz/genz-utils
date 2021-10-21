@@ -78,6 +78,22 @@ class PHYOpStatus(IntEnum):
                 (self.value >= PHYOpStatus.PHYUpLP1 and
                  self.value <= PHYOpStatus.PHYUpLP4))
 
+class SigTgt(IntEnum):
+    TgtNone  = 0
+    TgtIntr0 = 0x1
+    TgtIntr1 = 0x2
+    TgtUEP   = 0x4
+
+class UEPTgt(IntEnum):
+    TgtPM      = 0
+    TgtPFMSFM  = 1
+    TgtMgrCID  = 2
+    TgtMgrGCID = 3
+
+class ZMMUType(IntEnum):
+    ReqZMMU = 0
+    RspZMMU = 1
+
 class GCID():
     def __init__(self, val=None, sid=0, cid=None, str=None):
         if val is not None:
