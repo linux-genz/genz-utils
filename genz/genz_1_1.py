@@ -1845,7 +1845,7 @@ class ControlStructure(ControlStructureMap):
                 skipNext = False
                 continue
             byteOffset, highBit, lowBit, hexWidth = self.bitField(width, bitOffset)
-            if byteOffset >= self.Size * 16:
+            if self.Size > 0 and byteOffset >= self.Size * 16:
                 break
             uu = self.isUuid(name)
             if uu is not None:
