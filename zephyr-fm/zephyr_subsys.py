@@ -107,6 +107,7 @@ class Interface():
         self.hvs = None
         self.lprt = None
         self.vcat = None
+        self.istate = IState.IDown # default until we can read actual state
 
     def setup_paths(self, prefix):
         self._prefix = prefix
