@@ -94,7 +94,10 @@ def cmd_add(url, **args):
     return json.loads(resp.text).get('data', {})
 
 def ceil_log2(x):
-    return ceil(log2(x))
+    try:
+        return ceil(log2(x))
+    except ValueError: # x == 0
+        return 0
 
 class Interface():
     def __init__(self, component, num, peer_iface=None):
