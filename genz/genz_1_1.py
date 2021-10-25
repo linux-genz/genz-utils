@@ -1190,9 +1190,7 @@ class ControlStructureMap(LittleEndianStructure):
     _struct = { 'header'                      : 'ControlHeader',
                 'core'                        : 'CoreStructure',
                 'opcode_set'                  : 'OpCodeSetStructure',
-                'interface'                   : 'InterfaceStructure',
-                # interfaceX has the optional fields
-                'interfaceX'                  : 'InterfaceXStructure',
+                'interface'                   : 'InterfaceFactory',
                 'interface_phy'               : 'InterfacePHYStructure',
                 'interface_statistics'        : 'InterfaceStatisticsStructure',
                 'component_error_and_signal_event' : 'ComponentErrorSignalStructure',
@@ -1867,8 +1865,9 @@ class OpCodeSetUUIDTable(ControlTable):
     _uuid_dict = dict(zip([item for sublist in zip(*_uuid_fields) for item in sublist],
                           _uuid_fields * 2))
 
-class InterfaceStructure(ControlStructure):
-    _fields_ = [('Type',                       c_u64, 12), #0x0
+# base class from which to dynamically build InterfaceStructure
+class InterfaceTemplate(ControlStructure):
+    _fields  = [('Type',                       c_u64, 12), #0x0
                 ('Vers',                       c_u64,  4),
                 ('Size',                       c_u64, 16),
                 ('InterfaceID',                c_u64, 12),
@@ -1932,100 +1931,7 @@ class InterfaceStructure(ControlStructure):
                 ('VDPTR',                      c_u64, 32),
                 ]
 
-    #_ptr_fields = ['NextIPTR', 'IPHYPTR', 'VDPTR', 'ISTATSPTR', 'IARBPTR', 'MechanicalPTR']
-    _special_dict = { 'IStatus': IStatus, 'IControl': IControl,
-                      'ICAP1': ICAP1, 'ICAP1Control': ICAP1Control,
-                      'ICAP2': ICAP2, 'ICAP2Control': ICAP2Control,
-                      'IErrorStatus': IError, 'IErrorDetect': IError,
-                      'IErrorFaultInjection': IError, 'IErrorTrigger': IError,
-                      'PeerState': PeerState, 'LinkCTLControl': LinkCTLControl}
-
-    def __str__(self):
-        r = super().__str__()
-        if self.verbosity == 1:
-            istatus = IStatus(self.IStatus, self)
-            r = '{:6s}'.format(istatus.istate)
-            peer_state = PeerState(self.PeerState, self)
-            peer_cid = self.PeerCID if peer_state.field.PeerCIDValid else None
-            peer_sid = (self.PeerSID if peer_state.field.PeerSIDValid else
-                        0) # Revisit
-            try:
-                peer_gcid = GCID(sid=peer_sid, cid=peer_cid)
-            except TypeError:
-                peer_gcid = None
-            peer_iface = (self.PeerInterfaceID
-                          if peer_state.field.PeerIfaceIDValid == 1 else None)
-            if peer_gcid:
-                r += ' Peer {}.{}'.format(peer_gcid, peer_iface)
-        return r
-
-class InterfaceXStructure(ControlStructure):
-    '''InterafceXStructure is the same as InterfaceStructure, but with
-    the optional fields included'''
-    # Revisit: figure out how to dynamically create this class
-    _fields_ = [('Type',                       c_u64, 12), #0x0
-                ('Vers',                       c_u64,  4),
-                ('Size',                       c_u64, 16),
-                ('InterfaceID',                c_u64, 12),
-                ('HVS',                        c_u64,  5),
-                ('R0',                         c_u64,  7),
-                ('PHYPowerEnb',                c_u64,  8),
-                ('IStatus',                    c_u64, 32), #0x8
-                ('IControl',                   c_u64, 32),
-                ('ICAP1',                      c_u64, 32), #0x10
-                ('ICAP1Control',               c_u64, 32),
-                ('ICAP2',                      c_u64, 32), #0x18
-                ('ICAP2Control',               c_u64, 32),
-                ('IErrorStatus',               c_u64, 16), #0x20
-                ('IErrorDetect',               c_u64, 16),
-                ('IErrorFaultInjection',       c_u64, 16),
-                ('IErrorTrigger',              c_u64, 16),
-                ('ISignalTarget',              c_u64, 48), #0x28
-                ('TETH',                       c_u64,  4),
-                ('TETE',                       c_u64,  4),
-                ('FCFWDProgress',              c_u64,  8),
-                ('LLTxPktAlignment',           c_u64,  8), #0x30
-                ('LLRxPktAlignment',           c_u64,  8),
-                ('MaxImplicitFCCredits',       c_u64, 16),
-                ('PeerInterfaceID',            c_u64, 12),
-                ('R1',                         c_u64,  4),
-                ('PeerBaseCClass',             c_u64, 16),
-                ('PeerCID',                    c_u64, 12), #0x38
-                ('R2',                         c_u64,  4),
-                ('PeerSID',                    c_u64, 16),
-                ('PeerState',                  c_u64, 32),
-                ('PathPropagationTime',        c_u64, 16), #0x40
-                ('TRIndex',                    c_u64,  4),
-                ('TRCID',                      c_u64, 12),
-                ('VCPCOEnabled',               c_u64, 32),
-                ('EETxPktAlignment',           c_u64,  8), #0x48
-                ('EERxPktAlignment',           c_u64,  8),
-                ('EETxMinPktStart',            c_u64,  8),
-                ('EERxMinPktStart',            c_u64,  8),
-                ('HVE',                        c_u64,  5),
-                ('R3',                         c_u64,  9),
-                ('TTCUnit',                    c_u64,  2),
-                ('PeerComponentTTC',           c_u64, 16),
-                ('PeerNonce',                  c_u64, 64), #0x50
-                ('AggregationSup',             c_u64,  8), #0x58
-                ('CLPCTL',                     c_u64,  4),
-                ('CDLPCTL',                    c_u64,  4),
-                ('MaxPHYRetrainEvents',        c_u64,  8),
-                ('TxLLRTACK',                  c_u64, 20),
-                ('RxLLRTACK',                  c_u64, 20),
-                ('TEHistoryThresh',            c_u64, 12), #0x60
-                ('R4',                         c_u64, 20),
-                ('LinkCTLControl',             c_u64, 32),
-                ('R5',                         c_u64, 64), #0x68
-                ('NextInterfacePTR',           c_u64, 32), #0x70
-                ('R6',                         c_u64, 32),
-                ('NextAIPTR',                  c_u64, 32), #0x78
-                ('NextIGPTR',                  c_u64, 32),
-                ('IPHYPTR',                    c_u64, 32), #0x80
-                ('ISTATSPTR',                  c_u64, 32),
-                ('MechanicalPTR',              c_u64, 32), #0x88
-                ('VDPTR',                      c_u64, 32),
-                # optional fields
+    _optional_fields = [
                 ('VCATPTR',                    c_u64, 32), #0x90
                 ('LPRTPTR',                    c_u64, 32),
                 ('MPRTPTR',                    c_u64, 32), #0x98
@@ -2059,6 +1965,22 @@ class InterfaceXStructure(ControlStructure):
             if peer_gcid:
                 r += ' Peer {}.{}'.format(peer_gcid, peer_iface)
         return r
+
+# factory class to dynamically build InterfaceStructure
+class InterfaceFactory(ControlStructure):
+    def from_buffer(data, offset=0):
+        sz = len(data)
+        if sz > 0x90: # Revisit: hardcoded value
+            fields = InterfaceTemplate._fields + InterfaceTemplate._optional_fields
+        else:
+            fields = InterfaceTemplate._fields
+        Interface = type('InterfaceStructure',
+                         (InterfaceTemplate,), {'_fields_': fields,
+                                                'Size': sz})
+        return Interface.from_buffer(data, offset)
+
+class InterfaceStructure(ControlStructure):
+    _fields_ = InterfaceTemplate._fields
 
 class InterfacePHYStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12),  # Basic PHY Fields

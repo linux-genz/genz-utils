@@ -128,11 +128,7 @@ class Interface():
         iface_file = self.iface_dir / 'interface'
         with iface_file.open(mode='rb+') as f:
             data = bytearray(f.read())
-            if len(data) >= ctypes.sizeof(genz.InterfaceXStructure):
-                iface = self.comp.map.fileToStruct('interfaceX', data,
-                                fd=f.fileno(), verbosity=self.comp.verbosity)
-            else:
-                iface = self.comp.map.fileToStruct('interface', data,
+            iface = self.comp.map.fileToStruct('interface', data,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
             log.debug('{}: interface{}={}'.format(self.comp.gcid, self.num, iface))
             self.hvs = iface.HVS  # for num_vcs()
@@ -146,13 +142,9 @@ class Interface():
         is_switch = self.comp.has_switch
         with iface_file.open(mode='rb+') as f:
             data = bytearray(f.read())
-            if len(data) >= ctypes.sizeof(genz.InterfaceXStructure):
-                iface = self.comp.map.fileToStruct('interfaceX', data,
+            iface = self.comp.map.fileToStruct('interface', data,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
-            else:
-                iface = self.comp.map.fileToStruct('interface', data,
-                                fd=f.fileno(), verbosity=self.comp.verbosity)
-            log.debug('{}: interface{}={}'.format(self.comp.gcid, self.num, iface))
+            log.debug('{}: iface_init interface{}={}'.format(self.comp.gcid, self.num, iface))
             self.hvs = iface.HVS
             if not self.phy_init():
                 log.info('{}: interface{} is not PHY-Up'.format(
@@ -248,11 +240,7 @@ class Interface():
         iface_file = self.iface_dir / 'interface'
         with iface_file.open(mode='rb+') as f:
             data = bytearray(f.read())
-            if len(data) >= ctypes.sizeof(genz.InterfaceXStructure):
-                iface = self.comp.map.fileToStruct('interfaceX', data,
-                                fd=f.fileno(), verbosity=self.comp.verbosity)
-            else:
-                iface = self.comp.map.fileToStruct('interface', data,
+            iface = self.comp.map.fileToStruct('interface', data,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
             self.send_peer_attr1(iface)
             self.peer_cstate = self.get_peer_cstate(iface)

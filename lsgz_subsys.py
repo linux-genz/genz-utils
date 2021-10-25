@@ -84,10 +84,6 @@ def get_struct(fpath, map, parent=None, core=None, verbosity=0):
                 return None
             else:
                 raise
-        # special case for 'interface' - optional fields
-        if (fname == 'interface' and
-            len(data) >= ctypes.sizeof(genz.InterfaceXStructure)):
-            fname = 'interfaceX'
         struct = map.fileToStruct(fname, data, path=fpath,
                                   parent=parent, core=core,
                                   verbosity=verbosity)
