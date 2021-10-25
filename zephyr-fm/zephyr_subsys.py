@@ -958,8 +958,18 @@ class Component():
             opcode_set_table.EnabledDROpCodeSet = (
                 opcode_set_table.SupportedDROpCodeSet)
             # Revisit: add support for other OpClasses
-            self.control_write(opcode_set_table, genz.OpCodeSetTable.SetID,
-                               sz=opcode_set_table.Size, off=0)
+            # Revisit: orthus tries to use >16-byte writes and fails
+            #self.control_write(opcode_set_table, genz.OpCodeSetTable.SetID,
+            #                   sz=opcode_set_table.Size, off=0)
+            self.control_write(opcode_set_table,
+                               genz.OpCodeSetTable.EnabledCore64OpCodeSet,
+                               sz=8, off=0)
+            self.control_write(opcode_set_table,
+                               genz.OpCodeSetTable.EnabledControlOpCodeSet,
+                               sz=8, off=0)
+            self.control_write(opcode_set_table,
+                               genz.OpCodeSetTable.EnabledDROpCodeSet,
+                               sz=8, off=0)
         # end with
 
     def switch_init(self, core):
