@@ -535,6 +535,7 @@ class Component():
         self.interfaces = []
         self.uuid = uuid4() if uuid is None else uuid
         self.nonce = fab.generate_nonce()
+        self.cuuid = None
         self.cuuid_serial = None
         self._num_vcs = None
         self._req_vcat_sz = None
@@ -682,6 +683,7 @@ class Component():
             self.cclass = core.BaseCClass
             self.max_data = core.MaxData
             self.max_iface = core.MaxInterface
+            self.cuuid = core.CUUID
             # create and read (but do not HW init) the switch struct
             self.switch_read(prefix=prefix)
             # create and read (but do not HW init) all interfaces
@@ -714,6 +716,7 @@ class Component():
                 self.control_write(core, genz.CoreStructure.MGRUUIDl, sz=16)
             # setup SSDT and RIT entries for route back to FM
             if ingress_iface is not None:
+                self.ssdt_size(prefix=prefix)
                 self.ssdt_write(pfm.gcid.cid, ingress_iface.num)
                 self.rit_write(ingress_iface, 1 << ingress_iface.num)
             # initialize RSP-VCAT
@@ -734,15 +737,15 @@ class Component():
                 core.DeadlineTick = 1000  # 1us
             self.control_write(core, genz.CoreStructure.LLReqDeadline, sz=4)
             # Revisit: set DRReqDeadline
-            # Revisit: set LLRspDeadline, NLLRspDeadline, RspDeadline
+            # set LLRspDeadline, NLLRspDeadline, RspDeadline
             # Revisit: compute values depending on topology, as described
             # in Core spec section 15.2, Deadline Semantics
             # Revisit: only for responders
             # Revisit: if no Component Peer Attr struct, LL/NLL must be same
             core.LLRspDeadline = 601
             core.NLLRspDeadline = 1001
-            core.RspDeadLine = 800 # packet execution time
-            self.control_write(core, genz.CoreStructure.LLRspDeadline, sz=8)
+            core.RspDeadLine = 800 # responder packet execution time
+            self.control_write(core, genz.CoreStructure.LLRspDeadline, sz=4)
             # we have set up just enough for "normal" responses to work -
             # tell the kernel about the new/changed component and stop DR
             # Revisit: before doing so, read back the first thing we wrote
@@ -759,6 +762,7 @@ class Component():
         # end with
         cuuid = get_cuuid(self.path)
         serial = get_serial(self.path)
+        self.cuuid = cuuid
         self.cuuid_serial = str(cuuid) + ':' + serial
         self.fru_uuid = get_fru_uuid(self.path)
         self.fab.add_comp(self)
@@ -834,7 +838,11 @@ class Component():
             else:
                 core.LLMUTO = self.timeout_val(20e-6)  # 20us
             self.control_write(core, genz.CoreStructure.LLMUTO, sz=2)
-            # Revisit: set UNREQ, UNRSP, UERT, NIRT, FPST, NLMUTO
+            # set UERT
+            # Revisit: set NIRT, ATSTO, UNREQ
+            core.UERT = 200                            # 200ms # Revisit
+            self.control_write(core, genz.CoreStructure.UERT, sz=8)
+            # Revisit: set UNRSP, FPST, PCO FPST, NLMUTO
             # Revisit: set REQNIRTO, REQABNIRTO
             # set ControlTO, ControlDRTO
             # Revisit: how to compute reasonable values?
