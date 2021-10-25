@@ -627,6 +627,22 @@ class Component():
                 gcid = GCID(val=core.CID0)  # Revisit: Subnets
         return gcid
 
+    def find_rsp_page_grid_path(self, prefix):
+        for pg_dir in (self.path / prefix / 'component_page_grid').glob(
+                'component_page_grid*@*'):
+            pg_file = pg_dir / 'component_page_grid'
+            with pg_file.open(mode='rb+') as f:
+                data = bytearray(f.read())
+                pg = self.map.fileToStruct('component_page_grid', data,
+                                           fd=f.fileno(),
+                                           verbosity=self.verbosity)
+                cap1 = genz.PGZMMUCAP1(pg.PGZMMUCAP1, pg)
+                if cap1.field.ZMMUType == genz.ZMMUType.RspZMMU:
+                    return pg_dir
+            # end with
+        # end for
+        return None
+
     def setup_paths(self, prefix):
         self.comp_dest_dir = list((self.path / prefix).glob(
             'component_destination_table@*'))[0]
@@ -657,6 +673,17 @@ class Component():
                 'component_switch@*'))[0]
         except IndexError:
             self.switch_dir = None
+        try:
+            self.ces_dir = list((self.path / prefix).glob(
+                'component_error_and_signal_event@*'))[0]
+        except IndexError:
+            self.ces_dir = None
+        self.rsp_pg_dir = self.find_rsp_page_grid_path(prefix)
+        if self.rsp_pg_dir is not None:
+            self.rsp_pg_table_dir = list(self.rsp_pg_dir.glob(
+                'pg_table@*'))[0]
+            self.rsp_pte_table_dir = list(self.rsp_pg_dir.glob(
+                'pte_table@*'))[0]
 
     # Returns True if component is usable - is C-Up/C-LP/C-DLP, not C-Down
     def comp_init(self, pfm, prefix='control', ingress_iface=None):
@@ -953,7 +980,74 @@ class Component():
         # end with
 
     def rsp_page_grid_init(self, core, valid=0):
-        return # default implementation does nothing
+        if self.rsp_pg_dir is None:
+            return
+        if self.max_data == 0:
+            log.warning('{}: component has Rsp Page Grid but MaxData==0'.format(
+                self.gcid))
+            return
+        # Revisit: return if rsp_pg should be host managed
+        rsp_pg_file = self.rsp_pg_dir / 'component_page_grid'
+        with rsp_pg_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            pg = self.map.fileToStruct('component_page_grid', data,
+                                       fd=f.fileno(),
+                                       verbosity=self.verbosity)
+            log.debug('{}: {}'.format(self.gcid, pg))
+            # Revisit: verify the PG-PTE-UUID
+        # end with
+        # Cover all of data space using 2 page grids each with half the
+        # available PTEs, one for direct-mapped pages and one for interleave
+        pte_cnt = pg.PTETableSz // 2
+        ps = max(ceil_log2(self.max_data / pte_cnt), 12)
+        self.rsp_page_grid_ps = ps
+        # Revisit: verify pg.PGTableSz >= 2
+        rsp_pg_table_file = self.rsp_pg_table_dir / 'pg_table'
+        with rsp_pg_table_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            pg_table = self.map.fileToStruct('pg_table', data,
+                                             path=rsp_pg_table_file,
+                                             fd=f.fileno(), parent=pg,
+                                             verbosity=self.verbosity)
+            log.debug('{}: {}'.format(self.gcid, pg_table))
+            pg_table[0].PGBaseAddr = 0
+            pg_table[0].PageSz = ps
+            pg_table[0].RES = 0
+            pg_table[0].PageCount = pte_cnt
+            pg_table[0].BasePTEIdx = 0
+            pg_table[1].PGBaseAddr = 1 << (63 - 12)
+            pg_table[1].PageSz = ps
+            pg_table[1].RES = 0
+            pg_table[1].PageCount = pte_cnt
+            pg_table[1].BasePTEIdx = pte_cnt
+            for i in range(2, pg.PGTableSz):
+                pg_table[i].PageCount = 0
+            for i in range(0, pg.PGTableSz):
+                self.control_write(pg_table, pg_table.element.R0,
+                                   off=16*i, sz=16)
+        # end with
+        rsp_pte_table_file = self.rsp_pte_table_dir / 'pte_table'
+        with rsp_pte_table_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            pte_table = self.map.fileToStruct('pte_table', data,
+                                              path=rsp_pte_table_file,
+                                              fd=f.fileno(), parent=pg,
+                                              verbosity=self.verbosity)
+            log.debug('{}: {}'.format(self.gcid, pte_table))
+            for i in range(0, pte_cnt):
+                pte_table[i].V = valid
+                pte_table[i].RORKey = NO_ACCESS_RKEY.val
+                pte_table[i].RWRKey = NO_ACCESS_RKEY.val
+                # Revisit: non-zero-based addressing
+                pte_table[i].ADDR = i * (1 << ps)
+                # Revisit: add PA/CCE/CE/WPE/PSE/LPE/IE/PFE/RKMGR/PASID/RK_MGR
+            for i in range(pte_cnt, pg.PTETableSz):
+                pte_table[i].V = 0
+            for i in range(0, pg.PTETableSz):
+                self.control_write(pte_table, pte_table.element.V,
+                                   off=pte_table.element.Size*i,
+                                   sz=pte_table.element.Size)
+        # end with
 
     def comp_dest_read(self, prefix='control', haveCore=True):
         if self.comp_dest is not None:
@@ -1180,6 +1274,21 @@ class Component():
             'component_switch@*'))[0]
         log.debug('new switch_dir = {}'.format(self.switch_dir))
 
+    def update_ces_dir(self, prefix='control'):
+        if self.ces_dir is None:
+            return
+        self.ces_dir = list((self.path / prefix).glob(
+            'component_error_and_signal_event@*'))[0]
+        log.debug('new ces_dir = {}'.format(self.ces_dir))
+
+    def update_rsp_page_grid_dir(self, prefix='control'):
+        if self.rsp_pg_dir is None:
+            return
+        self.rsp_pg_dir = self.find_rsp_page_grid_path(prefix)
+        self.rsp_pg_table_dir = list(self.rsp_pg_dir.glob('pg_table@*'))[0]
+        self.rsp_pte_table_dir = list(self.rsp_pg_dir.glob('pte_table@*'))[0]
+        log.debug('new rsp_pg_dir = {}'.format(self.rsp_pg_dir))
+
     def update_path(self):
         log.debug('current path: {}'.format(self.path))
         self.path = self.fab.make_path(self.gcid)
@@ -1189,7 +1298,9 @@ class Component():
         self.update_req_vcat_dir()
         self.update_rsp_vcat_dir()
         self.update_switch_dir()
+        self.update_ces_dir()
         self.update_opcode_set_dir()
+        self.update_rsp_page_grid_dir()
         for iface in self.interfaces:
             iface.update_path(prefix='control')
 
@@ -1326,96 +1437,6 @@ class Component():
 class Memory(Component):
     cclasses = (0x1, 0x2)
 
-    def setup_paths(self, prefix):
-        super().setup_paths(prefix)
-        try:
-            self.rsp_pg_dir = list((self.path / prefix / 'component_page_grid').glob(
-                'component_page_grid0@*'))[0]
-            self.rsp_pg_table_dir = list(self.rsp_pg_dir.glob(
-                'pg_table@*'))[0]
-            self.rsp_pte_table_dir = list(self.rsp_pg_dir.glob(
-                'pte_table@*'))[0]
-        except IndexError:
-            self.rsp_pg_dir = None
-
-    def update_rsp_page_grid_dir(self, prefix='control'):
-        if self.rsp_pg_dir is None:
-            return
-        self.rsp_pg_dir = list((self.path / prefix / 'component_page_grid').glob(
-            'component_page_grid0@*'))[0]
-        self.rsp_pg_table_dir = list(self.rsp_pg_dir.glob('pg_table@*'))[0]
-        self.rsp_pte_table_dir = list(self.rsp_pg_dir.glob('pte_table@*'))[0]
-        log.debug('new rsp_pg_dir = {}'.format(self.rsp_pg_dir))
-
-    def update_path(self):
-        super().update_path()
-        self.update_rsp_page_grid_dir()
-
-    def rsp_page_grid_init(self, core, valid=0):
-        if self.rsp_pg_dir is None:
-            return
-        rsp_pg_file = self.rsp_pg_dir / 'component_page_grid'
-        with rsp_pg_file.open(mode='rb+') as f:
-            data = bytearray(f.read())
-            pg = self.map.fileToStruct('component_page_grid', data,
-                                       fd=f.fileno(),
-                                       verbosity=self.verbosity)
-            log.debug('{}: {}'.format(self.gcid, pg))
-            # Revisit: verify the PG-PTE-UUID
-        # end with
-        # Cover all of data space using 2 page grids each with half the
-        # available PTEs, one for direct-mapped pages and one for interleave
-        pte_cnt = pg.PTETableSz // 2
-        ps = ceil_log2(core.MaxData / pte_cnt)
-        self.rsp_page_grid_ps = ps
-        # Revisit: verify pg.PGTableSz >= 2
-        rsp_pg_table_file = self.rsp_pg_table_dir / 'pg_table'
-        with rsp_pg_table_file.open(mode='rb+') as f:
-            data = bytearray(f.read())
-            pg_table = self.map.fileToStruct('pg_table', data,
-                                             path=rsp_pg_table_file,
-                                             fd=f.fileno(), parent=pg,
-                                             verbosity=self.verbosity)
-            log.debug('{}: {}'.format(self.gcid, pg_table))
-            pg_table[0].PGBaseAddr = 0
-            pg_table[0].PageSz = ps
-            pg_table[0].RES = 0
-            pg_table[0].PageCount = pte_cnt
-            pg_table[0].BasePTEIdx = 0
-            pg_table[1].PGBaseAddr = 1 << (63 - 12)
-            pg_table[1].PageSz = ps
-            pg_table[1].RES = 0
-            pg_table[1].PageCount = pte_cnt
-            pg_table[1].BasePTEIdx = pte_cnt
-            for i in range(2, pg.PGTableSz):
-                pg_table[i].PageCount = 0
-            for i in range(0, pg.PGTableSz):
-                self.control_write(pg_table, pg_table.element.R0,
-                                   off=16*i, sz=16)
-        # end with
-        rsp_pte_table_file = self.rsp_pte_table_dir / 'pte_table'
-        with rsp_pte_table_file.open(mode='rb+') as f:
-            data = bytearray(f.read())
-            pte_table = self.map.fileToStruct('pte_table', data,
-                                              path=rsp_pte_table_file,
-                                              fd=f.fileno(), parent=pg,
-                                              verbosity=self.verbosity)
-            log.debug('{}: {}'.format(self.gcid, pte_table))
-            for i in range(0, pte_cnt):
-                pte_table[i].V = valid
-                pte_table[i].RORKey = NO_ACCESS_RKEY.val
-                pte_table[i].RWRKey = NO_ACCESS_RKEY.val
-                # Revisit: non-zero-based addressing
-                pte_table[i].ADDR = i * (1 << ps)
-                # Revisit: add PA/CCE/CE/WPE/PSE/LPE/IE/PFE/RKMGR/PASID/RK_MGR
-            for i in range(pte_cnt, pg.PTETableSz):
-                pte_table[i].V = 0
-            for i in range(0, pg.PTETableSz):
-                self.control_write(pte_table, pte_table.element.V,
-                                   off=pte_table.element.Size*i,
-                                   sz=pte_table.element.Size)
-        # end with
-
 class Switch(Component):
     cclasses = (0x3, 0x4, 0x5)
 
@@ -1452,7 +1473,9 @@ class LocalBridge(Bridge):
                     self.update_req_vcat_dir()
                     self.update_rsp_vcat_dir()
                     self.update_switch_dir()
+                    self.update_ces_dir()
                     self.update_opcode_set_dir()
+                    self.update_rsp_page_grid_dir()
                     log.debug('new path: {}'.format(self.path))
                     for iface in self.interfaces:
                         iface.update_path()
