@@ -154,8 +154,10 @@ def ls_comp(ctl, map, ignore_dr=True, verbosity=1):
         core.comp_dest.HCS = core.route_control.HCS
     else:
         core.route_control = None
-        core.sw.HCS = 0
-        core.comp_dest.HCS = 0
+        if core.sw is not None:
+            core.sw.HCS = 0
+        if core.comp_dest is not None:
+            core.comp_dest.HCS = 0
     for dir, dirnames, filenames in os.walk(ctl):
         dirnames.sort()
         #print('dir={}, dirnames={}, filenames={}'.format(dir, dirnames, filenames))
@@ -214,13 +216,13 @@ def main():
         print('Gen-Z version = {}'.format(args.genz_version))
     genz = import_module('genz.genz_{}'.format(args.genz_version.replace('.', '_')))
     map = genz.ControlStructureMap()
+    if args.keyboard:
+        set_trace()
     if args.struct:
         fpath = Path(args.struct)
         struct = get_struct(fpath, map, verbosity=args.verbosity)
         print(struct)
         return
-    if args.keyboard:
-        set_trace()
     if args.fake_root is not None:
         sys_devices = Path(args.fake_root) / 'sys/devices'
     else:
