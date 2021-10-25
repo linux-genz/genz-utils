@@ -165,6 +165,7 @@ class Interface():
             icap1ctl.field.OpClassSelect = 0x1
             icap1ctl.field.LPRTEnb = is_switch
             iface.ICAP1Control = icap1ctl.val
+            log.debug('{}: writing ICAP1Control'.format(self))
             self.comp.control_write(iface,
                             genz.InterfaceStructure.ICAP1Control, sz=4, off=4)
             # set LinkCTLControl (depending on local_br, is_switch)
@@ -185,6 +186,7 @@ class Interface():
             lctl.field.RecvPeerEnterLinkLPEnb = recv
             lctl.field.RecvLinkResetEnb = recv
             iface.LinkCTLControl = lctl.val
+            log.debug('{}: writing LinkCTLControl'.format(self))
             self.comp.control_write(iface,
                             genz.InterfaceStructure.LinkCTLControl, sz=4, off=4)
             # send Peer-Attribute 1 Link CTL - HW did this at link-up time,
@@ -211,12 +213,14 @@ class Interface():
             # enable interface
             ictl.field.IfaceEnb = 1
             iface.IControl = ictl.val
+            log.debug('{}: writing IControl IfaceEnb'.format(self))
             self.comp.control_write(iface,
                             genz.InterfaceStructure.IControl, sz=4, off=4)
             # Revisit: do we need to do this?
             istatus = genz.IStatus(0, iface)
             istatus.field.LinkRFCStatus = 1  # RW1C
             iface.IStatus = istatus.val
+            log.debug('{}: writing IStatus'.format(self))
             self.comp.control_write(iface,
                             genz.InterfaceStructure.IStatus, sz=4, off=0)
             # verify I-Up
@@ -226,6 +230,7 @@ class Interface():
             # set LinkRFCDisable (depending on local_br)
             ictl.field.LinkRFCDisable = 1 if self.comp.local_br else 0
             iface.IControl = ictl.val
+            log.debug('{}: writing IControl LinkRFCDisable'.format(self))
             self.comp.control_write(iface,
                             genz.InterfaceStructure.IControl, sz=4, off=4)
             # save PeerCState & PeerGCID
@@ -235,9 +240,11 @@ class Interface():
         if is_switch:
             # initialize VCAT
             # Revisit: multiple Action columns
+            log.debug('{}: writing VCAT'.format(self))
             for vc in range(0, self.hvs + 1):
                 # Revisit: vc policies
                 self.vcat_write(vc, (1 << vc))
+        log.debug('{}: iface_init done'.format(self))
         return self.usable
 
     def update_peer_info(self):
@@ -257,6 +264,7 @@ class Interface():
         icontrol = genz.IControl(iface.IControl, iface)
         icontrol.field.PeerAttr1Req = 1
         iface.IControl = icontrol.val
+        log.debug('{}: sending Peer-Attr1'.format(self))
         self.comp.control_write(iface, genz.InterfaceStructure.IControl,
                                 sz=4, off=4)
         status = self.wait_link_ctl(iface, timeout)
@@ -738,6 +746,7 @@ class Component():
         core_file = self.path / prefix / 'core@0x0/core'
         with core_file.open(mode='rb+') as f:
             core.set_fd(f)
+            log.debug('{}: done with DR - using direct access'.format(self))
             if self.cstate is not CState.CCFG or self.local_br:
                 # For non-local-bridge components in C-CFG, MGR-UUID will have
                 # been captured on CV/CID0/SID0 write, so skip this
@@ -1199,7 +1208,7 @@ class Component():
             peer_gcid = iface.peer_gcid
             msg += 'peer gcid={}'.format(peer_gcid)
             if peer_gcid is None:
-                msg += 'peer GCID not valid - ignoring peer'
+                msg += 'peer is C-Up but GCID not valid - ignoring peer'
                 log.info(msg)
                 return
             # Revisit: this assumes no other managers
