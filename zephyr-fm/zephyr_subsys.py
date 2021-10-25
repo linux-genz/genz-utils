@@ -381,6 +381,9 @@ class Interface():
         except IndexError:
             log.debug('{}: phy{} missing - assume PHY-Up'.format(
                 self.comp.gcid, self.num))
+            self.phy_status = PHYOpStatus.PHYUp
+            self.phy_tx_lwr = 0
+            self.phy_rx_lwr = 0
             return True # Revisit
 
     # Returns True if interface PHY is usable - is PHY-Up/PHY-Up-LP*
