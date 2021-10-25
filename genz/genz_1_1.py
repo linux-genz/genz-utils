@@ -234,6 +234,53 @@ class CAP1Control(SpecialField, Union):
         super().__init__(value, parent, verbosity=verbosity)
         self.val = value
 
+class CAP2(SpecialField, Union):
+    class CAP2Fields(Structure):
+        _fields_ = [('RKeySup',                    c_u64,  2),
+                    ('RspMemInterleaveSup',        c_u64,  1),
+                    ('ReqMemInterleaveSup',        c_u64,  1),
+                    ('Rv',                         c_u64,  1),
+                    ('WrMSGEmbeddedRdSup',         c_u64,  1),
+                    ('PoisonGranSup',              c_u64,  4),
+                    ('HostLPDType1Type2Sup',       c_u64,  1),
+                    ('HostLPDType0Sup',            c_u64,  1),
+                    ('PerfMarkerSup',              c_u64,  3),
+                    ('MaxPerfRecords',             c_u64,  5),
+                    ('MetaRdWrSup',                c_u64,  3),
+                    ('HostLPDType3Sup',            c_u64,  1),
+                    ('HostLPDType4Sup',            c_u64,  1),
+                    ('BufReqT10DIFSup',            c_u64,  1),
+                    ('BufReqT10PISup',             c_u64,  1),
+                    ('DIPIBlockSzSup',             c_u64,  8),
+                    ('Rv',                         c_u64,  1),
+                    ('WrMSGRecvTagFilterSup',      c_u64,  1),
+                    ('WrMSGRecvTagPostingSup',     c_u64,  1),
+                    ('WrMSGEnqDeqSharedQSup',      c_u64,  1),
+                    ('Rv',                         c_u64,  2),
+                    ('PersFlushPageSup',           c_u64,  1),
+                    ('RspLPDType5Sup',             c_u64,  1),
+                    ('ReqLPDType5Sup',             c_u64,  1),
+                    ('EnqueueEmbeddedRdSup',       c_u64,  1),
+                    ('NoOpCoreInitiationSup',      c_u64,  1),
+                    ('Rv',                         c_u64, 18),
+        ]
+
+    _fields_    = [('field', CAP2Fields), ('val', c_u64)]
+    _rkey       = ['Unsup', 'Req', 'Rsp', 'ReqRsp']
+    _poison     = ['Unsup', '16B', '32B', '64B', '128B', '256B', '512B',
+                   '1KiB', '2KiB', '4KiB']
+    _marker     = ['Unsup', 'Type0', 'Type1']
+    _meta       = ['Unsup', 'CUUID', 'Vdef', 'ServiceUUID']
+    _di_pi_sz   = ['Unsup', '512B', '4KiB', '512B|4KiB']
+    _special = {'RKeySup': _rkey, 'PoisonGranSup': _poison,
+                'PerfMarkerSup': _marker,
+                'MetaRdWrSup': _meta, 'DIPIBlockSzSup': _di_pi_sz
+    }
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
 class CAP2Control(SpecialField, Union):
     class CAP2ControlFields(Structure):
         _fields_ = [('Rv',                         c_u64,  1),
@@ -251,7 +298,7 @@ class CAP2Control(SpecialField, Union):
                     ('HostLPDType4Enb',            c_u64,  1),
                     ('Rv',                         c_u64,  2),
                     ('DIPIBlockSize',              c_u64,  3),
-                    ('BUFREQT10DIFPIEnb',          c_u64,  1),
+                    ('BufReqT10DIFPIEnb',          c_u64,  1),
                     ('Rv',                         c_u64,  3),
                     ('RSPLPDType5Enb',             c_u64,  1),
                     ('REQLPDType5Enb',             c_u64,  1),
@@ -267,6 +314,397 @@ class CAP2Control(SpecialField, Union):
     def __init__(self, value, parent, verbosity=0):
         super().__init__(value, parent, verbosity=verbosity)
         self.val = value
+
+class DestTableCAP1(SpecialField, Union):
+    class DestTableCAP1Fields(Structure):
+        _fields_ = [('EISup',                       c_u32,  1),
+                    ('WildcardSSDTSup',             c_u32,  1),
+                    ('WildcardMSDTSup',             c_u32,  1),
+                    ('RITSSDTSup',                  c_u32,  1),
+                    ('Rv',                          c_u32, 28),
+        ]
+
+    _fields_    = [('field', DestTableCAP1Fields), ('val', c_u32)]
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class DestTableControl(SpecialField, Union):
+    class DestTableControlFields(Structure):
+        _fields_ = [('PeerAuthEnb',                 c_u32,  1),
+                    ('RITSSDTEnb',                  c_u32,  1),
+                    ('Rv',                          c_u32, 30),
+        ]
+
+    _fields_    = [('field', DestTableControlFields), ('val', c_u32)]
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class EControl(SpecialField, Union):
+    class EControlFields(Structure):
+        _fields_ = [('Rv',                          c_u16,  3),
+                    ('TrigCompContain',             c_u16,  1),
+                    ('ErrLogLevel',                 c_u16,  3),
+                    ('ErrUEPTgt',                   c_u16,  2),
+                    ('EventUEPTgt',                 c_u16,  2),
+                    ('MechUEPTgt',                  c_u16,  2),
+                    ('MediaUEPTgt',                 c_u16,  2),
+                    ('ErrFaultInjEnb',              c_u16,  1),
+        ]
+
+    _fields_    = [('field', EControlFields), ('val', c_u16)]
+    _err_log    = ['Crit', 'Crit+Caution', 'Crit+Caution+NonCrit']
+    _err_tgt    = ['TgtPM', 'TgtPFMSFM', 'TgtErrMgrCID',   'TgtErrMgrGCID']
+    _event_tgt  = ['TgtPM', 'TgtPFMSFM', 'TgtEventMgrCID', 'TgtEventMgrGCID']
+    _mech_tgt   = ['TgtPM', 'TgtPFMSFM', 'TgtMechMgrCID',  'TgtMechMgrGCID']
+    _media_tgt  = ['TgtPM', 'TgtPFMSFM', 'TgtMediaMgrCID', 'TgtMediaMgrGCID']
+    _special = {'ErrLogLevel': _err_log, 'ErrUEPTgt': _err_tgt,
+                'EventUEPTgt': _event_tgt, 'MechUEPTgt': _mech_tgt,
+                'MediaUEPTgt': _media_tgt,
+    }
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class EControl2(SpecialField, Union):
+    class EControl2Fields(Structure):
+        _fields_ = [('PwrUEPTgt',                   c_u32,  2),
+                    ('Rv',                          c_u32, 30),
+        ]
+
+    _fields_    = [('field', EControl2Fields), ('val', c_u32)]
+    _pwr_tgt    = ['TgtPM', 'TgtPFMSFM', 'TgtPwrMgrCID',   'TgtPwrMgrGCID']
+    _special = {'PwrUEPTgt': _pwr_tgt,
+    }
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class EStatus(SpecialField, Union):
+    class EStatusFields(Structure):
+        _fields_ = [('LoggingFailed',               c_u16,  1), # RW1CS
+                    ('CritLogEntryConsumed',        c_u16,  1), # RW1CS
+                    ('Rv',                          c_u16, 14),
+        ]
+
+    _fields_    = [('field', EStatusFields), ('val', c_u16)]
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class ErrSigCAP1(SpecialField, Union):
+    class ErrSigCAP1Fields(Structure):
+        _fields_ = [('SigIntrAddr0Sup',             c_u16,  1),
+                    ('SigIntrAddr1Sup',             c_u16,  1),
+                    ('CEventDetectSup',             c_u16,  1),
+                    ('CEventInjSup',                c_u16,  1),
+                    ('IEventDetectSup',             c_u16,  1),
+                    ('IEventInjSup',                c_u16,  1),
+                    ('VdefErrLogUUID',              c_u16,  2),
+                    ('Rv',                          c_u16,  8),
+        ]
+
+    _fields_    = [('field', ErrSigCAP1Fields), ('val', c_u16)]
+    _vdef_err   = ['Unsup', 'CUUID', 'VdefUUID']
+    _special = {'VdefErrLogUUID': _vdef_err,
+    }
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class ErrSigCAP1Control(SpecialField, Union):
+    class ErrSigCAP1ControlFields(Structure):
+        _fields_ = [('SigIntr0Enb',                 c_u16,  1),
+                    ('SigIntr1Enb',                 c_u16,  1),
+                    ('CEventInjEnb',                c_u16,  1),
+                    ('IEventInjEnb',                c_u16,  1),
+                    ('Rv',                          c_u16, 12),
+        ]
+
+    _fields_    = [('field', ErrSigCAP1ControlFields), ('val', c_u16)]
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+# Base class for CError{Status,Detect,Trig,FaultInj}
+class CError(SpecialField, Union):
+    class CErrorFields(Structure):
+        _fields_ = [('CompContain',                 c_u64,  1),
+                    ('NonFatalCompErr',             c_u64,  1),
+                    ('FatalCompErr',                c_u64,  1),
+                    ('E2EUnicastUR',                c_u64,  1),
+                    ('E2EUnicastMP',                c_u64,  1),
+                    ('E2EUnicastEXENonFatal',       c_u64,  1),
+                    ('E2EUnicastEXEFatal',          c_u64,  1),
+                    ('E2EUnicastUP',                c_u64,  1),
+                    ('AEInvAKey',                   c_u64,  1),
+                    ('AEInvAccPerm',                c_u64,  1),
+                    ('E2EUnicastEXEAbort',          c_u64,  1),
+                    ('MaxReqPktRetrans',            c_u64,  1),
+                    ('FatalMediaErrContain',        c_u64,  1),
+                    ('SecurityErr',                 c_u64,  1),
+                    ('E2EMulticastUR',              c_u64,  1),
+                    ('E2EMulticastMP',              c_u64,  1),
+                    ('E2EMulticastEXENonFatal',     c_u64,  1),
+                    ('E2EMulticastEXEFatal',        c_u64,  1),
+                    ('E2EMulticastUP',              c_u64,  1),
+                    ('SODUP',                       c_u64,  1),
+                    ('UnexpCompPwrLoss',            c_u64,  1),
+                    ('InsufficientSpace',           c_u64,  1),
+                    ('UnsupServiceAddr',            c_u64,  1),
+                    ('InsufficientRspRes',          c_u64,  1),
+                    ('WakeFailure',                 c_u64,  1),
+                    ('PersFlushFailure',            c_u64,  1),
+                    ('IfaceContainOE',              c_u64,  1),
+                    ('BufAEADFailure',              c_u64,  1),
+                    ('SecSessionFailure',           c_u64,  1),
+                    ('SecEncryptKeyFailure',        c_u64,  1),
+                    ('Rv',                          c_u64, 26),
+                    ('Vdef',                        c_u64,  8),
+        ]
+
+    _fields_    = [('field', CErrorFields), ('val', c_u64)]
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class CErrorStatus(CError):
+    pass # All bits: RW1CS
+
+class CErrorDetect(CError):
+    pass # All bits: RW
+
+class CErrorTrig(CError):
+    pass # Bit 0: WO, All other bits: RW
+
+class CErrorFaultInj(CError):
+    pass # Bits 0 & 12: RsvdZ, All other bits: WO
+
+class CErrorSigTgt(SpecialField, Union):
+    class CErrorSigTgtFields(Structure):
+        _fields_ = [('CompContain',                 c_u64,  3), # All bits RW
+                    ('NonFatalCompErr',             c_u64,  3),
+                    ('FatalCompErr',                c_u64,  3),
+                    ('E2EUnicastUR',                c_u64,  3),
+                    ('E2EUnicastMP',                c_u64,  3),
+                    ('E2EUnicastEXENonFatal',       c_u64,  3),
+                    ('E2EUnicastEXEFatal',          c_u64,  3),
+                    ('E2EUnicastUP',                c_u64,  3),
+                    ('AEInvAKey',                   c_u64,  3),
+                    ('AEInvAccPerm',                c_u64,  3),
+                    ('E2EUnicastEXEAbort',          c_u64,  3),
+                    ('MaxReqPktRetrans',            c_u64,  3),
+                    ('FatalMediaErrContain',        c_u64,  3),
+                    ('SecurityErr',                 c_u64,  3),
+                    ('E2EMulticastUR',              c_u64,  3),
+                    ('E2EMulticastMP',              c_u64,  3),
+                    ('E2EMulticastEXENonFatal',     c_u64,  3),
+                    ('E2EMulticastEXEFatal',        c_u64,  3),
+                    ('E2EMulticastUP',              c_u64,  3),
+                    ('SODUP',                       c_u64,  3),
+                    ('UnexpCompPwrLoss',            c_u64,  3),
+                    ('InsufficientSpacel',          c_u64,  1),
+                    ('InsufficientSpaceh',          c_u64,  2),
+                    ('UnsupServiceAddr',            c_u64,  3),
+                    ('InsufficientRspRes',          c_u64,  3),
+                    ('WakeFailure',                 c_u64,  3),
+                    ('PersFlushFailure',            c_u64,  3),
+                    ('IfaceContainOE',              c_u64,  3),
+                    ('BufAEADFailure',              c_u64,  3),
+                    ('SecSessionFailure',           c_u64,  3),
+                    ('SecEncryptKeyFailure',        c_u64,  3),
+                    ('RvM',                         c_u64, 38),
+                    ('RvH',                         c_u64, 40),
+                    ('Vdef0',                       c_u64,  3),
+                    ('Vdef1',                       c_u64,  3),
+                    ('Vdef2',                       c_u64,  3),
+                    ('Vdef3',                       c_u64,  3),
+                    ('Vdef4',                       c_u64,  3),
+                    ('Vdef5',                       c_u64,  3),
+                    ('Vdef6',                       c_u64,  3),
+                    ('Vdef7',                       c_u64,  3),
+        ]
+
+        @property
+        def InsufficientSpace(self):
+            return (self.InsufficientSpaceh << 1) | self.InsufficientSpacel
+
+        @InsufficientSpace.setter
+        def InsufficientSpace(self, val):
+            if val < 0 or val > 7:
+                raise(ValueError)
+            self.InsufficientSpaceh = (val >> 1) & 0x3
+            self.InsufficientSpacel = val & 0x1
+
+    _fields_    = [('field', CErrorSigTgtFields), ('val', c_u64 * 3)]
+
+    def __init__(self, value, parent, verbosity=0):
+        arr_val = (c_u64 * 3)(*value)
+        super().__init__(arr_val, parent, verbosity=verbosity)
+        self.val = arr_val
+
+# Base class for CEvent{Status,Detect,Inj}
+class CEvent(SpecialField, Union):
+    class CEventFields(Structure):
+        _fields_ = [('BISTFailure',                 c_u64,  1),
+                    ('UnableToCommAuthDest',        c_u64,  1),
+                    ('ExcessiveRNRNAK',             c_u64,  1),
+                    ('PeerCompCDLPExit',            c_u64,  1), # Rv in Inj
+                    ('CompThermShutdown',           c_u64,  1),
+                    ('PossibleMaliciousPkt',        c_u64,  1),
+                    ('InvalidCompImage',            c_u64,  1),
+                    ('CLPEntry',                    c_u64,  1),
+                    ('CLPExit',                     c_u64,  1),
+                    ('CDLPEntry',                   c_u64,  1),
+                    ('CDLPExit',                    c_u64,  1),
+                    ('PeerCompCDLPEntry',           c_u64,  1),
+                    ('EmergencyPowerReduction',     c_u64,  1),
+                    ('Rv',                          c_u64,  1),
+                    ('CompPowerOffTransition',      c_u64,  1),
+                    ('CompPowerRestoration',        c_u64,  1),
+                    ('PriMediaMaintRequired',       c_u64,  1),
+                    ('PriMediaMaintOverride',       c_u64,  1),
+                    ('SecMediaMaintRequired',       c_u64,  1),
+                    ('SecMediaMaintOverride',       c_u64,  1),
+                    ('CompThermPerfThrottle',       c_u64,  1),
+                    ('CompThermThrottleRestore',    c_u64,  1),
+                    ('P2PNonTransient',             c_u64,  1),
+                    ('PeerCompCLPEntry',            c_u64,  1),
+                    ('PeerCompCLPExit',             c_u64,  1),
+                    ('Rv',                          c_u64, 35),
+                    ('Vdef',                        c_u64,  4),
+        ]
+
+    _fields_    = [('field', CEventFields), ('val', c_u64)]
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class CEventStatus(CEvent):
+    pass # All bits: RW1CS
+
+class CEventDetect(CEvent):
+    pass # All bits: RW
+
+class CEventInj(CEvent):
+    pass # Bit 3: RsvdZ, All other bits: WO
+
+class CEventSigTgt(SpecialField, Union):
+    class CEventSigTgtFields(Structure):
+        _fields_ = [('BISTFailure',                 c_u64,  3), # All bits RW
+                    ('UnableToCommAuthDest',        c_u64,  3),
+                    ('ExcessiveRNRNAK',             c_u64,  3),
+                    ('PeerCompCDLPExit',            c_u64,  3),
+                    ('CompThermShutdown',           c_u64,  3),
+                    ('PossibleMaliciousPkt',        c_u64,  3),
+                    ('InvalidCompImage',            c_u64,  3),
+                    ('CLPEntry',                    c_u64,  3),
+                    ('CLPExit',                     c_u64,  3),
+                    ('CDLPEntry',                   c_u64,  3),
+                    ('CDLPExit',                    c_u64,  3),
+                    ('PeerCompCDLPEntry',           c_u64,  3),
+                    ('EmergencyPowerReduction',     c_u64,  3),
+                    ('Rv',                          c_u64,  3),
+                    ('CompPowerOffTransition',      c_u64,  3),
+                    ('CompPowerRestoration',        c_u64,  3),
+                    ('PriMediaMaintRequired',       c_u64,  3),
+                    ('PriMediaMaintOverride',       c_u64,  3),
+                    ('SecMediaMaintRequired',       c_u64,  3),
+                    ('SecMediaMaintOverride',       c_u64,  3),
+                    ('CompThermPerfThrottle',       c_u64,  3),
+                    ('CompThermThrottleRestorel',   c_u64,  1),
+                    ('CompThermThrottleRestoreh',   c_u64,  2),
+                    ('P2PNonTransient',             c_u64,  3),
+                    ('PeerCompCLPEntry',            c_u64,  3),
+                    ('PeerCompCLPExit',             c_u64,  3),
+                    ('RvM',                         c_u64, 53),
+                    ('RvH',                         c_u64, 52),
+                    ('Vdef0',                       c_u64,  3),
+                    ('Vdef1',                       c_u64,  3),
+                    ('Vdef2',                       c_u64,  3),
+                    ('Vdef3',                       c_u64,  3),
+        ]
+
+        @property
+        def CompThermThrottleRestore(self):
+            return ((self.CompThermThrottleRestoreh << 1) |
+                    self.CompThermThrottleRestorel)
+
+        @CompThermThrottleRestore.setter
+        def CompThermThrottleRestore(self, val):
+            if val < 0 or val > 7:
+                raise(ValueError)
+            self.CompThermThrottleRestoreh = (val >> 1) & 0x3
+            self.CompThermThrottleRestorel = val & 0x1
+
+    _fields_    = [('field', CEventSigTgtFields), ('val', c_u64 * 3)]
+
+    def __init__(self, value, parent, verbosity=0):
+        arr_val = (c_u64 * 3)(*value)
+        super().__init__(arr_val, parent, verbosity=verbosity)
+        self.val = arr_val
+
+# Base class for IEvent{Status,Detect,Inj}
+class IEvent(SpecialField, Union):
+    class IEventFields(Structure):
+        _fields_ = [('FullIfaceReset',              c_u64,  1),
+                    ('WarmIfaceReset',              c_u64,  1),
+                    ('NewPeerComp',                 c_u64,  1),
+                    ('ExceededTransientErrThresh',  c_u64,  1),
+                    ('Rv',                          c_u64,  1),
+                    ('IfacePerfDegradation',        c_u64,  1),
+                    ('Rv',                          c_u64, 54),
+                    ('Vdef',                        c_u64,  4),
+        ]
+
+    _fields_    = [('field', IEventFields), ('val', c_u64)]
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class IEventStatus(IEvent):
+    pass
+
+class IEventDetect(IEvent):
+    pass
+
+class IEventInj(IEvent):
+    pass
+
+class IEventSigTgt(SpecialField, Union):
+    class IEventSigTgtFields(Structure):
+        _fields_ = [('FullIfaceReset',              c_u64,  3), # All bits RW
+                    ('WarmIfaceReset',              c_u64,  3),
+                    ('NewPeerComp',                 c_u64,  3),
+                    ('ExceededTransientErrThresh',  c_u64,  3),
+                    ('Rv',                          c_u64,  3),
+                    ('IfacePerfDegradation',        c_u64,  3),
+                    ('RvL',                         c_u64, 46),
+                    ('RvM',                         c_u64, 64),
+                    ('RvH',                         c_u64, 52),
+                    ('Vdef0',                       c_u64,  3),
+                    ('Vdef1',                       c_u64,  3),
+                    ('Vdef2',                       c_u64,  3),
+                    ('Vdef3',                       c_u64,  3),
+        ]
+
+    _fields_    = [('field', IEventSigTgtFields), ('val', c_u64 * 3)]
+
+    def __init__(self, value, parent, verbosity=0):
+        arr_val = (c_u64 * 3)(*value)
+        super().__init__(arr_val, parent, verbosity=verbosity)
+        self.val = arr_val
 
 class OpCodeSetCAP1(SpecialField, Union):
     class CAP1Fields(Structure):
@@ -509,12 +947,12 @@ class ICAP2Control(SpecialField, Union):
         super().__init__(value, parent, verbosity=verbosity)
         self.val = value
 
-# for IErrorStatus/IErrorDetect/IErrorFaultInjection/IErrorTrigger
+# Base class for IError{Status,Detect,Trig,FaultInj}
 class IError(SpecialField, Union):
     class IErrorFields(Structure):
         _fields_ = [('ExcessivePHYRetraining',           c_u16,  1),
                     ('NonTransientLinkErr',              c_u16,  1),
-                    ('IfaceContainment',                 c_u16,  1),
+                    ('IfaceContainment',                 c_u16,  1), # Rv in Inj
                     ('IfaceAKEYViolation',               c_u16,  1),
                     ('IfaceFCFwdProgressViolation',      c_u16,  1),
                     ('UnexpectedPHYFailure',             c_u16,  1),
@@ -529,6 +967,53 @@ class IError(SpecialField, Union):
     def __init__(self, value, parent, verbosity=0):
         super().__init__(value, parent, verbosity=verbosity)
         self.val = value
+
+class IErrorStatus(IError):
+    pass # All bits: RW1CS
+
+class IErrorDetect(IError):
+    pass # All bits: RW
+
+class IErrorTrig(IError):
+    pass # All bits: RW
+
+class IErrorFaultInj(IError):
+    pass # Bit 2: RsvdZ, All other bits: WO
+
+class IErrorSigTgt(SpecialField, Union):
+    class IErrorSigTgtFields(Structure):
+        _fields_ = [('ExcessivePHYRetraining',           c_u16,  3),
+                    ('NonTransientLinkErr',              c_u16,  3),
+                    ('IfaceContainment',                 c_u16,  3),
+                    ('IfaceAKEYViolation',               c_u16,  3),
+                    ('IfaceFCFwdProgressViolation',      c_u16,  3),
+                    ('UnexpectedPHYFailurel',            c_u16,  1),
+                    ('UnexpectedPHYFailureh',            c_u16,  2),
+                    ('P2PSECE',                          c_u16,  3),
+                    ('IfaceAE',                          c_u16,  3),
+                    ('SwitchPktRelayFailure',            c_u16,  3),
+                    ('RvM',                              c_u16,  5),
+                    ('RvH',                              c_u16, 16),
+        ]
+
+        @property
+        def UnexpectedPHYFailure(self):
+            return (self.UnexpectedPHYFailureh << 1) | self.UnexpectedPHYFailurel
+
+        @UnexpectedPHYFailure.setter
+        def UnexpectedPHYFailure(self, val):
+            if val < 0 or val > 7:
+                raise(ValueError)
+            self.UnexpectedPHYFailureh = (val >> 1) & 0x3
+            self.UnexpectedPHYFailurel = val & 0x1
+
+    _fields_    = [('field', IErrorSigTgtFields), ('val', c_u16 * 3)]
+
+    def __init__(self, value, parent, verbosity=0):
+        v_list = [((value >> (i*16)) & 0xffff) for i in range(3)]
+        arr_val = (c_u16 * 3)(*v_list)
+        super().__init__(arr_val, parent, verbosity=verbosity)
+        self.val = arr_val
 
 class PeerState(SpecialField, Union):
     class PeerStateFields(Structure):
@@ -1649,14 +2134,18 @@ class CoreStructure(ControlStructure):
 
     _special_dict = { 'CStatus': CStatus, 'CControl': CControl,
                       'CAP1': CAP1, 'CAP1Control': CAP1Control,
-                      'CAP2Control': CAP2Control }
+                      'CAP2': CAP2, 'CAP2Control': CAP2Control }
+
+    @property
+    def CUUID(self): # Revisit: generate this (and others) from _uuid_fields
+        return self.uuid(('CUUIDh', 'CUUIDl'))
 
     def fileToStructInit(self):
         self.sw = None
         self.comp_dest = None
 
 class ComponentDestinationTableStructure(ControlStructure):
-    _fields_ = [('Type',                       c_u64, 12),  # Basic OpCode Set Fields
+    _fields_ = [('Type',                       c_u64, 12),
                 ('Vers',                       c_u64,  4),
                 ('Size',                       c_u64, 16),
                 ('DestTableCAP1',              c_u64, 32),
@@ -1681,6 +2170,9 @@ class ComponentDestinationTableStructure(ControlStructure):
                 ('RSPVCATPTR',                 c_u64, 32),
                 ('R2',                         c_u64, 32),
                 ('R3',                         c_u64, 64)]
+
+    _special_dict = {'DestTableCAP1': DestTableCAP1,
+                     'DestTableControl': DestTableControl}
 
     _ptr_fields = ['RouteControlPtr', 'SSDTPTR', 'MSDTPTR', 'REQVCATPTR',
                    'RITPTR', 'RSPVCATPTR']
@@ -1882,9 +2374,9 @@ class InterfaceTemplate(ControlStructure):
                 ('ICAP2Control',               c_u64, 32),
                 ('IErrorStatus',               c_u64, 16), #0x20
                 ('IErrorDetect',               c_u64, 16),
-                ('IErrorFaultInjection',       c_u64, 16),
-                ('IErrorTrigger',              c_u64, 16),
-                ('ISignalTarget',              c_u64, 48), #0x28
+                ('IErrorFaultInj',             c_u64, 16),
+                ('IErrorTrig',                 c_u64, 16),
+                ('IErrorSigTgt',               c_u64, 48), #0x28
                 ('TETH',                       c_u64,  4),
                 ('TETE',                       c_u64,  4),
                 ('FCFWDProgress',              c_u64,  8),
@@ -1940,12 +2432,13 @@ class InterfaceTemplate(ControlStructure):
                 ('EgressAKeyMask',             c_u64, 64), #0xA8
                 ]
 
-    _special_dict = { 'IStatus': IStatus, 'IControl': IControl,
-                      'ICAP1': ICAP1, 'ICAP1Control': ICAP1Control,
-                      'ICAP2': ICAP2, 'ICAP2Control': ICAP2Control,
-                      'IErrorStatus': IError, 'IErrorDetect': IError,
-                      'IErrorFaultInjection': IError, 'IErrorTrigger': IError,
-                      'PeerState': PeerState, 'LinkCTLControl': LinkCTLControl}
+    #_ptr_fields = ['NextIPTR', 'IPHYPTR', 'VDPTR', 'ISTATSPTR', 'IARBPTR', 'MechanicalPTR']
+    _special_dict = {'IStatus': IStatus, 'IControl': IControl,
+                     'ICAP1': ICAP1, 'ICAP1Control': ICAP1Control,
+                     'ICAP2': ICAP2, 'ICAP2Control': ICAP2Control,
+                     'IErrorStatus': IErrorStatus, 'IErrorDetect': IErrorDetect,
+                     'IErrorFaultInj': IErrorFaultInj, 'IErrorTrig': IErrorTrig,
+                     'PeerState': PeerState, 'LinkCTLControl': LinkCTLControl}
 
     def __str__(self):
         r = super().__str__()
@@ -2113,6 +2606,104 @@ class ComponentCAccessStructure(ControlStructure):
 
     _special_dict = {'CPageSz': CPageSz, 'CAccessCAP1': CAccessCAP1,
                      'CAccessCTL': CAccessCTL}
+
+class ComponentErrorSignalStructure(ControlStructure):
+    _fields_ = [('Type',                       c_u64, 12), # 0x0
+                ('Vers',                       c_u64,  4),
+                ('Size',                       c_u64, 16),
+                ('EControl',                   c_u64, 16),
+                ('EStatus',                    c_u64, 16),
+                ('ErrorMgrCID',                c_u64, 12), # 0x8
+                ('ErrorMgrSID',                c_u64, 16),
+                ('R0',                         c_u64,  4),
+                ('ErrSigCAP1',                 c_u64, 16),
+                ('ErrSigCAP1Control',          c_u64, 16),
+                ('EventMgrCID',                c_u64, 12), # 0x10
+                ('EventMgrSID',                c_u64, 16),
+                ('R1',                         c_u64,  4),
+                ('ELogPTR',                    c_u64, 32),
+                ('SigIntrAddr0',               c_u64, 64), # 0x18
+                ('SigIntrAddr1',               c_u64, 64), # 0x20
+                ('SigIntrData0',               c_u64, 32), # 0x28
+                ('SigIntrData1',               c_u64, 32),
+                ('CErrorStatus',               c_u64, 64), # 0x30
+                ('CErrorDetect',               c_u64, 64), # 0x38
+                ('R2',                         c_u64, 64), # 0x40
+                ('CErrorTrig',                 c_u64, 64), # 0x48
+                ('CErrorFaultInj',             c_u64, 64), # 0x50
+                ('CErrorSigTgtl',              c_u64, 64), # 0x58
+                ('CErrorSigTgtm',              c_u64, 64), # 0x60
+                ('CErrorSigTgth',              c_u64, 64), # 0x68
+                ('CEventDetect',               c_u64, 64), # 0x70
+                ('CEventInj',                  c_u64, 64), # 0x78
+                ('CEventSigTgtl',              c_u64, 64), # 0x80
+                ('CEventSigTgtm',              c_u64, 64), # 0x88
+                ('CEventSigTgth',              c_u64, 64), # 0x90
+                ('IEventDetect',               c_u64, 64), # 0x98
+                ('IEventInj',                  c_u64, 64), # 0xa0
+                ('IEventSigTgtl',              c_u64, 64), # 0xa8
+                ('IEventSigTgtm',              c_u64, 64), # 0xb0
+                ('IEventSigTgth',              c_u64, 64), # 0xb8
+                ('MV0',                        c_u64,  1), # 0xc0
+                ('MgmtVC0',                    c_u64,  5),
+                ('MgmtIface0',                 c_u64, 12),
+                ('MV1',                        c_u64,  1),
+                ('MgmtVC1',                    c_u64,  5),
+                ('MgmtIface1',                 c_u64, 12),
+                ('MV2',                        c_u64,  1),
+                ('MgmtVC2',                    c_u64,  5),
+                ('MgmtIface2',                 c_u64, 12),
+                ('R3',                         c_u64, 10),
+                ('MV3',                        c_u64,  1), # 0xc8
+                ('MgmtVC3',                    c_u64,  5),
+                ('MgmtIface3',                 c_u64, 12),
+                ('MV4',                        c_u64,  1),
+                ('MgmtVC4',                    c_u64,  5),
+                ('MgmtIface4',                 c_u64, 12),
+                ('MV5',                        c_u64,  1),
+                ('MgmtVC5',                    c_u64,  5),
+                ('MgmtIface5',                 c_u64, 12),
+                ('R4',                         c_u64, 10),
+                ('MV6',                        c_u64,  1), # 0xd0
+                ('MgmtVC6',                    c_u64,  5),
+                ('MgmtIface6',                 c_u64, 12),
+                ('MV7',                        c_u64,  1),
+                ('MgmtVC7',                    c_u64,  5),
+                ('MgmtIface7',                 c_u64, 12),
+                ('R5',                         c_u64, 28),
+                ('PMUEPMask',                  c_u64,  8), # 0xd8
+                ('PFMUEPMask',                 c_u64,  8),
+                ('SFMUEPMask',                 c_u64,  8),
+                ('ErrorUEPMask',               c_u64,  8),
+                ('EventUEPMask',               c_u64,  8),
+                ('MediaUEPMask',               c_u64,  8),
+                ('PwrMgrUEPMask',              c_u64,  8),
+                ('MechMgrUEPMask',             c_u64,  8),
+                ('MechMgrCID',                 c_u64, 12), #0xe0
+                ('MechMgrSID',                 c_u64, 16),
+                ('R6',                         c_u64,  4),
+                ('MediaMgrCID',                c_u64, 12),
+                ('MediaMgrSID',                c_u64, 16),
+                ('R7',                         c_u64,  4),
+                ('R8',                         c_u64, 64), #0xe8
+                ('EControl2',                  c_u64, 32), #0xf0
+                ('R9',                         c_u64, 32),
+                ('CEventStatus',               c_u64, 64), #0xf8
+                ('IEventStatus',               c_u64, 64), #0x100
+                ('R10',                        c_u64, 64), #0x108
+                ]
+
+    _special_dict = {'EControl': EControl, 'EControl2': EControl2,
+                     'EStatus': EStatus, 'ErrSigCAP1': ErrSigCAP1,
+                     'ErrSigCAP1Control': ErrSigCAP1Control,
+                     'CErrorStatus': CErrorStatus, 'CErrorDetect': CErrorDetect,
+                     'CErrorTrig': CErrorTrig, 'CErrorFaultInj': CErrorFaultInj,
+                     'CEventStatus': CEventStatus, 'CEventDetect': CEventDetect,
+                     'CEventInj': CEventInj,
+                     'IEventStatus': IEventStatus, 'IEventDetect': IEventDetect,
+                     'IEventInj': IEventInj,
+                     # Revisit: CErrorSigTgt, CEventSigTgt, IEventSigTgt
+                     }
 
 class ComponentPageGridStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12),
