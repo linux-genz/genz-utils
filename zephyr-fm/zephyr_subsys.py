@@ -272,6 +272,26 @@ class Interface():
         iface.IControl = icontrol.val
         return status
 
+    def peer_c_reset(self):
+        iface_file = self.iface_dir / 'interface'
+        with iface_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            iface = self.comp.map.fileToStruct('interface', data,
+                                fd=f.fileno(), verbosity=self.comp.verbosity)
+            status = self.send_peer_c_reset(iface)
+        return status
+
+    def send_peer_c_reset(self, iface, timeout=10000):
+        icontrol = genz.IControl(iface.IControl, iface)
+        icontrol.field.PeerCReset = 1
+        iface.IControl = icontrol.val
+        self.comp.control_write(iface, genz.InterfaceStructure.IControl,
+                                sz=4, off=4)
+        status = self.wait_link_ctl(iface, timeout)
+        icontrol.field.PeerCReset = 0
+        iface.IControl = icontrol.val
+        return status
+
     def send_path_time(self, iface, timeout=10000):
         icontrol = genz.IControl(iface.IControl, iface)
         icontrol.field.PathTimeReq = 1
