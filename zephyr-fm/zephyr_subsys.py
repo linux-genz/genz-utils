@@ -1080,18 +1080,19 @@ class Component():
     # returns route_control.HCS
     def route_control_read(self, prefix='control'):
         try:  # Revisit: route control is required, but missing in current HW
-            rc_dir = list(self.switch_dir.glob('route_control_table@*'))[0]
+            rc_dir = list(self.switch_dir.glob('route_control@*'))[0]
         except IndexError:
             rc_dir = None
         if rc_dir is not None:
-            rc_path = rc_dir / 'route_control_table'
+            rc_path = rc_dir / 'route_control'
             with rc_path.open(mode='rb') as f:
                 data = bytearray(f.read())
-                rc = self.map.fileToStruct('route_control_table', data,
+                rc = self.map.fileToStruct('route_control', data,
                                 parent=self.core.sw, core=self.core,
                                 fd=f.fileno(), verbosity=self.verbosity)
                 self.core.route_control = rc
-                hcs = self.core.route_control.HCS
+                cap1 = genz.RCCAP1(rc.RCCAP1, rc)
+                hcs = cap1.field.HCS
             # end with
         else:  # Route Control is missing - assume HCS=0
             self.core.route_control = None
@@ -1365,11 +1366,12 @@ class Component():
                 comp = self.fab.comp_gcids[peer_gcid]
                 peer_iface = comp.interfaces[iface.peer_iface_num]
                 self.fab.add_link(iface, peer_iface)
-                route = self.fab.setup_routing(pfm, comp)
-                self.fab.setup_routing(comp, pfm, route=route.invert())
-                msg += ' additional path to {}'.format(peer_iface)
+                # new path might enable shorter routes
+                route = self.fab.setup_bidirectional_routing(pfm, comp)
+                route2 = self.fab.setup_bidirectional_routing(pfm, self)
+                msg += ' additional path to {}'.format(comp)
                 log.info(msg)
-            else:
+            elif args.accept_cids:
                 path = self.fab.make_path(peer_gcid)
                 comp = Component(iface.peer_cclass, self.fab, self.map, path,
                                  self.mgr_uuid, br_gcid=self.br_gcid,
@@ -1384,9 +1386,8 @@ class Component():
                 msg += ' retaining gcid={}'.format(gcid)
                 log.info(msg)
                 self.fab.add_link(iface, peer_iface)
-                route = self.fab.setup_routing(pfm, comp)
-                self.fab.setup_routing(comp, pfm, write_ssdt=False,
-                                       route=route.invert())
+                route = self.fab.setup_bidirectional_routing(
+                    pfm, comp, write_to_ssdt=False)
                 try:
                     comp.add_fab_comp(setup=True)
                 except Exception as e:
@@ -1395,7 +1396,13 @@ class Component():
                 comp.comp_init(pfm, ingress_iface=peer_iface)
                 if comp.has_switch:  # if switch, recurse
                     comp.explore_interfaces(pfm, ingress_iface=peer_iface)
-        if peer_cstate is CState.CCFG:
+            else:
+                msg += ' ignoring unknown component'
+                log.warning(msg)
+                return
+            # end if peer_gcid
+        # end if CUp
+        if peer_cstate is CState.CCFG: # Note: not 'elif'
             dr = DirectedRelay(self, ingress_iface, iface)
             comp = Component(iface.peer_cclass, self.fab, self.map, dr.path,
                              self.mgr_uuid, dr=dr, br_gcid=self.br_gcid,
@@ -1406,9 +1413,8 @@ class Component():
             msg += 'assigned gcid={}'.format(gcid)
             log.info(msg)
             self.fab.add_link(iface, peer_iface)
-            route = self.fab.setup_routing(pfm, comp)
-            self.fab.setup_routing(comp, pfm, write_ssdt=False,
-                                   route=route.invert())
+            route = self.fab.setup_bidirectional_routing(
+                pfm, comp, write_to_ssdt=False)
             try:
                 comp.add_fab_dr_comp()
             except Exception as e:
@@ -1514,6 +1520,7 @@ class Fabric(nx.MultiGraph):
         self.assigned_gcids = []
         self.refill_gcids = True
         self.nonce_list = [ 0 ]
+        self.routes = Routes(fab_uuid=fab_uuid)
         super().__init__(fab_uuid=self.fab_uuid, mgr_uuids=[self.mgr_uuid])
         log.info('fabric: {}, num={}, fab_uuid={}, mgr_uuid={}'.format(
             path, self.fabnum, self.fab_uuid, self.mgr_uuid))
@@ -1609,21 +1616,45 @@ class Fabric(nx.MultiGraph):
         paths = self.k_shortest_paths(fr, to, k)
         return [Route(p) for p in paths]
 
-    def write_route(self, route: 'Route', write_ssdt=True):
-        for rt in route:
+    def write_route(self, route: 'Route', write_ssdt=True, enable=True):
+        # When enabling a route, write entries in reverse order so
+        # that live updates to routing never enable a route entry
+        # before its "downstream" entries. When disabling a route,
+        # start at the front, for the same reason.
+        rt_iter = reversed(route) if enable else iter(route)
+        for rt in rt_iter:
             if rt.ingress_iface is not None:
                 # switch: add to's GCID to rt's LPRT
-                rt.set_lprt(route.to)
+                rt.set_lprt(route.to, valid=enable)
             elif write_ssdt:
                 # add to's GCID to rt's SSDT
-                rt.set_ssdt(route.to)
+                rt.set_ssdt(route.to, valid=enable)
 
     def setup_routing(self, fr: Component, to: Component,
                       write_ssdt=True, route=None) -> 'Route':
         if route is None:
             route = self.route(fr, to)
-        log.info('adding route from {} to {} via {}'.format(fr, to, route))
-        self.write_route(route, write_ssdt)
+        try:
+            cur_rts = self.routes.get_routes(fr, to)
+        except KeyError:
+            cur_rts = None
+        # Revisit: MultiRoute
+        if cur_rts is None or len(cur_rts) == 0 or route < cur_rts[0]:
+            log.info('adding route from {} to {} via {}'.format(fr, to, route))
+            self.write_route(route, write_ssdt)
+            self.routes.add(fr, to, route)
+        else: # existing route is better
+            return None
+        return route
+
+    def setup_bidirectional_routing(self, fr: Component, to: Component,
+                                    write_to_ssdt=True) -> 'Route':
+        if fr is to: # Revisit: loopback
+            return None
+        route = self.setup_routing(fr, to) # always write fr ssdt
+        if route is not None:
+            self.setup_routing(to, fr,
+                               write_ssdt=write_to_ssdt, route=route.invert())
         return route
 
     def has_link(self, fr_iface: Interface, to_iface: Interface) -> bool:
@@ -1678,11 +1709,23 @@ class RouteElement():
     def path(self):
         return self.egress_iface.iface_dir
 
-    def set_ssdt(self, to: Component):
-        self.comp.ssdt_write(to.gcid.cid, self.egress_iface.num)
+    def set_ssdt(self, to: Component, valid=True):
+        self.comp.ssdt_write(to.gcid.cid, self.egress_iface.num,
+                             valid=valid)
 
-    def set_lprt(self, to: Component):
-        self.ingress_iface.lprt_write(to.gcid.cid, self.egress_iface.num)
+    def set_lprt(self, to: Component, valid=True):
+        self.ingress_iface.lprt_write(to.gcid.cid, self.egress_iface.num,
+                                      valid=valid)
+
+    def to_json(self):
+        return str(self)
+
+    def __eq__(self, other):
+        return (self.comp == other.comp and
+                self.ingress_iface == other.ingress_iface and
+                self.egress_iface == other.egress_iface and
+                self.to_iface == other.to_iface and
+                self.dr == other.dr)
 
     def __str__(self):
         # Revisit: handle self.dr
@@ -1724,6 +1767,9 @@ class Route():
         inverse = Route(self._path[::-1])
         return inverse
 
+    def to_json(self):
+        return self._elems
+
     def __getitem__(self, key):
         return self._elems[key]
 
@@ -1733,8 +1779,61 @@ class Route():
     def __iter__(self):
         return iter(self._elems)
 
-    def __str__(self):
+    def __eq__(self, other): # all elements in list must match
+        return self._elems == other._elems
+
+    def __lt__(self, other): # only compare route length (hop count)
+        # Revisit: consider bandwidth & latency
+        return len(self) < len(other)
+
+    def __repr__(self):
         return '[' + ','.join('{}'.format(e) for e in self._elems) + ']'
+
+class Routes():
+    def __init__(self, fab_uuid=None):
+        self.fab_uuid = fab_uuid
+        self.fr_to = {}
+
+    def get_routes(self, fr: Component, to: Component) -> List[Route]:
+        return self.fr_to[(fr, to)]
+
+    def add(self, fr: Component, to: Component, route: Route) -> None:
+        try:
+            rts = self.get_routes(fr, to)
+            for rt in rts:
+                if rt == route: # already there
+                    return
+            # end for
+            # not in list - add it - at front if shorter, else at end
+            if route < rts[0]:
+                rts.insert(0, route)
+            else:
+                rts.append(route)
+        except KeyError: # not in dict - add
+            self.fr_to[(fr, to)] = [ route ]
+
+    def remove(self, fr: Component, to: Component, route: Route) -> bool:
+        try:
+            rts = self.get_routes(fr, to)
+            rts.remove(route)
+        except (KeyError, ValueError):
+            return False
+        return True
+
+    def to_json(self):
+        routes_dict = {}
+        for k, v in self.fr_to.items():
+            routes_dict[str(k[0]) + '->' + str(k[1])] = v
+        top_dict = { 'fab_uuid': str(self.fab_uuid),
+                     'routes': routes_dict
+                    }
+        js = json.dumps(top_dict, indent=2) # Revisit: indent
+        return js
+
+    def __str__(self):
+        r = 'fab_uuid: {}, '.format(self.fab_uuid)
+        r += 'routes: {}'.format(self.fr_to)
+        return '{' + r + '}'
 
 class Conf():
     def __init__(self, file):
@@ -1781,8 +1880,7 @@ class Conf():
                     self.file, con, fab.fabnum))
                 continue
             # Revisit: consider delaying routing until llamas connects
-            route = fab.setup_routing(con_comp, prod_comp)
-            fab.setup_routing(prod_comp, con_comp, route=route.invert())
+            route = fab.setup_bidirectional_routing(con_comp, prod_comp)
         # end for con
         return add_args
 
