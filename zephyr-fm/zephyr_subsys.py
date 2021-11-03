@@ -1031,6 +1031,9 @@ class Component():
                 if (ingress_iface is not None and
                     ingress_iface.peer_iface is not None):
                     ingress_iface.peer_iface.update_peer_info()
+                if args.sleep > 0.0:
+                    log.debug('sleeping {} seconds for slow switch C-Up transition'.format(args.sleep))
+                    time.sleep(args.sleep)
             else:
                 log.info('{} has no usable interfaces'.format(self.path))
         # end with
@@ -2416,6 +2419,8 @@ def main():
                         help='accept pre-existing HW CIDs for all components')
     parser.add_argument('-R', '--random-cids', action='store_true',
                         help='generate random CIDs for all components')
+    parser.add_argument('-S', '--sleep', type=float, default=0.0,
+                        help='sleep time inserted at certain points')
     parser.add_argument('-G', '--genz-version', choices=['1.1'],
                         default='1.1',
                         help='Gen-Z spec version of Control Space structures')
