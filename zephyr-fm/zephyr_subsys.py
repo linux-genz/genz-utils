@@ -42,7 +42,7 @@ from uuid import UUID, uuid4
 from pathlib import Path
 from math import ceil, log2
 from importlib import import_module
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus
+from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
 from middleware.netlink_mngr import NetlinkManager
 from typing import List
 from pdb import set_trace, post_mortem
@@ -139,6 +139,12 @@ class Interface():
         # end with
         return iface
 
+    def iface_state(self):
+        iface = self.iface_read()
+        state = self.check_i_state(iface, timeout=0, do_read=False)
+        self.usable = (state is IState.IUp)
+        return state
+
     # Returns True if interface is usable - is I-Up, not I-Down/I-CFG/I-LP
     def iface_init(self, prefix='control'):
         self.setup_paths(prefix)
@@ -158,6 +164,7 @@ class Interface():
                 return False
 
             icap1 = genz.ICAP1(iface.ICAP1, iface)
+            self.ierror_init(iface, icap1)
             # Revisit: select compatible LLR/P2PNextHdr/P2PEncrypt settings
             # Revisit: set CtlOpClassPktFiltEnb, if Switch (for now)
             # enable Explicit OpCodes, and LPRT (if Switch)
@@ -247,6 +254,45 @@ class Interface():
         log.debug('{}: iface_init done'.format(self))
         return self.usable
 
+    def ierror_init(self, iface, icap1):
+        if icap1.field.IfaceErrFieldsSup == 0:
+            return
+        # Set IErrorSigTgt
+        ierr_tgt = genz.IErrorSigTgt(iface.IErrorSigTgt, iface)
+        sig_tgt = genz.SigTgt.TgtIntr1 if self.comp.local_br else genz.SigTgt.TgtUEP
+        ierr_tgt.field.ExcessivePHYRetraining = sig_tgt
+        ierr_tgt.field.NonTransientLinkErr = sig_tgt
+        ierr_tgt.field.IfaceContainment = sig_tgt
+        ierr_tgt.field.IfaceFCFwdProgressViolation = sig_tgt
+        ierr_tgt.field.UnexpectedPHYFailure = sig_tgt
+        ierr_tgt.field.IfaceAE = sig_tgt
+        ierr_tgt.field.SwitchPktRelayFailure = sig_tgt
+        iface.IErrorSigTgt = ((ierr_tgt.val[2] << 32) |
+                              (ierr_tgt.val[1] << 16) | ierr_tgt.val[0])
+        log.debug('{}: writing IErrorSigTgt'.format(self))
+        # Revisit: at least on orthus, sz=6 turns into an 8-byte ControlWrite
+        self.comp.control_write(iface,
+                            genz.InterfaceStructure.IErrorSigTgt, sz=6)
+        # Set IErrorDetect - last, after other IError fields setup
+        ierr_det = genz.IErrorDetect(iface.IErrorDetect, iface)
+        ierr_det.field.ExcessivePHYRetraining = 1
+        ierr_det.field.NonTransientLinkErr = 1
+        ierr_det.field.IfaceContainment = 1
+        ierr_det.field.IfaceFCFwdProgressViolation = 1
+        ierr_det.field.UnexpectedPHYFailure = 1
+        ierr_det.field.IfaceAE = 1
+        ierr_det.field.SwitchPktRelayFailure = 1
+        # Revisit: other interface errors
+        iface.IErrorDetect = ierr_det.val
+        log.debug('{}: writing IErrorDetect'.format(self))
+        # Revisit: switch doesn't like sz=2, off=2, because at least on orthus
+        # that turns into a 4-byte ControlWrite to a 2-byte-aligned addr
+        #self.comp.control_write(iface,
+        #                    genz.InterfaceStructure.IErrorDetect, sz=2, off=2)
+        # Revisit: major side-effect - IErrorStatus is cleared (bits are RW1CS)
+        self.comp.control_write(iface,
+                            genz.InterfaceStructure.IErrorStatus, sz=8)
+
     def update_peer_info(self):
         iface_file = self.iface_dir / 'interface'
         with iface_file.open(mode='rb+') as f:
@@ -319,12 +365,14 @@ class Interface():
                     (istatus.field.LinkCTLCompleted == 1))
         return istatus.field.LinkCTLComplStatus
 
-    def check_i_state(self, iface, timeout=500000000):
+    def check_i_state(self, iface, timeout=500000000, do_read=True):
         istatus = genz.IStatus(iface.IStatus, iface)
         start = time.time_ns()
         done = False
         while not done:
-            self.comp.control_read(iface, genz.InterfaceStructure.IStatus, sz=4)
+            if do_read:
+                self.comp.control_read(iface,
+                                       genz.InterfaceStructure.IStatus, sz=4)
             istatus.val = iface.IStatus
             istate = IState(istatus.field.IState)
             log.debug('{}: check_i_state[{}]: state={}'.format(
@@ -390,6 +438,10 @@ class Interface():
         # Revisit: should this re-read value?
         peer_state = genz.PeerState(iface.PeerState, iface)
         return peer_state.field.PeerMgrType
+
+    @property
+    def peer_comp(self):
+        return self.peer_iface.comp if self.peer_iface is not None else None
 
     def phy_init(self):
         # This does not actually init anything - it only checks PHY status
@@ -490,6 +542,15 @@ class Interface():
         self.update_lprt_dir()
         self.update_vcat_dir()
 
+    @property
+    def boundary_interface(self):
+        comp = self.comp
+        dot_num = '.{}'.format(self.num)
+        cs_name = comp.cuuid_serial + dot_num
+        gc_name = str(comp.gcid) + dot_num
+        return any(x in comp.fab.conf.data.get('boundary_interfaces', [])
+                   for x in {cs_name, gc_name})
+
     def to_json(self):
         return { 'num': str(self),
                  'state': str(self.istate),
@@ -497,6 +558,9 @@ class Interface():
                           'tx_LWR': self.phy_tx_lwr,
                           'rx_LWR': self.phy_rx_lwr }
                 }
+
+    def __hash__(self):
+        return hash(str(self.comp.uuid) + '.{}'.format(self.num))
 
     def __repr__(self):
         return '{}({}.{})'.format(self.__class__.__name__,
@@ -560,6 +624,10 @@ class Component():
     def to_json(self):
         return self.cuuid_serial
 
+    def set_dr(self, dr):
+        self.dr = dr
+        self.path = dr.path
+
     # for LLMUTO, NLMUTO, NIRT, FPST, REQNIRTO, REQABNIRTO
     def timeout_val(self, time):
         return int(time / Component.timer_unit_list[self.timer_unit])
@@ -601,6 +669,21 @@ class Component():
             self.update_path()
         return ret
 
+    def remove_fab_comp(self):
+        log.debug('remove_fab_comp for {}'.format(self))
+        cmd_name = self.nl.cfg.get('REMOVE_FAB_COMP')
+        data = {'gcid':     self.gcid.val,
+                'br_gcid':  self.br_gcid.val,
+                'tmp_gcid': self.tmp_gcid.val if self.tmp_gcid else INVALID_GCID.val,
+                'dr_gcid':  self.dr.gcid.val if self.dr else INVALID_GCID.val,
+                'dr_iface': self.dr.egress_iface.num if self.dr else 0,
+                'mgr_uuid': self.mgr_uuid,
+        }
+        msg = self.nl.build_msg(cmd=cmd_name, data=data)
+        ret = self.nl.sendmsg(msg)
+        self.remove_paths()
+        return ret
+
     def add_fab_dr_comp(self):
         log.debug('add_fab_dr_comp for {}'.format(self))
         cmd_name = self.nl.cfg.get('ADD_FAB_DR_COMP')
@@ -613,6 +696,21 @@ class Component():
         }
         msg = self.nl.build_msg(cmd=cmd_name, data=data)
         ret = self.nl.sendmsg(msg)
+        return ret
+
+    def remove_fab_dr_comp(self):
+        log.debug('remove_fab_dr_comp for {}'.format(self))
+        cmd_name = self.nl.cfg.get('REMOVE_FAB_DR_COMP')
+        data = {'gcid':     self.gcid.val,
+                'br_gcid':  self.br_gcid.val,
+                'tmp_gcid': INVALID_GCID.val,
+                'dr_gcid':  self.dr.gcid.val,
+                'dr_iface': self.dr.egress_iface.num,
+                'mgr_uuid': self.mgr_uuid,
+        }
+        msg = self.nl.build_msg(cmd=cmd_name, data=data)
+        ret = self.nl.sendmsg(msg)
+        self.remove_paths()
         return ret
 
     # Returns the current component GCID
@@ -685,6 +783,20 @@ class Component():
             self.rsp_pte_table_dir = list(self.rsp_pg_dir.glob(
                 'pte_table@*'))[0]
 
+    def remove_paths(self):
+        self.comp_dest_dir = None
+        self.opcode_set_dir = None
+        self.opcode_set_table_dir = None
+        self.ssdt_dir = None
+        self.req_vcat_dir = None
+        self.rsp_vcat_dir = None
+        self.rit_dir = None
+        self.switch_dir = None
+        self.ces_dir = None
+        self.rsp_pg_dir = None
+        self.rsp_pg_table_dir = None
+        self.rsp_pte_table_dir = None
+
     # Returns True if component is usable - is C-Up/C-LP/C-DLP, not C-Down
     def comp_init(self, pfm, prefix='control', ingress_iface=None):
         log.debug('comp_init for {}'.format(self))
@@ -715,11 +827,14 @@ class Component():
             self.switch_read(prefix=prefix)
             # create and read (but do not HW init) all interfaces
             for ifnum in range(0, core.MaxInterface):
-                if (ingress_iface is not None) and (ingress_iface.num == ifnum):
-                    iface = ingress_iface
-                else:
-                    iface = Interface(self, ifnum)
-                self.interfaces.append(iface)
+                if ifnum >= len(self.interfaces):
+                    if ((ingress_iface is not None) and
+                        (ingress_iface.num == ifnum)):
+                        iface = ingress_iface
+                    else:
+                        iface = Interface(self, ifnum)
+                    self.interfaces.append(iface)
+                # end if ifnum
                 try:
                     self.interfaces[ifnum].iface_read(prefix=prefix)
                 except IndexError:
@@ -781,6 +896,8 @@ class Component():
             try:
                 if self.cstate is CState.CCFG:
                     self.add_fab_comp()
+                    self.tmp_gcid = None
+                    self.dr = None
                     prefix = 'control'
             except Exception as e:
                 log.error('add_fab_comp failed with exception {}'.format(e))
@@ -919,6 +1036,7 @@ class Component():
         # end with
         if self.has_switch:
             self.switch_init(core)
+        self.comp_err_signal_init(core)
         self.fab.update_comp(self)
         return self.usable
 
@@ -970,6 +1088,175 @@ class Component():
             self.control_write(opcode_set_table,
                                genz.OpCodeSetTable.EnabledDROpCodeSet,
                                sz=8, off=0)
+        # end with
+
+    def cerror_init(self, ces):
+        # Set CErrorSigTgt
+        cerr_tgt = genz.CErrorSigTgt([ces.CErrorSigTgtl,
+                                      ces.CErrorSigTgtm,
+                                      ces.CErrorSigTgth], ces)
+        sig_tgt = genz.SigTgt.TgtIntr1 if self.local_br else genz.SigTgt.TgtUEP
+        cerr_tgt.field.CompContain = sig_tgt
+        cerr_tgt.field.NonFatalCompErr = sig_tgt
+        cerr_tgt.field.FatalCompErr = sig_tgt
+        cerr_tgt.field.E2EUnicastUR = sig_tgt
+        cerr_tgt.field.E2EUnicastMP = sig_tgt
+        cerr_tgt.field.E2EUnicastEXENonFatal = sig_tgt
+        cerr_tgt.field.E2EUnicastEXEFatal = sig_tgt
+        cerr_tgt.field.E2EUnicastUP = sig_tgt
+        cerr_tgt.field.AEInvAccPerm = sig_tgt
+        cerr_tgt.field.E2EUnicastEXEAbort = sig_tgt
+        cerr_tgt.field.MaxReqPktRetrans = sig_tgt # Revisit: Only Requesters
+        cerr_tgt.field.InsufficientSpace = sig_tgt
+        cerr_tgt.field.UnsupServiceAddr = sig_tgt
+        cerr_tgt.field.InsufficientRspRes = sig_tgt
+        ces.CErrorSigTgtl = cerr_tgt.val[0]
+        ces.CErrorSigTgtm = cerr_tgt.val[1]
+        ces.CErrorSigTgth = cerr_tgt.val[2]
+        self.control_write(ces,
+                    genz.ComponentErrorSignalStructure.CErrorSigTgtl, sz=24)
+        # Set CErrorDetect - last, after other CError fields setup
+        cerr_det = genz.CErrorDetect(ces.CErrorDetect, ces)
+        cerr_det.field.CompContain = 1
+        cerr_det.field.NonFatalCompErr = 1
+        cerr_det.field.FatalCompErr = 1
+        cerr_det.field.E2EUnicastUR = 1
+        cerr_det.field.E2EUnicastMP = 1
+        cerr_det.field.E2EUnicastEXENonFatal = 1
+        cerr_det.field.E2EUnicastEXEFatal = 1
+        cerr_det.field.E2EUnicastUP = 1
+        cerr_det.field.AEInvAccPerm = 1
+        cerr_det.field.E2EUnicastEXEAbort = 1
+        cerr_det.field.MaxReqPktRetrans = 1 # Revisit: Only Requesters
+        cerr_det.field.InsufficientSpace = 1
+        cerr_det.field.UnsupServiceAddr = 1
+        cerr_det.field.InsufficientRspRes = 1
+        # Revisit: other errors
+        ces.CErrorDetect = cerr_det.val
+        self.control_write(ces,
+                    genz.ComponentErrorSignalStructure.CErrorDetect, sz=8)
+
+    def cevent_init(self, ces):
+        # Set CEventSigTgt
+        cevt_tgt = genz.CEventSigTgt([ces.CEventSigTgtl,
+                                      ces.CEventSigTgtm,
+                                      ces.CEventSigTgth], ces)
+        sig_tgt = genz.SigTgt.TgtIntr1 if self.local_br else genz.SigTgt.TgtUEP
+        cevt_tgt.field.UnableToCommAuthDest = sig_tgt
+        cevt_tgt.field.ExcessiveRNRNAK = sig_tgt
+        cevt_tgt.field.CompThermShutdown = sig_tgt
+        ces.CEventSigTgtl = cevt_tgt.val[0]
+        ces.CEventSigTgtm = cevt_tgt.val[1]
+        ces.CEventSigTgth = cevt_tgt.val[2]
+        self.control_write(ces,
+                    genz.ComponentErrorSignalStructure.CEventSigTgtl, sz=24)
+        # Set CEventDetect - last, after other CEvent fields setup
+        cevt_det = genz.CEventDetect(ces.CEventDetect, ces)
+        cevt_det.field.UnableToCommAuthDest = 1
+        cevt_det.field.ExcessiveRNRNAK = 1
+        cevt_det.field.CompThermShutdown = 1
+        # Revisit: other events
+        ces.CEventDetect = cevt_det.val
+        self.control_write(ces,
+                    genz.ComponentErrorSignalStructure.CEventDetect, sz=8)
+
+    def ievent_init(self, ces):
+        # Set IEventSigTgt
+        ievt_tgt = genz.IEventSigTgt([ces.IEventSigTgtl,
+                                      ces.IEventSigTgtm,
+                                      ces.IEventSigTgth], ces)
+        sig_tgt = genz.SigTgt.TgtIntr1 if self.local_br else genz.SigTgt.TgtUEP
+        ievt_tgt.field.FullIfaceReset = sig_tgt
+        ievt_tgt.field.WarmIfaceReset = sig_tgt
+        ievt_tgt.field.NewPeerComp = sig_tgt
+        ievt_tgt.field.ExceededTransientErrThresh = sig_tgt
+        ievt_tgt.field.IfacePerfDegradation = sig_tgt
+        ces.IEventSigTgtl = ievt_tgt.val[0]
+        ces.IEventSigTgtm = ievt_tgt.val[1]
+        ces.IEventSigTgth = ievt_tgt.val[2]
+        self.control_write(ces,
+                    genz.ComponentErrorSignalStructure.IEventSigTgtl, sz=24)
+        # Set IEventDetect - last, after other IEvent fields setup
+        ievt_det = genz.IEventDetect(ces.IEventDetect, ces)
+        ievt_det.field.FullIfaceReset = 1
+        ievt_det.field.WarmIfaceReset = 1
+        ievt_det.field.NewPeerComp = 1
+        ievt_det.field.ExceededTransientErrThresh = 1
+        ievt_det.field.IfacePerfDegradation = 1
+        ces.IEventDetect = ievt_det.val
+        self.control_write(ces,
+                    genz.ComponentErrorSignalStructure.IEventDetect, sz=8)
+
+    def comp_err_signal_init(self, core):
+        if self.ces_dir is None:
+            return
+        ces_file = self.ces_dir / 'component_error_and_signal_event'
+        with ces_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            ces = self.map.fileToStruct('component_error_and_signal_event',
+                                        data, fd=f.fileno(),
+                                        verbosity=self.verbosity)
+            log.debug('{}: {}'.format(self.gcid, ces))
+            # Set EControl UEP Target fields
+            ectl = genz.EControl(ces.EControl, ces)
+            ectl.field.ErrUEPTgt = genz.UEPTgt.TgtPFMSFM
+            ectl.field.EventUEPTgt = genz.UEPTgt.TgtPFMSFM
+            ectl.field.MechUEPTgt = genz.UEPTgt.TgtPFMSFM
+            ectl.field.MediaUEPTgt = genz.UEPTgt.TgtPFMSFM
+            # Set Fault Injection Enable
+            ectl.field.ErrFaultInjEnb = 1 # Revisit: Always?
+            ces.EControl = ectl.val
+            self.control_write(ces,
+                        genz.ComponentErrorSignalStructure.EControl,
+                        sz=2, off=4)
+            # Set EControl2 UEP Target fields
+            # Revisit: Since Core.PwrMgrEnb already specifies Disabled/CID/GCID
+            # why does PwrUEPTgt also have CID/GCID?
+            ectl2 = genz.EControl2(ces.EControl2, ces)
+            ectl2.field.PwrUEPTgt = genz.UEPTgt.TgtPFMSFM
+            ces.EControl2 = ectl2.val
+            self.control_write(ces,
+                        genz.ComponentErrorSignalStructure.EControl2, sz=4)
+            # Get/Set C-Event/I-Event capabilities
+            cap1 = genz.ErrSigCAP1(ces.ErrSigCAP1, ces)
+            cap1ctl = genz.ErrSigCAP1Control(ces.ErrSigCAP1Control, ces)
+            if cap1.field.CEventInjSup:
+                cap1ctl.field.CEventInjEnb = 1
+            if cap1.field.IEventInjSup:
+                cap1ctl.field.IEventInjEnb = 1
+            ces.ErrSigCAP1Control = cap1ctl.val
+            # Revisit: switch doesn't like sz=2, off=6, because at
+            # least on orthus that turns into a 4-byte ControlWrite to
+            # a 2-byte-aligned addr
+            #self.control_write(ces,
+            #            genz.ComponentErrorSignalStructure.ErrSigCAP1Control,
+            #            sz=2, off=6)
+            self.control_write(ces,
+                        genz.ComponentErrorSignalStructure.ErrSigCAP1,
+                        sz=4, off=4)
+            # Set CErrorSigTgt/CErrorDetect
+            self.cerror_init(ces)
+            # If supported, set CEventSigTgt/CEventDetect
+            if cap1.field.CEventDetectSup:
+                self.cevent_init(ces)
+            # If supported, set IEventSigTgt/IEventDetect
+            if cap1.field.IEventDetectSup:
+                self.ievent_init(ces)
+            # IError setup is done by iface_init()
+            if not self.local_br:
+                # Set MV/MgmtVC/Iface
+                # Revisit: MultiRoute
+                pfm_rts = self.fab.routes.get_routes(self, self.fab.pfm)
+                ces.MgmtVC0 = 0 # Revisit: VC should come from route
+                ces.MgmtIface0 = pfm_rts[0][0].egress_iface.num
+                ces.MV0 = 1
+                self.control_write(ces,
+                            genz.ComponentErrorSignalStructure.MV0, sz=8)
+                # Set PFM UEP Mask
+                ces.PFMUEPMask = 0x01 # use MgmtVC/Iface0
+                self.control_write(ces,
+                            genz.ComponentErrorSignalStructure.PMUEPMask, sz=8)
+            # end if local_br
         # end with
 
     def switch_init(self, core):
@@ -1319,14 +1606,20 @@ class Component():
     def has_switch(self):
         return self.switch_dir is not None
 
-    def config_interface(self, iface, pfm, ingress_iface):
+    def config_interface(self, iface, pfm, ingress_iface, prev_comp):
         iface.update_peer_info()
         # get peer CState
         peer_cstate = iface.peer_cstate
+        if prev_comp:
+            prev_comp.cstate = peer_cstate
         msg = '{}: exploring interface{}, peer cstate={!s}, '.format(
             self.gcid, iface.num, peer_cstate)
         if iface.peer_inband_disabled:
             msg += 'peer inband management disabled - ignoring peer'
+            log.info(msg)
+            return
+        elif iface.boundary_interface:
+            msg += 'boundary interface - ignoring peer'
             log.info(msg)
             return
         if iface.peer_mgr_type == 0:  # Revisit: enum
@@ -1372,6 +1665,7 @@ class Component():
                 msg += ' additional path to {}'.format(comp)
                 log.info(msg)
             elif args.accept_cids:
+                # Revisit: add prev_comp handling
                 path = self.fab.make_path(peer_gcid)
                 comp = Component(iface.peer_cclass, self.fab, self.map, path,
                                  self.mgr_uuid, br_gcid=self.br_gcid,
@@ -1404,15 +1698,22 @@ class Component():
         # end if CUp
         if peer_cstate is CState.CCFG: # Note: not 'elif'
             dr = DirectedRelay(self, ingress_iface, iface)
-            comp = Component(iface.peer_cclass, self.fab, self.map, dr.path,
-                             self.mgr_uuid, dr=dr, br_gcid=self.br_gcid,
-                             netlink=self.nl, verbosity=self.verbosity)
-            peer_iface = Interface(comp, iface.peer_iface_num, iface)
-            iface.peer_iface = peer_iface
-            gcid = self.fab.assign_gcid(comp)
-            msg += 'assigned gcid={}'.format(gcid)
+            if prev_comp is None:
+                comp = Component(iface.peer_cclass, self.fab, self.map, dr.path,
+                                 self.mgr_uuid, dr=dr, br_gcid=self.br_gcid,
+                                 netlink=self.nl, verbosity=self.verbosity)
+                peer_iface = Interface(comp, iface.peer_iface_num, iface)
+                iface.peer_iface = peer_iface
+                gcid = self.fab.assign_gcid(comp)
+                msg += 'assigned gcid={}'.format(gcid)
+                self.fab.add_link(iface, peer_iface)
+            else: # have a prev_comp
+                comp = prev_comp
+                comp.set_dr(dr)
+                peer_iface = iface.peer_iface
+                gcid = comp.gcid
+                msg += 'reusing previously-assigned gcid={}'.format(gcid)
             log.info(msg)
-            self.fab.add_link(iface, peer_iface)
             route = self.fab.setup_bidirectional_routing(
                 pfm, comp, write_to_ssdt=False)
             try:
@@ -1425,14 +1726,17 @@ class Component():
                 comp.explore_interfaces(pfm, ingress_iface=peer_iface)
         # end if peer_cstate
 
-    def explore_interfaces(self, pfm, ingress_iface=None):
-        # examine all interfaces (except ingress) & init those components
-        for iface in self.interfaces:
+    def explore_interfaces(self, pfm, ingress_iface=None, explore_ifaces=None,
+                           prev_comp=None):
+        if explore_ifaces is None:
+            # examine all interfaces (except ingress) & init those components
+            explore_ifaces = self.interfaces
+        for iface in explore_ifaces:
             if iface == ingress_iface:
                 log.debug('{}: skipping ingress interface{}'.format(
                     self.gcid, iface.num))
             elif iface.usable:
-                self.config_interface(iface, pfm, ingress_iface)
+                self.config_interface(iface, pfm, ingress_iface, prev_comp)
             else:
                 log.info('{}: interface{} is not usable'.format(
                     self.gcid, iface.num))
@@ -1446,6 +1750,14 @@ class Component():
                                          verbosity=self.verbosity)
             cstatus = genz.CStatus(core.CStatus, core)
             self.cstate = CState(cstatus.field.CState)
+
+    def unreachable_comp(self, to, iface, route):
+        log.warning('{}: unreachable comp {} due to {} failure'.format(
+            self, to, iface))
+        # tear down route from "self" to "to"'
+        self.fab.teardown_routing(self, to, route)
+        # Revisit: finish this - notify llamas instances about
+        # unreachable resources
 
     def __repr__(self):
         return '{}({})'.format(self.__class__.__name__, self.gcid)
@@ -1501,9 +1813,40 @@ class LocalBridge(Bridge):
             # end for br_path
         # end for fab_path
 
+    def unreachable_comp(self, to, iface, route):
+        super().unreachable_comp(to, iface, route)
+        # remove "to" from /sys fabric
+        if to.dr is not None:
+            to.remove_fab_dr_comp()
+        else:
+            to.remove_fab_comp()
+
+
+# Decorator func to register with dispatcher
+# from https://stackoverflow.com/questions/4273998/dynamically-calling-nested-functions-based-on-arguments
+def register(dispatcher, *names):
+    def dec(f):
+        m_name = f.__name__
+        for name in names:
+            dispatcher[name] = m_name
+        return f
+    return dec
+
 class Fabric(nx.MultiGraph):
+    events = {} # UEP events dispatch dict
+
+    def link_weight(fr, to, edge_dict):
+        # for MultiGraph we have only one key, but we must lookup what it is
+        key = next(iter(edge_dict))
+        fr_iface = edge_dict[key][str(fr.uuid)]
+        to_iface = edge_dict[key][str(to.uuid)]
+        # return None for unusable links - DR interfaces are always usable
+        usable = fr_iface.usable and (to.dr is not None or to_iface.usable)
+        # Revisit: consider bandwidth, latency, LWR
+        return 1 if usable else None
+
     def __init__(self, nl, map, path, fab_uuid=None, grand_plan=None,
-                 random_cids=False, accept_cids=False, verbosity=0):
+                 random_cids=False, accept_cids=False, conf=None, verbosity=0):
         self.nl = nl
         self.map = map
         self.path = path
@@ -1512,6 +1855,7 @@ class Fabric(nx.MultiGraph):
         self.mgr_uuid = uuid4()
         self.random_cids = random_cids
         self.accept_cids = accept_cids
+        self.conf = conf
         self.verbosity = verbosity
         self.bridges = []      # indexed by bridge number
         self.components = {}   # key: comp.uuid
@@ -1598,13 +1942,13 @@ class Fabric(nx.MultiGraph):
         self.graph['pfm'] = pfm
 
     def shortest_path(self, fr: Component, to: Component) -> List[Component]:
-        return nx.shortest_path(self, fr, to)
+        return nx.shortest_path(self, fr, to, weight=Fabric.link_weight)
 
     def k_shortest_paths(self, fr: Component, to: Component,
                          k: int) -> List[List[Component]]:
         g = nx.Graph(self)  # Revisit: don't re-create g on every call
         return list(islice(nx.shortest_simple_paths(
-            g, fr, to, weight=None), k))
+            g, fr, to, weight=Fabric.link_weight), k))
 
     def route(self, fr: Component, to: Component) -> 'Route':
         # Revisit: edge weights, force start/end interface
@@ -1648,14 +1992,21 @@ class Fabric(nx.MultiGraph):
         return route
 
     def setup_bidirectional_routing(self, fr: Component, to: Component,
-                                    write_to_ssdt=True) -> 'Route':
+                                    write_to_ssdt=True, route=None) -> 'Route':
         if fr is to: # Revisit: loopback
             return None
-        route = self.setup_routing(fr, to) # always write fr ssdt
+        route = self.setup_routing(fr, to, route=route) # always write fr ssdt
         if route is not None:
             self.setup_routing(to, fr,
                                write_ssdt=write_to_ssdt, route=route.invert())
         return route
+
+    def teardown_routing(self, fr: Component, to: Component,
+                         route: 'Route') -> None:
+        # Revisit: tear down HW route from "fr" to "to",
+        # Revisit: but some of the components may not be reachable from PFM
+        # remove route from routes list
+        self.routes.remove(fr, to, route)
 
     def has_link(self, fr_iface: Interface, to_iface: Interface) -> bool:
         fr = fr_iface.comp
@@ -1686,6 +2037,88 @@ class Fabric(nx.MultiGraph):
         self.path = path
         self.fabnum = component_num(path)
 
+    def iface_unusable(self, iface):
+        # lookup impacted routes
+        impacted = self.routes.impacted(iface)
+        for rt in impacted:
+            log.debug('route {} impacted by unusable {}'.format(rt, iface))
+            # Revisit: route around failed link (if possible)
+            try:
+                new_rt = self.route(rt.fr, rt.to)
+                # Revisit: finish this
+            except nx.exception.NetworkXNoPath:
+                # no valid route anymore, remove unreachable comp
+                rt.fr.unreachable_comp(rt.to, iface, rt)
+        # end for
+
+    @register(events, 'IfaceErr')
+    def iface_error(self, key, br, sender, iface, pkt):
+        es = genz.IErrorES(pkt['ES'])
+        log.info('{}: {}:{}({}) from {} on {}'.format(br, key, es.errName,
+                                                es.errSeverity, sender, iface))
+        status = iface.phy_init() # get PHY status (no actual init)
+        state = iface.iface_state()
+        # Revisit: Containment and RootCause
+        if not iface.usable:
+            self.iface_unusable(iface)
+        return { key: 'ok' }
+
+    @register(events, 'WarmIfaceReset', 'FullIfaceReset')
+    def iface_reset(self, key, br, sender, iface, pkt):
+        log.info('{}: {} from {} on {}'.format(br, key, sender, iface))
+        status = iface.phy_init() # get PHY status (no actual init)
+        state = iface.iface_state()
+        if not iface.usable:
+            self.iface_unusable(iface)
+        return { key: 'ok' }
+
+    @register(events, 'NewPeerComp')
+    def new_peer_comp(self, key, br, sender, iface, pkt):
+        log.info('{}: {} from {} on {}'.format(br, key, sender, iface))
+        iup = iface.iface_init()
+        # Revisit: check iup
+        # find previous Component (if there is one)
+        prev_comp = iface.peer_comp
+        sender.explore_interfaces(self.pfm, ingress_iface=None, # Revisit
+                                  explore_ifaces=[iface], prev_comp=prev_comp)
+        return { key: 'ok' }
+
+    def dispatch(self, key, *args, **kwargs):
+        try:
+            ret = getattr(self, self.events[key])(key, *args, **kwargs)
+        except KeyError:
+            log.warning('no handler for UEP {}'.format(key))
+            ret = { key: 'no handler' }
+        return ret
+
+    def handle_uep(self, body):
+        mgr_uuid = UUID(body.get('GENZ_A_UEP_MGR_UUID'))
+        # Revisit: check mgr_uuid against self.mgr_uuid
+        br_gcid = GCID(val=body.get('GENZ_A_UEP_BRIDGE_GCID'))
+        br = self.comp_gcids[br_gcid]
+        flags = body.get('GENZ_A_UEP_FLAGS')
+        local = flags & 0x10 # Revisit: enum?
+        ts_sec = body.get('GENZ_A_UEP_TS_SEC')
+        ts_nsec = body.get('GENZ_A_UEP_TS_NSEC')
+        # Revisit: do something with ts_sec/ts_nsec
+        pkt = body.get('GENZ_A_UEP_PKT')  # dict, not genz.Packet
+        if local:
+            sender = br
+        else:
+            gc = pkt['GC']
+            scid = pkt['SCID']
+            sender_gcid = GCID(cid=scid, sid=(pkt['SSID'] if gc else
+                                              br.gcid.sid))
+            sender = self.comp_gcids[sender_gcid]
+        if pkt['IV']:
+            iface = sender.interfaces[pkt['IfaceID']]
+        else:
+            iface = None
+        if args.keyboard:
+            set_trace()
+        # dispatch to event handler based on EventName
+        return self.dispatch(pkt['EventName'], br, sender, iface, pkt)
+
     def to_json(self):
         nl = nx.node_link_data(self)
         js = json.dumps(nl, indent=2) # Revisit: indent
@@ -1696,9 +2129,9 @@ class RouteElement():
                  ingress_iface: Interface, egress_iface: Interface,
                  to_iface: Interface = None):
         self.comp = comp
-        self.ingress_iface = ingress_iface
-        self.egress_iface = egress_iface
-        self.to_iface = to_iface
+        self.ingress_iface = ingress_iface # optional: which lprt to write
+        self.egress_iface = egress_iface   # required
+        self.to_iface = to_iface           # optional: the peer of egress_iface
         self.dr = False
 
     @property
@@ -1744,6 +2177,7 @@ class Route():
             raise(IndexError)
         self._path = path
         self._elems = []
+        self.ifaces = set()
         ingress_iface = None
         for fr, to in moving_window(2, path):
             # Revisit: MultiGraph
@@ -1752,6 +2186,8 @@ class Route():
             to_iface = edge_data[str(to.uuid)]
             elem = RouteElement(fr, ingress_iface, egress_iface, to_iface)
             self._elems.append(elem)
+            self.ifaces.add(egress_iface)
+            self.ifaces.add(to_iface)
             ingress_iface = to_iface
 
     @property
@@ -1779,6 +2215,9 @@ class Route():
     def __iter__(self):
         return iter(self._elems)
 
+    def __hash__(self):
+        return hash(repr(self))
+
     def __eq__(self, other): # all elements in list must match
         return self._elems == other._elems
 
@@ -1792,10 +2231,26 @@ class Route():
 class Routes():
     def __init__(self, fab_uuid=None):
         self.fab_uuid = fab_uuid
-        self.fr_to = {}
+        self.fr_to = {}  # key: (fr:Component, to:Component)
+        self.ifaces = {} # key: Interface
 
     def get_routes(self, fr: Component, to: Component) -> List[Route]:
         return self.fr_to[(fr, to)]
+
+    def add_ifaces(self, route: Route) -> None:
+        for iface in route.ifaces:
+            try:
+                rts = self.ifaces[iface]
+            except KeyError:
+                self.ifaces[iface] = rts = set()
+            rts.add(route)
+        #end for
+
+    def remove_ifaces(self, route: Route) -> None:
+        for iface in route.ifaces:
+            rts = self.ifaces[iface]
+            rts.discard(route)
+        #end for
 
     def add(self, fr: Component, to: Component, route: Route) -> None:
         try:
@@ -1805,12 +2260,13 @@ class Routes():
                     return
             # end for
             # not in list - add it - at front if shorter, else at end
-            if route < rts[0]:
+            if len(rts) > 0 and route < rts[0]:
                 rts.insert(0, route)
             else:
                 rts.append(route)
         except KeyError: # not in dict - add
             self.fr_to[(fr, to)] = [ route ]
+        self.add_ifaces(route)
 
     def remove(self, fr: Component, to: Component, route: Route) -> bool:
         try:
@@ -1818,7 +2274,17 @@ class Routes():
             rts.remove(route)
         except (KeyError, ValueError):
             return False
+        self.remove_ifaces(route)
         return True
+
+    def impacted(self, iface: Interface):
+        try:
+            # return a copy of the ifaces[iface] set in order to avoid
+            # RuntimeError: Set changed size during iteration
+            # in iface_unusable()
+            return self.ifaces[iface].copy()
+        except KeyError:
+            return []
 
     def to_json(self):
         routes_dict = {}
@@ -1971,6 +2437,7 @@ def main():
         fab_uuid = uuid4()
         data['fabric_uuid'] = str(fab_uuid)
         data['add_resources'] = []
+        data['boundary_interfaces'] = []
         conf.write_conf_file(data)
     log.debug('conf={}'.format(conf))
     fabrics = {}
@@ -1982,7 +2449,7 @@ def main():
     for fab_path in fab_paths:
         fab = Fabric(nl, map, fab_path, random_cids=args.random_cids,
                      accept_cids=args.accept_cids, fab_uuid=fab_uuid,
-                     verbosity=args.verbosity)
+                     conf=conf, verbosity=args.verbosity)
         fabrics[fab_path] = fab
         fab.fab_init()
 

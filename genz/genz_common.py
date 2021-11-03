@@ -21,7 +21,7 @@
 
 from ctypes import *
 import uuid
-from enum import IntEnum
+from enum import Enum, IntEnum, auto
 
 c_u8  = c_ubyte
 c_u16 = c_ushort
@@ -93,6 +93,11 @@ class UEPTgt(IntEnum):
 class ZMMUType(IntEnum):
     ReqZMMU = 0
     RspZMMU = 1
+
+class ErrSeverity(Enum):
+    NonCritical = auto(),
+    Caution = auto(),
+    Critical = auto()
 
 class GCID():
     def __init__(self, val=None, sid=0, cid=None, str=None):

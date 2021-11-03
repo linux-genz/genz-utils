@@ -980,6 +980,41 @@ class IErrorTrig(IError):
 class IErrorFaultInj(IError):
     pass # Bit 2: RsvdZ, All other bits: WO
 
+class IErrorES(SpecialField, Union):
+    class IErrorESFields(Structure):
+        _fields_ = [('BitK',                       c_u32,  4),
+                    ('Containment',                c_u32,  1),
+                    ('RootCauseAvail',             c_u32,  1),
+                    ('RootCause',                  c_u32,  7),
+                    ('Rv',                         c_u32, 19),
+                    ]
+
+    _fields_    = [('field', IErrorESFields), ('val', c_u32)]
+
+    # Revisit: names here duplicate class IErrorFields names
+    iErrorData = { 0: ('ExcessivePHYRetraining',      ErrSeverity.Caution),
+                   1: ('NonTransientLinkErr',         ErrSeverity.Critical),
+                   2: ('IfaceContainment',            ErrSeverity.Critical),
+                   3: ('IfaceAKEYViolation',          ErrSeverity.Critical),
+                   4: ('IfaceFCFwdProgressViolation', ErrSeverity.Caution),
+                   5: ('UnexpectedPHYFailure',        ErrSeverity.Critical),
+                   6: ('P2PSECE',                     ErrSeverity.Critical),
+                   7: ('IfaceAE',                     ErrSeverity.Critical),
+                   8: ('SwitchPktRelayFailure',       ErrSeverity.Caution),
+                  }
+
+    def __init__(self, value, parent=None, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+    @property
+    def errName(self):
+        return iErrorData[self.field.BitK][0]
+
+    @property
+    def errSeverity(self):
+        return iErrorData[self.field.BitK][1]
+
 class IErrorSigTgt(SpecialField, Union):
     class IErrorSigTgtFields(Structure):
         _fields_ = [('ExcessivePHYRetraining',           c_u16,  3),
@@ -3487,9 +3522,32 @@ class ExplicitHdr(Packet):
             name = 'Unknown'
         return name
 
+    def to_json(self):
+        jd = { 'name': type(self).__name__,
+               'OCL': self.OCL,
+               'OpCode': self.OpCode,
+               'LEN': self.LEN,
+               'VC': self.VC,
+               'PCRC': self.PCRC,
+               'DCID': self.DCID,
+               'SCID': self.SCID,
+               'ECRC': self.ECRC,
+               'AKey': self.AKey,
+               'Deadline': self.Deadline,
+               'ECN': self.ECN,
+               'GC': self.GC,
+               'NH': self.NH,
+               'PM': self.PM,
+               # Revisit: finish this
+              }
+        noTag = getattr(self, 'noTag', False)
+        if not noTag:
+            jd['Tag'] = self.Tag
+        return jd
+
     def __str__(self):
         noTag = getattr(self, 'noTag', False)
-        r = ('{}' if self.csv else '{:>22s}').format(type(self).__name__)
+        r = ('{}' if self.csv else '{:>23s}').format(type(self).__name__)
         if self.csv or type(self).__name__[0:8] != 'Explicit':
             r += (',{},{}' if self.csv else '[{:02x}:{:02x}]').format(self.OCL, self.OpCode)
         else:
@@ -4008,6 +4066,23 @@ class ControlUnsolicitedEventPkt(ExplicitHdr):
     @property
     def RCSID(self):
         return self.RCSIDh << 8 | self.RCSIDl
+
+    def to_json(self):
+        jds = super().to_json()
+        jd = { 'Event': self.Event,
+               'EventName': (self.eventName[self.Event] if self.Event
+                             in self.eventName else 'Reserved'),
+               'CV': self.CV,
+               'SV': self.SV,
+               'IV': self.IV,
+               'IfaceID': self.IfaceID,
+               'EventID': self.EventID,
+               'ES': self.ES,
+               'RCCID': self.RCCID,
+               'RCSID': self.RCSID,
+               }
+
+        return jds | jd
 
     def __str__(self):
         r = super().__str__()
