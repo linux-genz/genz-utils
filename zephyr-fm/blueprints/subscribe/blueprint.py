@@ -62,7 +62,7 @@ def add_subscribe():
             for br in bridges:
                 Journal.mainapp.add_callback[br] = callback_endpoint
                 try:
-                    add = Journal.mainapp.conf.add[br]
+                    add = Journal.mainapp.conf.get_resources(br)
                 except KeyError:
                     log.debug('bridge {} has no Conf resources'.format(br))
                     continue

@@ -81,6 +81,8 @@ def send_resource(resource: dict, endpoints: list):
     if resource is None:
         response['error'] = 'Missing "resource" object! (the one describing the resource..)'
         return flask.make_response(flask.jsonify(response), 400)
+    else:
+        response['instance_uuids'] = [ res['instance_uuid'] for res in resource['resources'] ]
 
     try:
         jsonschema.validate(resource, schema=get_resource_schema())

@@ -58,6 +58,25 @@ def topology():
     return flask.make_response(fab.to_json(), 200)
 
 
+@Journal.BP.route('/%s/resources' % (Journal.name), methods=['GET'])
+def resources():
+    """
+        Accepts GET request and returns a json body describing the fabric
+    resources (and the fabric_uuid).
+    Returned body model:
+    {
+        'fab_uuid' : 'string',
+        'fab_resources': [ Resources ]
+    }
+
+    """
+    global Journal
+    mainapp = Journal.mainapp
+    fab = mainapp.conf.fab
+
+    return flask.make_response(fab.resources.to_json(), 200)
+
+
 @Journal.BP.route('/%s/routes' % (Journal.name), methods=['GET'])
 def routes():
     """

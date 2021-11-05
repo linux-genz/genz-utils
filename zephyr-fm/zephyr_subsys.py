@@ -1868,6 +1868,7 @@ class Fabric(nx.MultiGraph):
         self.refill_gcids = True
         self.nonce_list = [ 0 ]
         self.routes = Routes(fab_uuid=fab_uuid)
+        self.resources = Resources(self)
         super().__init__(fab_uuid=self.fab_uuid, mgr_uuids=[self.mgr_uuid])
         log.info('fabric: {}, num={}, fab_uuid={}, mgr_uuid={}'.format(
             path, self.fabnum, self.fab_uuid, self.mgr_uuid))
@@ -2304,10 +2305,110 @@ class Routes():
         r += 'routes: {}'.format(self.fr_to)
         return '{' + r + '}'
 
+class Resource():
+    def __init__(self, res_list: 'ResourceList', res_dict: dict):
+        self.res_list = res_list
+        self.res_dict = res_dict
+        if res_dict['instance_uuid'] == '???':
+                res_dict['instance_uuid'] = str(uuid4())
+        self.instance_uuid = UUID(res_dict['instance_uuid'])
+        # Revisit: RKeys
+
+    @property
+    def producer(self):
+        return self.res_list.producer
+
+    @property
+    def consumers(self):
+        return self.res_list.consumers
+
+    def to_json(self):
+        return self.res_dict
+
+    def __hash__(self):
+        return hash(self.instance_uuid)
+
+
+class ResourceList():
+    def __init__(self, fab, resources: List[Resource], res_dict: dict):
+        self.consumers = set()     # set of Components
+        self.resources = resources # list of Resources
+        self.res_dict = {}         # dict for to_json()
+        # Revisit: exception handling
+        try:
+            self.producer = fab.cuuid_serial[res_dict['producer']]
+        except KeyError:
+            log.warning('{}: producer component {} not found in fabric{}'.format(
+                self.file, res_dict['producer'], fab.fabnum))
+            return
+        self.res_dict['gcid']     = self.producer.gcid.val
+        self.res_dict['cclass']   = self.producer.cclass
+        self.res_dict['fru_uuid'] = str(self.producer.fru_uuid)
+        self.res_dict['mgr_uuid'] = str(self.producer.mgr_uuid)
+        self.res_dict['resources'] = [ res.to_json() for res in self.resources ]
+        for cons in res_dict['consumers']:
+            try:
+                cons_comp = fab.cuuid_serial[cons]
+            except KeyError:
+                log.warning('{}: consumer component {} not found in fabric{}'.format(
+                    self.file, cons, fab.fabnum))
+                continue
+            self.consumers.add(cons_comp)
+            # Revisit: consider delaying routing until llamas connects
+            route = fab.setup_bidirectional_routing(cons_comp, self.producer)
+            # Revisit: save routes for later teardown requests?
+        # end for con
+
+    def append(self, res):
+        self.resources.append(res)
+        self.res_dict['resources'].append(res.to_json())
+
+    def to_json(self):
+        return self.res_dict
+
+    def __iter__(self):
+        return iter(self.resources)
+
+
+class Resources():
+    def __init__(self, fab: Fabric, resources: List[Resource] = []):
+        self.fab = fab
+        self.by_producer = {} # key: producer Component, val: ResourceList set
+        self.by_consumer = {} # key: consumer Component, val: ResourceList set
+        self.by_instance_uuid = {} # key: instance UUID, val: Resource
+        for res in resources:
+            self.add(res)
+
+    def add(self, res: Resource) -> None:
+        self.by_instance_uuid[res.instance_uuid] = res
+        res_list = res.res_list
+        try:
+            self.by_producer[res.producer].add(res_list)
+        except KeyError:
+            self.by_producer[res.producer] = set([res_list])
+        for cons in res.consumers:
+            try:
+                self.by_consumer[cons].add(res_list)
+            except KeyError:
+                self.by_consumer[cons] = set([res_list])
+        # end for
+
+    def remove(self, res: Resource) -> None:
+        del self.by_instance_uuid[res.instance_uuid]
+        res_list = res.res_list
+        self.by_producer[res.producer].remove(res_list)
+        for cons in res.consumers:
+            self.by_consumer[cons].remove(res_list)
+
+    def to_json(self):
+        return { 'fab_uuid': str(self.fab.fab_uuid),
+                 'fab_resources': [ res.to_json() for prod in self.by_producer.values() for res in prod ]
+                 }
+
+
 class Conf():
     def __init__(self, file):
         self.file = file
-        self.add = {}
         self.fab = None  # set by add_resources()
 
     def read_conf_file(self):
@@ -2320,40 +2421,17 @@ class Conf():
         with open(self.file, 'w') as f:
             json.dump(self.data, f, indent=2)
 
-    def add_resource(self, conf_add):
+    def add_resource(self, conf_add) -> dict:
         fab = self.fab
-        add = self.add
-        add_args = {}
-        try:
-            prod_comp = fab.cuuid_serial[conf_add['producer']]
-        except KeyError:
-            log.warning('{}: producer component {} not found in fabric{}'.format(
-                self.file, conf_add['producer'], fab.fabnum))
-            return
-        add_args['gcid']     = prod_comp.gcid.val
-        add_args['cclass']   = prod_comp.cclass
-        add_args['fru_uuid'] = str(prod_comp.fru_uuid)
-        add_args['mgr_uuid'] = str(prod_comp.mgr_uuid)
-        for res in conf_add['resources']:
-            res['instance_uuid'] = str(uuid4())
+        res_list = ResourceList(fab, [], conf_add)
+        for res_dict in conf_add['resources']:
+            res = Resource(res_list, res_dict)
+            res_list.append(res)
+            fab.resources.add(res)
             # Revisit: set up responder ZMMU if res['type'] is DATA (1)
-        add_args['resources'] = conf_add['resources']
-        for con in conf_add['consumers']:
-            if not con in add:
-                add[con] = []
-            add[con].append(add_args)
-            try:
-                con_comp = fab.cuuid_serial[con]
-            except KeyError:
-                log.warning('{}: consumer component {} not found in fabric{}'.format(
-                    self.file, con, fab.fabnum))
-                continue
-            # Revisit: consider delaying routing until llamas connects
-            route = fab.setup_bidirectional_routing(con_comp, prod_comp)
-        # end for con
-        return add_args
+        return res_list.to_json()
 
-    def add_resources(self, fab):
+    def add_resources(self, fab) -> None:
         self.fab = fab
         add_res = self.data.get('add_resources', [])
         if len(add_res) == 0:
@@ -2361,7 +2439,11 @@ class Conf():
         log.info('adding resources from {}'.format(self.file))
         for conf_add in add_res:
             self.add_resource(conf_add)
-        return self.add
+
+    def get_resources(self, cuuid_serial) -> List[ResourceList]:
+        fab = self.fab
+        consumer = fab.cuuid_serial[cuuid_serial]
+        return [ res.to_json() for res in fab.resources.by_consumer[consumer] ]
 
     def __repr__(self):
         return 'Conf(' + repr(self.data) + ')'
