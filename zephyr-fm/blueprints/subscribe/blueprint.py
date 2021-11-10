@@ -74,3 +74,49 @@ def add_subscribe():
     response['status'] = status
 
     return flask.make_response(flask.jsonify(response), code)
+
+@Journal.BP.route('/%s/remove_event' % (Journal.name), methods=['POST'])
+def remove_subscribe():
+    """
+        Subscribe to a Remove event.
+    """
+    response = {}
+    status = 'nothing'
+    code = 200
+    body = flask.request.get_json()
+    if not body:
+        body = flask.request.form
+
+    callback_endpoint = body.get('callback', None)
+    endpoint_alias = body.get('alias', None)
+    bridges = body.get('bridges', [])
+    if not endpoint_alias:
+        endpoint_alias = callback_endpoint
+
+    if callback_endpoint is None:
+        response['error'] = 'No callback in body!\n%s' % body
+        status = 'error'
+        code = 400
+    elif len(bridges) == 0:
+        response['error'] = 'No bridges in body!\n%s' % body
+        status = 'error'
+        code = 400
+    else:
+        if endpoint_alias in Journal.mainapp.remove_callback:
+            status = 'Endpoint alias "%s" already in the list.' % endpoint_alias
+            code = 403
+        elif callback_endpoint in Journal.mainapp.remove_callback.values():
+            status = 'Endpoint "%s" already in the list.' % callback_endpoint
+            code = 403
+        else:
+            status = 'Callback endpoint %s added' % callback_endpoint
+            if endpoint_alias != callback_endpoint:
+                status = '%s with the alias name "%s"' % (status, endpoint_alias)
+
+            Journal.mainapp.remove_callback[endpoint_alias] = callback_endpoint
+            for br in bridges:
+                Journal.mainapp.remove_callback[br] = callback_endpoint
+        log.info('subscribe/remove_event: %s' % status)
+    response['status'] = status
+
+    return flask.make_response(flask.jsonify(response), code)

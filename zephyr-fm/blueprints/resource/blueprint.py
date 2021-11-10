@@ -68,6 +68,65 @@ def create_resource():
     return resp
 
 
+@Journal.BP.route('/%s/remove' % (Journal.name), methods=['POST'])
+def remove_resource():
+    """
+        Accepts POST request with a json body describing the resource and the
+    fabric_uuid the resource belongs to.
+    Body model:
+    {
+        'fabric_uuid' : 'string',
+        'resource'    : 'object'
+    }
+
+    Refer to "get_resource_schema()" for the "resource" model
+    """
+    global Journal
+    mainapp = Journal.mainapp
+    body = flask.request.get_json()
+
+    if body is None:
+        msg = { 'error ' : 'body is None'}
+        return flask.make_response(flask.jsonify(msg), 400)
+
+    resource = body.get('resource', None)
+    fabric_uuid = body.get('fabric_uuid', None)
+
+    # Check that the fabric_uuid matches ours
+    if fabric_uuid != mainapp.conf.data['fabric_uuid']:
+        msg = { 'error' : 'Incorrect fabric_uuid: {}.'.format(fabric_uuid) }
+        return flask.make_response(flask.jsonify(msg), 404)
+
+    # Validate resource against schema
+    try:
+        jsonschema.validate(resource, schema=get_resource_schema())
+    except Exception as err:
+        msg = { 'error' : 'jsonschema: {}'.format(str(err)) }
+        return flask.make_response(flask.jsonify(msg), 400)
+
+    try:
+        rm_res = mainapp.conf.remove_resource(resource)
+    except Exception as err:
+        msg = { 'error' : 'remove_resource: {}'.format(str(err)) }
+        return flask.make_response(flask.jsonify(msg), 400)
+
+    endpoints = []
+    for con in resource['consumers']:
+        try:
+            callback_endpoint = mainapp.remove_callback[con]
+            endpoints.append(callback_endpoint)
+        except KeyError:
+            log.debug('consumer {} has no subscribed endpoint'.format(con))
+
+    # If nobody subscribed to this "remove" event, then nobody will be notified.
+    if len(endpoints) == 0:
+        msg = { 'warning' : 'Nothing happened. There are no subscribers to this event.' }
+        return flask.make_response(flask.jsonify(msg), 304)
+
+    resp = send_resource(rm_res, endpoints)
+    return resp
+
+
 def send_resource(resource: dict, endpoints: list):
     """
         Makes an http call to each of the the "endpoints" urls.

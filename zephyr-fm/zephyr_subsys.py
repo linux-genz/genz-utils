@@ -81,6 +81,7 @@ class FMServer(flask_fat.APIBaseline):
         super().__init__(*args, **kwargs)
         self.conf = conf
         self.add_callback = {}
+        self.remove_callback = {}
 
 def cmd_add(url, **args):
     from datetime import datetime
@@ -1999,11 +2000,11 @@ class Fabric(nx.MultiGraph):
                                     write_to_ssdt=True, route=None) -> 'Route':
         if fr is to: # Revisit: loopback
             return None
-        route = self.setup_routing(fr, to, route=route) # always write fr ssdt
-        if route is not None:
-            self.setup_routing(to, fr,
-                               write_ssdt=write_to_ssdt, route=route.invert())
-        return route
+        route1 = self.setup_routing(fr, to, route=route) # always write fr ssdt
+        route2 = (self.setup_routing(to, fr, write_ssdt=write_to_ssdt,
+                                     route=route1.invert())
+                  if route1 is not None else None)
+        return (route1, route2)
 
     def teardown_routing(self, fr: Component, to: Component,
                          route: 'Route') -> None:
@@ -2331,6 +2332,7 @@ class Resource():
 
 class ResourceList():
     def __init__(self, fab, resources: List[Resource], res_dict: dict):
+        self.fab = fab
         self.consumers = set()     # set of Components
         self.resources = resources # list of Resources
         self.res_dict = {}         # dict for to_json()
@@ -2346,22 +2348,47 @@ class ResourceList():
         self.res_dict['fru_uuid'] = str(self.producer.fru_uuid)
         self.res_dict['mgr_uuid'] = str(self.producer.mgr_uuid)
         self.res_dict['resources'] = [ res.to_json() for res in self.resources ]
-        for cons in res_dict['consumers']:
-            try:
-                cons_comp = fab.cuuid_serial[cons]
-            except KeyError:
-                log.warning('{}: consumer component {} not found in fabric{}'.format(
-                    self.file, cons, fab.fabnum))
-                continue
-            self.consumers.add(cons_comp)
-            # Revisit: consider delaying routing until llamas connects
-            route = fab.setup_bidirectional_routing(cons_comp, self.producer)
-            # Revisit: save routes for later teardown requests?
-        # end for con
+        self.add_consumers(res_dict['consumers'])
 
     def append(self, res):
         self.resources.append(res)
         self.res_dict['resources'].append(res.to_json())
+
+    def add_consumers(self, consumers):
+        for cons in consumers:
+            try:
+                cons_comp = self.fab.cuuid_serial[cons]
+            except KeyError:
+                log.warning('{}: consumer component {} not found in fabric{}'.format(
+                    self.file, cons, self.fab.fabnum))
+                continue
+            if cons_comp not in self.consumers:
+                self.consumers.add(cons_comp)
+                # Revisit: consider delaying routing until llamas connects
+                routes = self.fab.setup_bidirectional_routing(
+                    cons_comp, self.producer)
+                # Revisit: save routes for later teardown requests?
+        # end for cons
+
+    def remove_consumers(self, res: Resource, consumers):
+        for cons in consumers:
+            try:
+                cons_comp = self.fab.cuuid_serial[cons]
+            except KeyError:
+                log.warning('{}: consumer component {} not found in fabric{}'.format(
+                    self.file, cons, self.fab.fabnum))
+                continue
+            if cons_comp in self.consumers:
+                self.consumers.discard(cons_comp)
+                # Revisit: fix this
+                # Routes need reference counting (per resource)
+                #routes = self.fab.setup_bidirectional_routing(
+                #    cons_comp, self.producer)
+                # Revisit: use saved routes?
+            else:
+                log.warning('{}: component {} not a consumer of resource {}'.format(
+                    self.file, cons, res))
+        # end for cons
 
     def to_json(self):
         return self.res_dict
@@ -2401,9 +2428,11 @@ class Resources():
             self.by_consumer[cons].remove(res_list)
 
     def to_json(self):
-        return { 'fab_uuid': str(self.fab.fab_uuid),
+        res_dict = { 'fab_uuid': str(self.fab.fab_uuid),
                  'fab_resources': [ res.to_json() for prod in self.by_producer.values() for res in prod ]
-                 }
+                    }
+        js = json.dumps(res_dict, indent=2) # Revisit: indent
+        return js
 
 
 class Conf():
@@ -2425,10 +2454,16 @@ class Conf():
         fab = self.fab
         res_list = ResourceList(fab, [], conf_add)
         for res_dict in conf_add['resources']:
-            res = Resource(res_list, res_dict)
-            res_list.append(res)
-            fab.resources.add(res)
-            # Revisit: set up responder ZMMU if res['type'] is DATA (1)
+            if res_dict['instance_uuid'] == '???': # new resource
+                res = Resource(res_list, res_dict)
+                res_list.append(res)
+                fab.resources.add(res)
+                # Revisit: set up responder ZMMU if res['type'] is DATA (1)
+            else: # modification of existing resource - add consumers
+                instance_uuid = UUID(res_dict['instance_uuid'])
+                res = fab.resources.by_instance_uuid[instance_uuid]
+                res_list = res.res_list
+                res_list.add_consumers(conf_add['consumers'])
         return res_list.to_json()
 
     def add_resources(self, fab) -> None:
@@ -2439,6 +2474,18 @@ class Conf():
         log.info('adding resources from {}'.format(self.file))
         for conf_add in add_res:
             self.add_resource(conf_add)
+
+    def remove_resource(self, conf_rm) -> dict:
+        fab = self.fab
+        for res_dict in conf_rm['resources']:
+            if res_dict['instance_uuid'] == '???': # unknown resource
+                log.warning('remove resource request missing instance_uuid')
+            else: # modification of existing resource - remove consumers
+                instance_uuid = UUID(res_dict['instance_uuid'])
+                res = fab.resources.by_instance_uuid[instance_uuid]
+                res_list = res.res_list
+                res_list.remove_consumers(res, conf_rm['consumers'])
+        return res_list.to_json()
 
     def get_resources(self, cuuid_serial) -> List[ResourceList]:
         fab = self.fab
