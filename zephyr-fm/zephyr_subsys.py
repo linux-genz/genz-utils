@@ -45,6 +45,7 @@ from importlib import import_module
 from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
 from middleware.netlink_mngr import NetlinkManager
 from typing import List
+from threading import Thread
 from pdb import set_trace, post_mortem
 import traceback
 
@@ -83,6 +84,18 @@ class FMServer(flask_fat.APIBaseline):
         self.add_callback = {}
         self.remove_callback = {}
 
+    def get_endpoints(self, consumers):
+        add_endpoints = []
+        rm_endpoints = []
+        for con in consumers:
+            try:
+                add_endpoints.append(self.add_callback[con])
+                rm_endpoints.append(self.remove_callback[con])
+            except KeyError:
+                log.debug('consumer {} has no subscribed endpoint'.format(con))
+        # end for
+        return (add_endpoints, rm_endpoints)
+
 def cmd_add(url, **args):
     from datetime import datetime
     data = {
@@ -108,7 +121,11 @@ class Interface():
         self.hvs = None
         self.lprt = None
         self.vcat = None
-        self.istate = IState.IDown # default until we can read actual state
+        # defaults until we can read actual state
+        self.istate = IState.IDown
+        self.phy_status = PHYOpStatus.PHYDown
+        self.phy_tx_lwr = 0
+        self.phy_rx_lwr = 0
 
     def setup_paths(self, prefix):
         self._prefix = prefix
@@ -612,6 +629,8 @@ class Component():
         self.req_vcat = None
         self.rsp_vcat = None
         self.rsp_page_grid_ps = 0
+        self.ssdt_routes = 0
+        self.lprt_routes = 0
         fab.components[self.uuid] = self
         fab.add_node(self, instance_uuid=self.uuid, cclass=self.cclass,
                      mgr_uuid=self.mgr_uuid)
@@ -801,6 +820,8 @@ class Component():
     # Returns True if component is usable - is C-Up/C-LP/C-DLP, not C-Down
     def comp_init(self, pfm, prefix='control', ingress_iface=None):
         log.debug('comp_init for {}'.format(self))
+        if args.keyboard > 1:
+            set_trace()
         self.usable = False  # Revisit: move to __init__()
         if self.local_br:
             self.br_gcid = self.gcid
@@ -1002,6 +1023,7 @@ class Component():
             # Revisit: set MaxPwrCtl (to NPWR?)
             # invalidate SSDT (except PFM CID written earlier)
             rows, cols = self.ssdt_size(prefix=prefix)
+            self.ssdt_routes = cols
             for cid in range(0, rows):
                 if cid != pfm.gcid.cid or ingress_iface is None:
                     for rt in range(0, cols):
@@ -1249,11 +1271,19 @@ class Component():
             # IError setup is done by iface_init()
             if not self.local_br:
                 # Set MV/MgmtVC/Iface
-                # Revisit: MultiRoute
                 pfm_rts = self.fab.routes.get_routes(self, self.fab.pfm)
                 ces.MgmtVC0 = 0 # Revisit: VC should come from route
                 ces.MgmtIface0 = pfm_rts[0][0].egress_iface.num
                 ces.MV0 = 1
+                for i in range(0, len(pfm_rts)):
+                    if pfm_rts[i][0].egress_iface.num != ces.MgmtIface0:
+                        # an HA route using a different egress_iface
+                        ces.MgmtVC1 = 0 # Revisit: VC should come from route
+                        ces.MgmtIface1 = pfm_rts[i][0].egress_iface.num
+                        ces.MV1 = 1
+                        break
+                    # end if
+                # end for
                 self.control_write(ces,
                             genz.ComponentErrorSignalStructure.MV0, sz=8)
                 # Set PFM UEP Mask
@@ -1278,6 +1308,7 @@ class Component():
             switch.SwitchOpCTL = sw_op_ctl.val
             self.control_write(
                 switch, genz.ComponentSwitchStructure.SwitchCAP1Control, sz=8)
+            self.lprt_routes = switch.MaxRoutes
         # end with
 
     def rsp_page_grid_init(self, core, valid=0):
@@ -1760,8 +1791,6 @@ class Component():
             self, to, iface))
         # tear down route from "self" to "to"'
         self.fab.teardown_routing(self, to, route)
-        # Revisit: finish this - notify llamas instances about
-        # unreachable resources
 
     def __repr__(self):
         return '{}({})'.format(self.__class__.__name__, self.gcid)
@@ -1784,6 +1813,11 @@ class MultiClass(Component):
 
 class Bridge(Component):
     cclasses = (0x14, 0x15)
+
+    def unreachable_comp(self, to, iface, route):
+        super().unreachable_comp(to, iface, route)
+        # Revisit: finish this - notify llamas instance about
+        # unreachable resources
 
 class LocalBridge(Bridge):
     def __init__(self, *args, brnum, **kwargs):
@@ -1952,6 +1986,14 @@ class Fabric(nx.MultiGraph):
     def k_shortest_paths(self, fr: Component, to: Component,
                          k: int) -> List[List[Component]]:
         g = nx.Graph(self)  # Revisit: don't re-create g on every call
+        # Revisit: MultiGraph routes
+        return list(islice(nx.shortest_simple_paths(
+            g, fr, to, weight=Fabric.link_weight), k))
+
+    def all_shortest_paths(self, fr: Component, to: Component,
+                           k: int) -> List[List[Component]]:
+        g = nx.Graph(self)  # Revisit: don't re-create g on every call
+        # Revisit: MultiGraph routes
         return list(islice(nx.shortest_simple_paths(
             g, fr, to, weight=Fabric.link_weight), k))
 
@@ -2119,7 +2161,7 @@ class Fabric(nx.MultiGraph):
             iface = sender.interfaces[pkt['IfaceID']]
         else:
             iface = None
-        if args.keyboard:
+        if args.keyboard > 2:
             set_trace()
         # dispatch to event handler based on EventName
         return self.dispatch(pkt['EventName'], br, sender, iface, pkt)
@@ -2438,7 +2480,10 @@ class Resources():
 class Conf():
     def __init__(self, file):
         self.file = file
-        self.fab = None  # set by add_resources()
+        self.fab = None  # set by set_fab()
+
+    def set_fab(self, fab):
+        self.fab = fab
 
     def read_conf_file(self):
         with open(self.file, 'r') as f:
@@ -2466,8 +2511,7 @@ class Conf():
                 res_list.add_consumers(conf_add['consumers'])
         return res_list.to_json()
 
-    def add_resources(self, fab) -> None:
-        self.fab = fab
+    def add_resources(self) -> None:
         add_res = self.data.get('add_resources', [])
         if len(add_res) == 0:
             log.info('add_resources not found in {}'.format(self.file))
@@ -2540,7 +2584,7 @@ def main():
     global cols
     global genz
     parser = argparse.ArgumentParser()
-    parser.add_argument('-k', '--keyboard', action='store_true',
+    parser.add_argument('-k', '--keyboard', action='count', default=0,
                         help='break to interactive keyboard at certain points')
     parser.add_argument('-v', '--verbosity', action='count', default=0,
                         help='increase output verbosity')
@@ -2575,7 +2619,12 @@ def main():
         conf.write_conf_file(data)
     log.debug('conf={}'.format(conf))
     fabrics = {}
-    if args.keyboard:
+    if args.keyboard > 3:
+        set_trace()
+    mainapp = FMServer(conf, 'zephyr', **args_vars)
+    thread = Thread(target=mainapp.run)
+    thread.start()
+    if args.keyboard > 3:
         set_trace()
     sys_devices = Path('/sys/devices')
     fab_paths = sys_devices.glob('genz*')
@@ -2585,22 +2634,24 @@ def main():
                      accept_cids=args.accept_cids, fab_uuid=fab_uuid,
                      conf=conf, verbosity=args.verbosity)
         fabrics[fab_path] = fab
+        conf.set_fab(fab)
+        if args.keyboard > 1:
+            set_trace()
         fab.fab_init()
 
     if fab is None:
         log.info('no local Gen-Z bridges found')
         return
 
-    if args.keyboard:
+    if args.keyboard > 3:
         set_trace()
 
-    conf.add_resources(fab)  # Revisit: multiple fabrics
-    mainapp = FMServer(conf, 'zephyr', **args_vars)
+    conf.add_resources()  # Revisit: multiple fabrics
 
-    if args.keyboard:
+    if args.keyboard > 3:
         set_trace()
 
-    mainapp.run()
+    thread.join()
 
 if __name__ == '__main__':
     try:
