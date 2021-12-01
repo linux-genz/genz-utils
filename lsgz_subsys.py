@@ -138,20 +138,22 @@ def ls_comp(ctl, map, ignore_dr=True, verbosity=1):
     rc_dir = None
     if core.sw is not None:
         try:  # Revisit: route control is required, but missing in current HW
-            rc_dir = list(sw_dir.glob('route_control_table@*'))[0]
+            rc_dir = list(sw_dir.glob('route_control@*'))[0]
         except IndexError:
             rc_dir = None
     elif core.comp_dest is not None:
         try:  # Revisit: route control is required, but missing in current HW
-            rc_dir = list(cd_dir.glob('route_control_table@*'))[0]
+            rc_dir = list(cd_dir.glob('route_control@*'))[0]
         except IndexError:
             rc_dir = None
     if rc_dir is not None:
-        rc_path = rc_dir / 'route_control_table'
+        rc_path = rc_dir / 'route_control'
         rc = get_struct(rc_path, map, verbosity=verbosity)
         core.route_control = rc
-        core.sw.HCS = core.route_control.HCS
-        core.comp_dest.HCS = core.route_control.HCS
+        cap1 = genz.RCCAP1(rc.RCCAP1, rc)
+        hcs = cap1.field.HCS
+        core.sw.HCS = hcs
+        core.comp_dest.HCS = hcs
     else:
         core.route_control = None
         if core.sw is not None:
