@@ -1391,29 +1391,6 @@ class SwitchOpCTL(SpecialField, Union):
         super().__init__(value, parent, verbosity=verbosity)
         self.val = value
 
-class VCAT4(SpecialField, Union):
-    class VCAT4Fields(Structure):
-        _fields_ = [('VCM',             c_u32,   32)]
-
-    _fields_    = [('field', VCAT4Fields), ('val', c_u32)]
-
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
-        self.val = value
-
-class VCAT8(SpecialField, Union):
-    class VCAT8Fields(Structure):
-        _fields_ = [('VCM',             c_u64,   32),
-                    ('TH',              c_u64,    7),
-                    ('Rv',              c_u64,   25),
-        ]
-
-    _fields_    = [('field', VCAT8Fields), ('val', c_u64)]
-
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
-        self.val = value
-
 class OpClasses():
     _map = {  'Core64'                              : 0x00,
               'Control'                             : 0x01,
