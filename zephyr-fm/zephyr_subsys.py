@@ -37,14 +37,15 @@ import flask_fat
 from flask_fat import ConfigBuilder
 import flask_fat
 import networkx as nx
-from itertools import islice
+import bisect
+from itertools import islice, product
 from uuid import UUID, uuid4
 from pathlib import Path
 from math import ceil, log2
 from importlib import import_module
 from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
 from middleware.netlink_mngr import NetlinkManager
-from typing import List
+from typing import List, Tuple
 from threading import Thread
 from pdb import set_trace, post_mortem
 import traceback
@@ -121,9 +122,10 @@ class Interface():
         self.hvs = None
         self.lprt = None
         self.vcat = None
+        self.route_info = None
         # defaults until we can read actual state
-        self.istate = IState.IDown
-        self.phy_status = PHYOpStatus.PHYDown
+        self.istate = IState.ICFG
+        self.phy_status = PHYOpStatus.PHYUp
         self.phy_tx_lwr = 0
         self.phy_rx_lwr = 0
 
@@ -494,7 +496,39 @@ class Interface():
         self.phy_rx_lwr = phy_status.field.PHYRxLinkWidthReduced
         return self.phy_status.up_or_uplp()
 
-    def lprt_write(self, cid, ei, rt=0, valid=1, mhc=None, hc=None, vca=None):
+    def compute_mhc(self, cid, rt, hc, valid):
+        if self.lprt is None:
+            return (hc, rt != 0)
+        if valid:
+            # Revisit: enum
+            cur_min = min(self.lprt[cid], key=lambda x: x.HC if x.V else 63)
+            cur_min = cur_min.HC if cur_min.V else 63
+            new_min = min(cur_min, hc)
+        else:
+            cur_min = self.lprt[cid][0].MHC
+            new_min = min((self.lprt[cid][i] for i in range(len(self.lprt[cid]))
+                          if i != rt), key=lambda x: x.HC if x.V else 63)
+            new_min = new_min.HC if new_min.V else 63
+        return (new_min, new_min != cur_min and rt != 0)
+
+    def lprt_read(self):
+        if self.lprt_dir is None:
+            return
+        if self.lprt is not None:
+            return
+        # Revisit: avoid open/close (via "with") on every read?
+        lprt_file = self.lprt_dir / 'lprt'
+        with lprt_file.open(mode='rb+', buffering=0) as f:
+            data = bytearray(f.read())
+            self.lprt = self.comp.map.fileToStruct('lprt', data,
+                                path=lprt_file, core=self.comp.core,
+                                fd=f.fileno(), verbosity=self.comp.verbosity)
+            self.route_info = [[RouteInfo() for j in range(self.lprt.cols)]
+                               for i in range(self.lprt.rows)]
+        # end with
+
+    def lprt_write(self, cid, ei, rt=0, valid=1, mhc=None, hc=None, vca=None,
+                   mhcOnly=False):
         if self.lprt_dir is None:
             return
         # Revisit: avoid open/close (via "with") on every write?
@@ -505,14 +539,17 @@ class Interface():
                 self.lprt = self.comp.map.fileToStruct('lprt', data,
                                 path=lprt_file, core=self.comp.core,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
+                self.route_info = [[RouteInfo() for j in range(self.lprt.cols)]
+                                   for i in range(self.lprt.rows)]
             else:
                 self.lprt.set_fd(f)
             sz = ctypes.sizeof(self.lprt.element)
-            self.lprt[cid][rt].EI = ei
-            self.lprt[cid][rt].V = valid
             self.lprt[cid][rt].MHC = mhc if (mhc is not None and rt == 0) else 0
-            self.lprt[cid][rt].HC = hc if hc is not None else 0
-            self.lprt[cid][rt].VCA = vca if vca is not None else 0
+            if not mhcOnly:
+                self.lprt[cid][rt].EI = ei
+                self.lprt[cid][rt].V = valid
+                self.lprt[cid][rt].HC = hc if hc is not None else 0
+                self.lprt[cid][rt].VCA = vca if vca is not None else 0
             self.comp.control_write(self.lprt, self.lprt.element.MHC,
                                     off=self.lprt.cs_offset(cid, rt), sz=sz)
         # end with
@@ -625,12 +662,12 @@ class Component():
         self._ssdt_sz = None
         self.comp_dest = None
         self.ssdt = None
+        self.ssdt_dir = None # needed by rt.invert() early on
         self.rit = None
+        self.route_info = None
         self.req_vcat = None
         self.rsp_vcat = None
         self.rsp_page_grid_ps = 0
-        self.ssdt_routes = 0
-        self.lprt_routes = 0
         fab.components[self.uuid] = self
         fab.add_node(self, instance_uuid=self.uuid, cclass=self.cclass,
                      mgr_uuid=self.mgr_uuid)
@@ -1021,9 +1058,11 @@ class Component():
             core.MaxRequests = core.MaxREQSuppReqs
             self.control_write(core, genz.CoreStructure.MaxRequests, sz=8)
             # Revisit: set MaxPwrCtl (to NPWR?)
-            # invalidate SSDT (except PFM CID written earlier)
             rows, cols = self.ssdt_size(prefix=prefix)
-            self.ssdt_routes = cols
+            # initialize SSDT route info
+            self.route_info = [[RouteInfo() for j in range(cols)]
+                               for i in range(rows)]
+            # invalidate SSDT (except PFM CID written earlier)
             for cid in range(0, rows):
                 if cid != pfm.gcid.cid or ingress_iface is None:
                     for rt in range(0, cols):
@@ -1308,7 +1347,6 @@ class Component():
             switch.SwitchOpCTL = sw_op_ctl.val
             self.control_write(
                 switch, genz.ComponentSwitchStructure.SwitchCAP1Control, sz=8)
-            self.lprt_routes = switch.MaxRoutes
         # end with
 
     def rsp_page_grid_init(self, core, valid=0):
@@ -1530,11 +1568,26 @@ class Component():
         log.debug('{}: ssdt_sz={}'.format(self.gcid, self._ssdt_sz))
         return self._ssdt_sz
 
-    def ssdt_write(self, cid, ei, rt=0, valid=1, mhc=None, hc=None, vca=None):
+    def compute_mhc(self, cid, rt, hc, valid):
+        if self.ssdt is None:
+            return (hc, rt != 0)
+        if valid:
+            # Revisit: enum
+            cur_min = min(self.ssdt[cid], key=lambda x: x.HC if x.V else 63)
+            cur_min = cur_min.HC if cur_min.V else 63
+            new_min = min(cur_min, hc)
+        else:
+            cur_min = self.ssdt[cid][0].MHC
+            new_min = min((self.ssdt[cid][i] for i in range(len(self.ssdt[cid]))
+                          if i != rt), key=lambda x: x.HC if x.V else 63)
+            new_min = new_min.HC if new_min.V else 63
+        return (new_min, new_min != cur_min and rt != 0)
+
+    def ssdt_write(self, cid, ei, rt=0, valid=1, mhc=None, hc=None, vca=None,
+                   mhcOnly=False):
         if self.ssdt_dir is None:
             return
         # Revisit: avoid open/close (via "with") on every write?
-        # Revisit: multiple routes
         ssdt_file = self.ssdt_dir / 'ssdt'
         with ssdt_file.open(mode='rb+', buffering=0) as f:
             if self.ssdt is None:
@@ -1545,11 +1598,12 @@ class Component():
             else:
                 self.ssdt.set_fd(f)
             sz = ctypes.sizeof(self.ssdt.element)
-            self.ssdt[cid][rt].EI = ei
-            self.ssdt[cid][rt].V = valid
             self.ssdt[cid][rt].MHC = mhc if (mhc is not None and rt == 0) else 0
-            self.ssdt[cid][rt].HC = hc if hc is not None else 0
-            self.ssdt[cid][rt].VCA = vca if vca is not None else 0
+            if not mhcOnly:
+                self.ssdt[cid][rt].EI = ei
+                self.ssdt[cid][rt].V = valid
+                self.ssdt[cid][rt].HC = hc if hc is not None else 0
+                self.ssdt[cid][rt].VCA = vca if vca is not None else 0
             self.control_write(self.ssdt, self.ssdt.element.MHC,
                                off=self.ssdt.cs_offset(cid, rt), sz=sz)
         # end with
@@ -1638,6 +1692,10 @@ class Component():
             iface.update_path(prefix='control')
 
     @property
+    def rit_only(self):
+        return self.ssdt_dir is None
+
+    @property
     def has_switch(self):
         return self.switch_dir is not None
 
@@ -1694,11 +1752,11 @@ class Component():
                 comp = self.fab.comp_gcids[peer_gcid]
                 peer_iface = comp.interfaces[iface.peer_iface_num]
                 self.fab.add_link(iface, peer_iface)
+                msg += ' additional path to {}'.format(comp)
+                log.info(msg)
                 # new path might enable shorter routes
                 route = self.fab.setup_bidirectional_routing(pfm, comp)
                 route2 = self.fab.setup_bidirectional_routing(pfm, self)
-                msg += ' additional path to {}'.format(comp)
-                log.info(msg)
             elif args.accept_cids:
                 # Revisit: add prev_comp handling
                 path = self.fab.make_path(peer_gcid)
@@ -1874,12 +1932,11 @@ class Fabric(nx.MultiGraph):
     events = {} # UEP events dispatch dict
 
     def link_weight(fr, to, edge_dict):
-        # for MultiGraph we have only one key, but we must lookup what it is
-        key = next(iter(edge_dict))
-        fr_iface = edge_dict[key][str(fr.uuid)]
-        to_iface = edge_dict[key][str(to.uuid)]
+        fr_iface = edge_dict[str(fr.uuid)]
+        to_iface = edge_dict[str(to.uuid)]
         # return None for unusable links - DR interfaces are always usable
-        usable = fr_iface.usable and (to.dr is not None or to_iface.usable)
+        usable = ((fr.dr is not None or fr_iface.usable) and
+                  (to.dr is not None or to_iface.usable))
         # Revisit: consider bandwidth, latency, LWR
         return 1 if usable else None
 
@@ -1980,32 +2037,106 @@ class Fabric(nx.MultiGraph):
         self.pfm = pfm
         self.graph['pfm'] = pfm
 
-    def shortest_path(self, fr: Component, to: Component) -> List[Component]:
-        return nx.shortest_path(self, fr, to, weight=Fabric.link_weight)
-
-    def k_shortest_paths(self, fr: Component, to: Component,
-                         k: int) -> List[List[Component]]:
-        g = nx.Graph(self)  # Revisit: don't re-create g on every call
-        # Revisit: MultiGraph routes
-        return list(islice(nx.shortest_simple_paths(
-            g, fr, to, weight=Fabric.link_weight), k))
-
     def all_shortest_paths(self, fr: Component, to: Component,
-                           k: int) -> List[List[Component]]:
+                           cutoff_factor: float = 3.0,
+                           min_paths: int = 2) -> List[List[Component]]:
         g = nx.Graph(self)  # Revisit: don't re-create g on every call
-        # Revisit: MultiGraph routes
-        return list(islice(nx.shortest_simple_paths(
-            g, fr, to, weight=Fabric.link_weight), k))
+        all = nx.shortest_simple_paths(g, fr, to, weight=Fabric.link_weight)
+        path_cnt = 1
+        for path in all:
+            if path_cnt == 1:
+                min_len = len(path) - 1
+                max_len = int(min_len * cutoff_factor)
+            if (len(path) - 1) <= max_len or path_cnt < min_paths:
+                yield path
+                path_cnt += 1
+            else:
+                break
+        # end for
 
-    def route(self, fr: Component, to: Component) -> 'Route':
-        # Revisit: edge weights, force start/end interface
-        path = self.shortest_path(fr, to)
-        return Route(path)
+    def route_entries_avail(self, rt: 'Route') -> bool:
+        avail = True
+        fr = rt.fr
+        to = rt.to
+        cid = to.gcid.cid
+        for elem in rt:
+            if elem.rit_only:
+                pass
+            elif elem.ingress_iface is None: # SSDT
+                found = None
+                free = None
+                infos = elem.comp.route_info[cid]
+                row = fr.ssdt[cid]
+                for i in range(len(row)):
+                    if row[i].V == 1 and row[i].EI == elem.egress_iface.num:
+                        found = i
+                        break
+                    elif row[i].V == 0 and free is None:
+                        free = i
+                # end for
+                if found is None and free is None:
+                    return False
+                elif found is not None: # use existing matching entry
+                    elem.rt_num = found
+                else: # new entry
+                    elem.rt_num = free
+            else: # LPRT
+                found = None
+                free = None
+                elem.ingress_iface.lprt_read()
+                infos = elem.ingress_iface.route_info[cid]
+                row = elem.ingress_iface.lprt[cid]
+                for i in range(len(row)):
+                    if row[i].V == 1 and row[i].EI == elem.egress_iface.num:
+                        found = i
+                        break
+                    elif row[i].V == 0 and free is None:
+                        free = i
+                # end for
+                if found is None and free is None:
+                    return False
+                elif found is not None: # use existing matching entry
+                    elem.rt_num = found
+                else: # new entry
+                    elem.rt_num = free
+            # end if
+        # end for
+        return avail
 
-    def k_routes(self, fr: Component, to: Component, k: int) -> List['Route']:
-        # Revisit: MultiGraph, edge weights, force start/end interface
-        paths = self.k_shortest_paths(fr, to, k)
-        return [Route(p) for p in paths]
+    def route_info_update(self, rt: 'Route', add: bool):
+        fr = rt.fr
+        to = rt.to
+        cid = to.gcid.cid
+        for elem in rt:
+            if elem.rit_only:
+                continue # No route info to update
+            elif elem.ingress_iface is None: # SSDT
+                info = elem.comp.route_info[cid][elem.rt_num]
+            else: # LPRT
+                info = elem.ingress_iface.route_info[cid][elem.rt_num]
+            if add:
+                info.add_route(rt)
+            else:
+                info.remove_route(rt)
+        # end for
+
+    def find_routes(self, fr: Component, to: Component,
+                    cutoff_factor: float = 3.0,
+                    min_paths: int = 2) -> List['Route']:
+        paths = self.all_shortest_paths(fr, to, cutoff_factor=cutoff_factor,
+                                        min_paths=min_paths)
+        rts = []
+        for path in paths: # in order, shortest to longest
+            rt = Route(path)
+            if self.route_entries_avail(rt):
+                self.route_info_update(rt, True)
+                rts.append(rt)
+            # MultiGraph routes
+            for mg_rt in rt.multigraph_routes():
+                if self.route_entries_avail(mg_rt):
+                    self.route_info_update(mg_rt, True)
+                    rts.append(mg_rt)
+        return rts
 
     def write_route(self, route: 'Route', write_ssdt=True, enable=True):
         # When enabling a route, write entries in reverse order so
@@ -2022,31 +2153,36 @@ class Fabric(nx.MultiGraph):
                 rt.set_ssdt(route.to, valid=enable)
 
     def setup_routing(self, fr: Component, to: Component,
-                      write_ssdt=True, route=None) -> 'Route':
-        if route is None:
-            route = self.route(fr, to)
+                      write_ssdt=True, routes=None) -> List['Route']:
+        if routes is None:
+            routes = self.find_routes(fr, to)
         try:
             cur_rts = self.routes.get_routes(fr, to)
         except KeyError:
-            cur_rts = None
-        # Revisit: MultiRoute
-        if cur_rts is None or len(cur_rts) == 0 or route < cur_rts[0]:
-            log.info('adding route from {} to {} via {}'.format(fr, to, route))
-            self.write_route(route, write_ssdt)
-            self.routes.add(fr, to, route)
-        else: # existing route is better
-            return None
-        return route
+            cur_rts = []
+        new_rts = []
+        for route in routes:
+            if route in cur_rts:
+                log.debug('skipping existing route {}'.format(route))
+            else:
+                log.info('adding route from {} to {} via {}'.format(
+                    fr, to, route))
+                self.write_route(route, write_ssdt)
+                self.routes.add(fr, to, route)
+                new_rts.append(route)
+        return new_rts
 
     def setup_bidirectional_routing(self, fr: Component, to: Component,
-                                    write_to_ssdt=True, route=None) -> 'Route':
+                                    write_to_ssdt=True, routes=None) -> Tuple[List['Route'], List['Route']]:
         if fr is to: # Revisit: loopback
             return None
-        route1 = self.setup_routing(fr, to, route=route) # always write fr ssdt
-        route2 = (self.setup_routing(to, fr, write_ssdt=write_to_ssdt,
-                                     route=route1.invert())
-                  if route1 is not None else None)
-        return (route1, route2)
+        to_routes = self.setup_routing(fr, to, routes=routes) # always write fr ssdt
+        to_inverted = [rt.invert(self) for rt in to_routes]
+        to_filtered = filter(lambda rt: rt is not None, to_inverted)
+        fr_routes = (self.setup_routing(to, fr, write_ssdt=write_to_ssdt,
+                                        routes=to_filtered)
+                     if len(to_routes) > 0 else [])
+        return (to_routes, fr_routes)
 
     def teardown_routing(self, fr: Component, to: Component,
                          route: 'Route') -> None:
@@ -2174,28 +2310,49 @@ class Fabric(nx.MultiGraph):
 class RouteElement():
     def __init__(self, comp: Component,
                  ingress_iface: Interface, egress_iface: Interface,
-                 to_iface: Interface = None):
+                 to_iface: Interface = None, rt_num: int = None,
+                 hc: int = 0):
         self.comp = comp
         self.ingress_iface = ingress_iface # optional: which lprt to write
         self.egress_iface = egress_iface   # required
         self.to_iface = to_iface           # optional: the peer of egress_iface
         self.dr = False
+        self.rt_num = rt_num
+        self.hc = hc
+        # Revisit: vca
 
     @property
     def gcid(self):
         return self.comp.gcid
 
     @property
+    def rit_only(self):
+        return self.ingress_iface is None and self.comp.rit_only
+
+    @property
     def path(self):
         return self.egress_iface.iface_dir
 
     def set_ssdt(self, to: Component, valid=True):
+        mhc, wr0 = self.comp.compute_mhc(to.gcid.cid, self.rt_num,
+                                         self.hc, valid)
+        # Revisit: vca
         self.comp.ssdt_write(to.gcid.cid, self.egress_iface.num,
-                             valid=valid)
+                             rt=self.rt_num, valid=valid, mhc=mhc, hc=self.hc)
+        # Revisit: ok to do 2 independent writes? Which order?
+        if wr0:
+            self.comp.ssdt_write(0, 0, mhc=mhc, mhcOnly=True)
 
-    def set_lprt(self, to: Component, valid=True):
+    def set_lprt(self, to: Component, valid=1):
+        mhc, wr0 = self.ingress_iface.compute_mhc(to.gcid.cid, self.rt_num,
+                                                  self.hc, valid)
+        # Revisit: vca
         self.ingress_iface.lprt_write(to.gcid.cid, self.egress_iface.num,
-                                      valid=valid)
+                                      rt=self.rt_num, valid=valid, mhc=mhc,
+                                      hc=self.hc)
+        # Revisit: ok to do 2 independent writes? Which order?
+        if wr0:
+            self.ingress_iface.lprt_write(0, 0, mhc=mhc, mhcOnly=True)
 
     def to_json(self):
         return str(self)
@@ -2208,7 +2365,7 @@ class RouteElement():
                 self.dr == other.dr)
 
     def __str__(self):
-        # Revisit: handle self.dr
+        # Revisit: handle self.dr and vca
         return ('{}->{}'.format(self.egress_iface, self.to_iface)
                 if self.to_iface else '{}'.format(self.egress_iface))
 
@@ -2218,24 +2375,50 @@ class DirectedRelay(RouteElement):
         super().__init__(dr_comp, ingress_iface, dr_iface)
         self.dr = True
 
+class RouteInfo():
+    def __init__(self):
+        self.routes = set() # Revisit: Route or RouteElem?
+
+    def add_route(self, route: 'Route') -> int:
+        self.routes.add(route)
+        return len(self.routes)
+
+    def remove_route(self, route: 'Route') -> int:
+        self.routes.discard(route)
+        return len(self.routes)
+
 class Route():
-    def __init__(self, path: List[Component]):
-        if len(path) < 2:
+    def __init__(self, path: List[Component], elems: List[RouteElement] = None):
+        path_len = len(path)
+        if path_len < 2:
             raise(IndexError)
         self._path = path
-        self._elems = []
+        self._elems = [] if elems is None else elems
         self.ifaces = set()
         ingress_iface = None
-        for fr, to in moving_window(2, path):
-            # Revisit: MultiGraph
-            edge_data = fr.fab.get_edge_data(fr, to)[0]
-            egress_iface = edge_data[str(fr.uuid)]
-            to_iface = edge_data[str(to.uuid)]
-            elem = RouteElement(fr, ingress_iface, egress_iface, to_iface)
-            self._elems.append(elem)
-            self.ifaces.add(egress_iface)
-            self.ifaces.add(to_iface)
-            ingress_iface = to_iface
+        if elems is None:
+            hc = path_len - 2
+            for fr, to in moving_window(2, path):
+                edge_data = fr.fab.get_edge_data(fr, to)[0]
+                egress_iface = edge_data[str(fr.uuid)]
+                to_iface = edge_data[str(to.uuid)]
+                elem = RouteElement(fr, ingress_iface, egress_iface, to_iface,
+                                    hc=hc)
+                self._elems.append(elem)
+                self.ifaces.add(egress_iface)
+                self.ifaces.add(to_iface)
+                ingress_iface = to_iface
+                hc -= 1
+            # end for
+        else:
+            for elem in elems:
+                # fixup ingress_iface
+                elem.ingress_iface = ingress_iface
+                self.ifaces.add(elem.egress_iface)
+                self.ifaces.add(elem.to_iface)
+                ingress_iface = elem.to_iface
+            # end for
+        # end if
 
     @property
     def fr(self):
@@ -2245,10 +2428,55 @@ class Route():
     def to(self):
         return self._path[-1]
 
-    def invert(self) -> 'Route':
-        # Revisit: MultiGraph - this does not guarantee identical links
-        inverse = Route(self._path[::-1])
+    @property
+    def hc(self):
+        return len(self) - 1
+
+    def invert(self, fab: Fabric) -> 'Route':
+        # MultiGraph - this guarantees identical links
+        elems = []
+        ingress_iface = None
+        hc = self.hc
+        for e in reversed(self._elems):
+            fr = e.to_iface.comp
+            elem = RouteElement(fr, ingress_iface, e.to_iface, e.egress_iface,
+                                hc=hc)
+            elems.append(elem)
+            ingress_iface = e.egress_iface
+            hc -= 1
+        # end for
+        inverse = Route(self._path[::-1], elems=elems)
+        if fab.route_entries_avail(inverse):
+            fab.route_info_update(inverse, True)
+        else:
+            inverse = None
         return inverse
+
+    def multigraph_routes(self) -> List['Route']:
+        path_len = len(self._path)
+        mg_list = []
+        ingress_iface = None
+        hc = path_len - 2
+        for fr, to in moving_window(2, self._path):
+            elem_list = []
+            multigraph = fr.fab.get_edge_data(fr, to)
+            log.debug('fr={}, to={}, multigraph={}'.format(fr, to, multigraph))
+            for edge_data in multigraph.values():
+                egress_iface = edge_data[str(fr.uuid)]
+                to_iface = edge_data[str(to.uuid)]
+                elem = RouteElement(fr, ingress_iface, egress_iface, to_iface,
+                                    hc=hc)
+                elem_list.append(elem)
+            ingress_iface = to_iface # not always right - fixed by Route()
+            hc -= 1
+            mg_list.append(elem_list)
+        mg_combs = product(*mg_list)
+        rts = []
+        for mg in mg_combs:
+            rt = Route(self._path, elems=list(mg))
+            if self != rt: # skip original route
+                rts.append(rt)
+        return rts
 
     def to_json(self):
         return self._elems
@@ -2273,7 +2501,7 @@ class Route():
         return len(self) < len(other)
 
     def __repr__(self):
-        return '[' + ','.join('{}'.format(e) for e in self._elems) + ']'
+        return '(' + ','.join('{}'.format(e) for e in self._elems) + ')'
 
 class Routes():
     def __init__(self, fab_uuid=None):
@@ -2306,11 +2534,8 @@ class Routes():
                 if rt == route: # already there
                     return
             # end for
-            # not in list - add it - at front if shorter, else at end
-            if len(rts) > 0 and route < rts[0]:
-                rts.insert(0, route)
-            else:
-                rts.append(route)
+            # not in list - add it - at the proper place
+            bisect.insort(rts, route)
         except KeyError: # not in dict - add
             self.fr_to[(fr, to)] = [ route ]
         self.add_ifaces(route)
@@ -2382,8 +2607,8 @@ class ResourceList():
         try:
             self.producer = fab.cuuid_serial[res_dict['producer']]
         except KeyError:
-            log.warning('{}: producer component {} not found in fabric{}'.format(
-                self.file, res_dict['producer'], fab.fabnum))
+            log.warning('producer component {} not found in fabric{}'.format(
+                res_dict['producer'], fab.fabnum))
             return
         self.res_dict['gcid']     = self.producer.gcid.val
         self.res_dict['cclass']   = self.producer.cclass
@@ -2406,7 +2631,6 @@ class ResourceList():
                 continue
             if cons_comp not in self.consumers:
                 self.consumers.add(cons_comp)
-                # Revisit: consider delaying routing until llamas connects
                 routes = self.fab.setup_bidirectional_routing(
                     cons_comp, self.producer)
                 # Revisit: save routes for later teardown requests?
@@ -2518,6 +2742,7 @@ class Conf():
         log.info('adding resources from {}'.format(self.file))
         for conf_add in add_res:
             self.add_resource(conf_add)
+        log.info('finished adding resources from {}'.format(self.file))
 
     def remove_resource(self, conf_rm) -> dict:
         fab = self.fab
@@ -2638,6 +2863,7 @@ def main():
         if args.keyboard > 1:
             set_trace()
         fab.fab_init()
+        log.info('finished exploring fabric {}'.format(fab.fabnum))
 
     if fab is None:
         log.info('no local Gen-Z bridges found')
