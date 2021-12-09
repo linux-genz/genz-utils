@@ -110,9 +110,14 @@ class GCID():
                 raise(ValueError)
             self.val = (sid << 12) | cid
         elif str is not None:
-            sid_str, cid_str = str.split(':')
-            sid = int(sid_str, 16)
-            cid = int(cid_str, 16)
+            gcid_str = str.split(':')
+            if len(gcid_str) == 1:
+                cid = int(gcid_str[0], 16)
+            elif len(gcid_str) == 2:
+                sid = int(gcid_str[0], 16)
+                cid = int(gcid_str[1], 16)
+            else:
+                raise(TypeError)
             self.val = (sid << 12) | cid
         else:
             raise(TypeError)
@@ -132,6 +137,11 @@ class GCID():
         if type(self) != type(other):
             return NotImplemented
         return self.val == other.val
+
+    def __lt__(self, other):
+        if type(self) != type(other):
+            return NotImplemented
+        return self.val < other.val
 
     def __hash__(self):
         return hash(self.val)
