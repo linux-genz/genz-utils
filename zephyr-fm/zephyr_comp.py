@@ -109,6 +109,7 @@ class Component():
         self.uuid = uuid4() if uuid is None else uuid
         self.nonce = fab.generate_nonce()
         self.cuuid = None
+        self.serial = None
         self.cuuid_serial = None
         self._num_vcs = None
         self._req_vcat_sz = None
@@ -423,6 +424,7 @@ class Component():
         cuuid = get_cuuid(self.path)
         serial = get_serial(self.path)
         self.cuuid = cuuid
+        self.serial = int(serial, base=0)
         self.cuuid_serial = str(cuuid) + ':' + serial
         self.fru_uuid = get_fru_uuid(self.path)
         self.fab.add_comp(self)

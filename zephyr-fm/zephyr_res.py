@@ -68,6 +68,9 @@ class ResourceList():
             return
         self.res_dict['gcid']     = self.producer.gcid.val
         self.res_dict['cclass']   = self.producer.cclass
+        self.res_dict['serial']   = self.producer.serial
+        self.res_dict['br_gcid']  = 0 # Revisit: MultiBridge
+        self.res_dict['cuuid']    = str(self.producer.cuuid)
         self.res_dict['fru_uuid'] = str(self.producer.fru_uuid)
         self.res_dict['mgr_uuid'] = str(self.producer.mgr_uuid)
         self.res_dict['resources'] = [ res.to_json() for res in self.resources ]
