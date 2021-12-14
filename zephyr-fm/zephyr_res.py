@@ -82,8 +82,8 @@ class ResourceList():
             try:
                 cons_comp = self.fab.cuuid_serial[cons]
             except KeyError:
-                log.warning('{}: consumer component {} not found in fabric{}'.format(
-                    self.file, cons, self.fab.fabnum))
+                log.warning('consumer component {} not found in fabric{}'.format(
+                    cons, self.fab.fabnum))
                 continue
             if cons_comp not in self.consumers:
                 self.consumers.add(cons_comp)
@@ -97,8 +97,8 @@ class ResourceList():
             try:
                 cons_comp = self.fab.cuuid_serial[cons]
             except KeyError:
-                log.warning('{}: consumer component {} not found in fabric{}'.format(
-                    self.file, cons, self.fab.fabnum))
+                log.warning('consumer component {} not found in fabric{}'.format(
+                    cons, self.fab.fabnum))
                 continue
             if cons_comp in self.consumers:
                 self.consumers.discard(cons_comp)
@@ -108,8 +108,8 @@ class ResourceList():
                 #    cons_comp, self.producer)
                 # Revisit: use saved routes?
             else:
-                log.warning('{}: component {} not a consumer of resource {}'.format(
-                    self.file, cons, res))
+                log.warning('component {} not a consumer of resource {}'.format(
+                    cons, res))
         # end for cons
 
     def to_json(self):
