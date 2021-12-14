@@ -163,7 +163,8 @@ class Fabric(nx.MultiGraph):
 
     def all_shortest_paths(self, fr: Component, to: Component,
                            cutoff_factor: float = 3.0,
-                           min_paths: int = 2) -> List[List[Component]]:
+                           min_paths: int = 2,
+                           max_paths: int = None) -> List[List[Component]]:
         g = nx.Graph(self)  # Revisit: don't re-create g on every call
         all = nx.shortest_simple_paths(g, fr, to, weight=Fabric.link_weight)
         path_cnt = 1
@@ -171,7 +172,8 @@ class Fabric(nx.MultiGraph):
             if path_cnt == 1:
                 min_len = len(path) - 1
                 max_len = int(min_len * cutoff_factor)
-            if (len(path) - 1) <= max_len or path_cnt < min_paths:
+            if (((len(path) - 1) <= max_len or path_cnt < min_paths) and
+                (max_paths is None or path_cnt <= max_paths)):
                 yield path
                 path_cnt += 1
             else:
@@ -246,21 +248,34 @@ class Fabric(nx.MultiGraph):
 
     def find_routes(self, fr: Component, to: Component,
                     cutoff_factor: float = 3.0,
-                    min_paths: int = 2) -> List[Route]:
+                    min_paths: int = 2,
+                    max_routes: int = None) -> List[Route]:
+        def nested_loop(paths, max_routes):
+            # inner function to avoid the need for a multi-loop break
+            # which python doesn't have
+            rts = []
+            for path in paths: # in order, shortest to longest
+                if max_routes is not None and len(rts) >= max_routes:
+                    return rts
+                rt = Route(path)
+                if self.route_entries_avail(rt):
+                    self.route_info_update(rt, True)
+                    rts.append(rt)
+                # MultiGraph routes
+                for mg_rt in rt.multigraph_routes():
+                    if max_routes is not None and len(rts) >= max_routes:
+                        return rts
+                    if self.route_entries_avail(mg_rt):
+                        self.route_info_update(mg_rt, True)
+                        rts.append(mg_rt)
+                # end for mg_rt
+            # end for rt
+            return rts
+
         paths = self.all_shortest_paths(fr, to, cutoff_factor=cutoff_factor,
-                                        min_paths=min_paths)
-        rts = []
-        for path in paths: # in order, shortest to longest
-            rt = Route(path)
-            if self.route_entries_avail(rt):
-                self.route_info_update(rt, True)
-                rts.append(rt)
-            # MultiGraph routes
-            for mg_rt in rt.multigraph_routes():
-                if self.route_entries_avail(mg_rt):
-                    self.route_info_update(mg_rt, True)
-                    rts.append(mg_rt)
-        return rts
+                                        min_paths=min_paths,
+                                        max_paths=max_routes)
+        return nested_loop(paths, max_routes)
 
     def write_route(self, route: Route, write_ssdt=True, enable=True):
         # When enabling a route, write entries in reverse order so
@@ -279,7 +294,8 @@ class Fabric(nx.MultiGraph):
     def setup_routing(self, fr: Component, to: Component,
                       write_ssdt=True, routes=None) -> List[Route]:
         if routes is None:
-            routes = self.find_routes(fr, to)
+            routes = self.find_routes(fr, to,
+                                      max_routes=zephyr_conf.args.max_routes)
         try:
             cur_rts = self.routes.get_routes(fr, to)
         except KeyError:

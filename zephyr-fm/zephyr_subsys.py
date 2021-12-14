@@ -99,6 +99,8 @@ def main():
                         help='increase output verbosity')
     parser.add_argument('-A', '--accept-cids', action='store_true',
                         help='accept pre-existing HW CIDs for all components')
+    parser.add_argument('-M', '--max-routes', action='store', default=None, type=int,
+                        help='limit number of routes between components')
     parser.add_argument('-R', '--random-cids', action='store_true',
                         help='generate random CIDs for all components')
     parser.add_argument('-S', '--sleep', type=float, default=0.0,
