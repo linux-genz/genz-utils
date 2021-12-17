@@ -331,6 +331,12 @@ class Fabric(nx.MultiGraph):
         # remove route from routes list
         self.routes.remove(fr, to, route)
 
+    def recompute_routes(self, iface1, iface2):
+        # Revisit: this is O(n**2) during crawl-out, worse later
+        # Revisit: can we make use of iface1/2 to do better?
+        for fr, to in self.routes.fr_to.keys():
+            self.setup_routing(fr, to)
+
     def has_link(self, fr_iface: Interface, to_iface: Interface) -> bool:
         fr = fr_iface.comp
         to = to_iface.comp

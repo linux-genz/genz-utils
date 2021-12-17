@@ -1222,9 +1222,8 @@ class Component():
                 self.fab.add_link(iface, peer_iface)
                 msg += ' additional path to {}'.format(comp)
                 log.info(msg)
-                # new path might enable shorter routes
-                route = self.fab.setup_bidirectional_routing(pfm, comp)
-                route2 = self.fab.setup_bidirectional_routing(pfm, self)
+                # new path might enable additional or shorter routes
+                self.fab.recompute_routes(iface, peer_iface)
             elif args.accept_cids:
                 # Revisit: add prev_comp handling
                 path = self.fab.make_path(peer_gcid)
