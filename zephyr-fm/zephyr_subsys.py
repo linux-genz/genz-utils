@@ -38,9 +38,11 @@ from zephyr_iface import Interface
 from zephyr_comp import Component
 from zephyr_fabric import Fabric
 from zephyr_res import ResourceList
+from zephyr_uep import netlink_reader
 from middleware.netlink_mngr import NetlinkManager
 from typing import List, Tuple
 from threading import Thread
+import multiprocessing as mp
 from pdb import set_trace, post_mortem
 import traceback
 
@@ -138,6 +140,12 @@ def main():
     thread.start()
     if args.keyboard > 3:
         set_trace()
+    mp.set_start_method('forkserver')
+    uep_args = { 'genz_version': args.genz_version,
+                 'verbosity':    args.verbosity,
+                 'url':          'http://localhost:2021/fabric/uep' }
+    uep_proc = mp.Process(target=netlink_reader, kwargs=uep_args)
+    uep_proc.start()
     sys_devices = Path('/sys/devices')
     fab_paths = sys_devices.glob('genz*')
     fab = None
