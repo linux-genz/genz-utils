@@ -383,6 +383,7 @@ class Fabric(nx.MultiGraph):
 
     @register(events, 'IfaceErr')
     def iface_error(self, key, br, sender, iface, pkt):
+        genz = zephyr_conf.genz
         es = genz.IErrorES(pkt['ES'])
         log.info('{}: {}:{}({}) from {} on {}'.format(br, key, es.errName,
                                                 es.errSeverity, sender, iface))
