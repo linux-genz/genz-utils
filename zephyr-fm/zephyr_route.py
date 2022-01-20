@@ -66,7 +66,37 @@ class RouteElement():
     def path(self):
         return self.egress_iface.iface_dir
 
-    def set_ssdt(self, to: Component, valid=True):
+    def route_entries_avail(self, fr: Component, to: Component) -> bool:
+        # Revisit: Subnets
+        cid = to.gcid.cid
+        if self.rit_only:
+            return True
+        if self.ingress_iface is None: # SSDT
+            fr.ssdt_read()
+            row = fr.ssdt[cid]
+        else: # LPRT
+            self.ingress_iface.lprt_read()
+            row = self.ingress_iface.lprt[cid]
+        found = None
+        free = None
+        for i in range(len(row)):
+            if row[i].V == 1 and row[i].EI == self.egress_iface.num:
+                found = i
+                break
+            elif row[i].V == 0 and free is None:
+                free = i
+        # end for
+        if found is None and free is None:
+            return False
+        elif found is not None: # use existing matching entry
+            self.rt_num = found
+        else: # new entry
+            self.rt_num = free
+        return True
+
+    def set_ssdt(self, to: Component, valid=1, update_rt_num=False):
+        if update_rt_num:
+            self.route_entries_avail(self.comp, to)
         mhc, wr0 = self.comp.compute_mhc(to.gcid.cid, self.rt_num,
                                          self.hc, valid)
         # Revisit: vca

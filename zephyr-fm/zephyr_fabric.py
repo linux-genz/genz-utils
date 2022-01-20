@@ -23,7 +23,7 @@
 
 import ctypes
 import json
-from typing import List, Tuple
+from typing import List, Tuple, Iterator
 from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
 import random
 from pathlib import Path
@@ -181,54 +181,14 @@ class Fabric(nx.MultiGraph):
                 break
         # end for
 
+    # Revisit: this doesn't use 'self' and so should be in class Route
     def route_entries_avail(self, rt: Route) -> bool:
-        avail = True
         fr = rt.fr
         to = rt.to
-        cid = to.gcid.cid
         for elem in rt:
-            if elem.rit_only:
-                pass
-            elif elem.ingress_iface is None: # SSDT
-                found = None
-                free = None
-                infos = elem.comp.route_info[cid]
-                row = fr.ssdt[cid]
-                for i in range(len(row)):
-                    if row[i].V == 1 and row[i].EI == elem.egress_iface.num:
-                        found = i
-                        break
-                    elif row[i].V == 0 and free is None:
-                        free = i
-                # end for
-                if found is None and free is None:
-                    return False
-                elif found is not None: # use existing matching entry
-                    elem.rt_num = found
-                else: # new entry
-                    elem.rt_num = free
-            else: # LPRT
-                found = None
-                free = None
-                elem.ingress_iface.lprt_read()
-                infos = elem.ingress_iface.route_info[cid]
-                row = elem.ingress_iface.lprt[cid]
-                for i in range(len(row)):
-                    if row[i].V == 1 and row[i].EI == elem.egress_iface.num:
-                        found = i
-                        break
-                    elif row[i].V == 0 and free is None:
-                        free = i
-                # end for
-                if found is None and free is None:
-                    return False
-                elif found is not None: # use existing matching entry
-                    elem.rt_num = found
-                else: # new entry
-                    elem.rt_num = free
-            # end if
-        # end for
-        return avail
+            if not elem.route_entries_avail(fr, to):
+                return False
+        return True
 
     def route_info_update(self, rt: Route, add: bool):
         fr = rt.fr
@@ -249,34 +209,35 @@ class Fabric(nx.MultiGraph):
 
     def find_routes(self, fr: Component, to: Component,
                     cutoff_factor: float = 3.0,
-                    min_paths: int = 2,
-                    max_routes: int = None) -> List[Route]:
-        def nested_loop(paths, max_routes):
-            # inner function to avoid the need for a multi-loop break
-            # which python doesn't have
-            rts = []
-            for path in paths: # in order, shortest to longest
-                if max_routes is not None and len(rts) >= max_routes:
-                    return rts
-                rt = Route(path)
-                if self.route_entries_avail(rt):
-                    self.route_info_update(rt, True)
-                    rts.append(rt)
-                # MultiGraph routes
-                for mg_rt in rt.multigraph_routes():
-                    if max_routes is not None and len(rts) >= max_routes:
-                        return rts
-                    if self.route_entries_avail(mg_rt):
-                        self.route_info_update(mg_rt, True)
-                        rts.append(mg_rt)
-                # end for mg_rt
-            # end for rt
-            return rts
+                    min_paths: int = 2, routes: List[Route] = None,
+                    max_routes: int = None) -> Iterator[Route]:
+        if routes is not None:
+            for rt in routes:
+                yield rt
+            return
 
         paths = self.all_shortest_paths(fr, to, cutoff_factor=cutoff_factor,
                                         min_paths=min_paths,
                                         max_paths=max_routes)
-        return nested_loop(paths, max_routes)
+        cnt = 0
+        for path in paths: # in order, shortest to longest
+            if max_routes is not None and cnt >= max_routes:
+                return
+            rt = Route(path)
+            if self.route_entries_avail(rt):
+                self.route_info_update(rt, True)
+                cnt += 1
+                yield rt
+            # MultiGraph routes - by definition, same len as original rt
+            for mg_rt in rt.multigraph_routes():
+                if max_routes is not None and cnt >= max_routes:
+                    return
+                if self.route_entries_avail(mg_rt):
+                    self.route_info_update(mg_rt, True)
+                    cnt += 1
+                    yield mg_rt
+            # end for mg_rt
+        # end for path
 
     def write_route(self, route: Route, write_ssdt=True, enable=True):
         # When enabling a route, write entries in reverse order so
@@ -294,15 +255,13 @@ class Fabric(nx.MultiGraph):
 
     def setup_routing(self, fr: Component, to: Component,
                       write_ssdt=True, routes=None) -> List[Route]:
-        if routes is None:
-            routes = self.find_routes(fr, to,
-                                      max_routes=zephyr_conf.args.max_routes)
         try:
             cur_rts = self.routes.get_routes(fr, to)
         except KeyError:
             cur_rts = []
         new_rts = []
-        for route in routes:
+        for route in self.find_routes(fr, to, routes=routes,
+                                      max_routes=zephyr_conf.args.max_routes):
             if route in cur_rts:
                 log.debug('skipping existing route {}'.format(route))
             else:
@@ -372,10 +331,10 @@ class Fabric(nx.MultiGraph):
         impacted = self.routes.impacted(iface)
         for rt in impacted:
             log.debug('route {} impacted by unusable {}'.format(rt, iface))
-            # Revisit: route around failed link (if possible)
+            # route around failed link (if possible)
             try:
-                new_rt = self.route(rt.fr, rt.to)
-                # Revisit: finish this
+                self.teardown_routing(rt.fr, rt.to, rt)
+                self.setup_routing(rt.fr, rt.to)
             except nx.exception.NetworkXNoPath:
                 # no valid route anymore, remove unreachable comp
                 rt.fr.unreachable_comp(rt.to, iface, rt)

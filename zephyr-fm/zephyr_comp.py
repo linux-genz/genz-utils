@@ -311,7 +311,7 @@ class Component():
         self.rsp_pte_table_dir = None
 
     # Returns True if component is usable - is C-Up/C-LP/C-DLP, not C-Down
-    def comp_init(self, pfm, prefix='control', ingress_iface=None):
+    def comp_init(self, pfm, prefix='control', ingress_iface=None, route=None):
         args = zephyr_conf.args
         genz = zephyr_conf.genz
         log.debug('comp_init for {}'.format(self))
@@ -376,7 +376,9 @@ class Component():
             # setup SSDT and RIT entries for route back to FM
             if ingress_iface is not None:
                 self.ssdt_size(prefix=prefix)
-                self.ssdt_write(pfm.gcid.cid, ingress_iface.num)
+                # use route elem to correctly set SSDT HC & MHC
+                elem = route[0][0]
+                elem.set_ssdt(pfm, update_rt_num=True)
                 self.rit_write(ingress_iface, 1 << ingress_iface.num)
             # initialize RSP-VCAT
             # Revisit: multiple Action columns
@@ -1053,6 +1055,18 @@ class Component():
             new_min = new_min.HC if new_min.V else 63
         return (new_min, new_min != cur_min and rt != 0)
 
+    def ssdt_read(self):
+        if self.ssdt is not None or self.ssdt_dir is None:
+            return self.ssdt
+        # Revisit: avoid open/close (via "with") on every read?
+        ssdt_file = self.ssdt_dir / 'ssdt'
+        with ssdt_file.open(mode='rb+', buffering=0) as f:
+            data = bytearray(f.read())
+            self.ssdt = self.map.fileToStruct('ssdt', data, path=ssdt_file,
+                                    core=self.core, parent=self.comp_dest,
+                                    fd=f.fileno(), verbosity=self.verbosity)
+        return self.ssdt
+
     def ssdt_write(self, cid, ei, rt=0, valid=1, mhc=None, hc=None, vca=None,
                    mhcOnly=False):
         if self.ssdt_dir is None:
@@ -1287,7 +1301,7 @@ class Component():
                 except Exception as e:
                     log.error('add_fab_comp failed with exception {}'.format(e))
                     return
-                comp.comp_init(pfm, ingress_iface=peer_iface)
+                comp.comp_init(pfm, ingress_iface=peer_iface, route=route[1])
                 if comp.has_switch:  # if switch, recurse
                     comp.explore_interfaces(pfm, ingress_iface=peer_iface)
             else:
@@ -1316,13 +1330,14 @@ class Component():
                 msg += 'reusing previously-assigned gcid={}'.format(gcid)
             log.info(msg)
             route = self.fab.setup_bidirectional_routing(
-                pfm, comp, write_to_ssdt=False)
+                pfm, comp, write_to_ssdt=False) # comp_init() will write SSDT
             try:
                 comp.add_fab_dr_comp()
             except Exception as e:
                 log.error('add_fab_dr_comp failed with exception {}'.format(e))
                 return
-            comp.comp_init(pfm, prefix='dr', ingress_iface=peer_iface)
+            comp.comp_init(pfm, prefix='dr', ingress_iface=peer_iface,
+                           route=route[1])
             if comp.has_switch:  # if switch, recurse
                 comp.explore_interfaces(pfm, ingress_iface=peer_iface)
         # end if peer_cstate
