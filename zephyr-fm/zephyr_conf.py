@@ -61,6 +61,8 @@ class Conf():
 
     def set_fab(self, fab):
         self.fab = fab
+        self.data['mgr_uuid'] = str(fab.mgr_uuid)
+        self.write_conf_file(self.data)
 
     def read_conf_file(self):
         with open(self.file, 'r') as f:
@@ -71,6 +73,7 @@ class Conf():
         self.data = data
         with open(self.file, 'w') as f:
             json.dump(self.data, f, indent=2)
+            print('', file=f) # add a newline
 
     def add_resource(self, conf_add) -> dict:
         from zephyr_res import ResourceList, Resource
@@ -90,9 +93,13 @@ class Conf():
         return res_list.to_json()
 
     def add_resources(self) -> None:
-        add_res = self.data.get('add_resources', [])
-        if len(add_res) == 0:
+        add_res = self.data.get('add_resources', None)
+        if add_res is None:
             log.info('add_resources not found in {}'.format(self.file))
+            return
+        if len(add_res) == 0:
+            log.info('no resources to add from {}'.format(self.file))
+            return
         log.info('adding resources from {}'.format(self.file))
         for conf_add in add_res:
             self.add_resource(conf_add)

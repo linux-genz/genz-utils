@@ -101,6 +101,8 @@ def main():
                         help='increase output verbosity')
     parser.add_argument('-A', '--accept-cids', action='store_true',
                         help='accept pre-existing HW CIDs for all components')
+    parser.add_argument('-r', '--reclaim', action='store_true',
+                        help='reclaim C-Up components via reset')
     parser.add_argument('-M', '--max-routes', action='store', default=None, type=int,
                         help='limit number of routes between components')
     parser.add_argument('-R', '--random-cids', action='store_true',
@@ -119,10 +121,13 @@ def main():
     args_vars = vars(args)
     nl = NetlinkManager(config='./zephyr-fm/alpaka.conf')
     map = genz.ControlStructureMap()
+    mgr_uuid = None # by default, generate new mgr_uuid every run
     conf = Conf('zephyr-fm/zephyr-fabric.conf')
     try:
         data = conf.read_conf_file()
         fab_uuid = UUID(data['fabric_uuid'])
+        if args.reclaim:
+            mgr_uuid = UUID(data['mgr_uuid'])
     except FileNotFoundError:
         # create new skeleton file
         data = {}
@@ -152,7 +157,7 @@ def main():
     for fab_path in fab_paths:
         fab = Fabric(nl, map, fab_path, random_cids=args.random_cids,
                      accept_cids=args.accept_cids, fab_uuid=fab_uuid,
-                     conf=conf, verbosity=args.verbosity)
+                     conf=conf, mgr_uuid=mgr_uuid, verbosity=args.verbosity)
         fabrics[fab_path] = fab
         conf.set_fab(fab)
         if args.keyboard > 1:

@@ -65,13 +65,14 @@ class Fabric(nx.MultiGraph):
         return 1 if usable else None
 
     def __init__(self, nl, map, path, fab_uuid=None, grand_plan=None,
-                 random_cids=False, accept_cids=False, conf=None, verbosity=0):
+                 random_cids=False, accept_cids=False, conf=None,
+                 mgr_uuid=None, verbosity=0):
         self.nl = nl
         self.map = map
         self.path = path
         self.fabnum = component_num(path)
         self.fab_uuid = fab_uuid
-        self.mgr_uuid = uuid4()
+        self.mgr_uuid = uuid4() if mgr_uuid is None else mgr_uuid
         self.random_cids = random_cids
         self.accept_cids = accept_cids
         self.conf = conf
