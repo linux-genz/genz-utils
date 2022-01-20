@@ -403,7 +403,7 @@ class Component():
             # Revisit: if no Component Peer Attr struct, LL/NLL must be same
             core.LLRspDeadline = 601
             core.NLLRspDeadline = 1001
-            core.RspDeadLine = 800 # responder packet execution time
+            core.RspDeadline = 800 # responder packet execution time
             self.control_write(core, genz.CoreStructure.LLRspDeadline, sz=4)
             # we have set up just enough for "normal" responses to work -
             # tell the kernel about the new/changed component and stop DR
@@ -432,7 +432,8 @@ class Component():
         core_file = self.path / prefix / 'core@0x0/core'
         with core_file.open(mode='rb+') as f:
             core.set_fd(f)
-            log.debug('{}: done with DR - using direct access'.format(self))
+            if self.cstate is CState.CCFG:
+                log.debug('{}: done with DR - using direct access'.format(self))
             if self.cstate is not CState.CCFG or self.local_br:
                 # For non-local-bridge components in C-CFG, MGR-UUID will have
                 # been captured on CV/CID0/SID0 write, so skip this
