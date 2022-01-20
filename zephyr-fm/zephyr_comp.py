@@ -509,7 +509,7 @@ class Component():
             # Revisit: set REQNIRTO, REQABNIRTO
             # set ControlTO, ControlDRTO
             # Revisit: how to compute reasonable values?
-            core.ControlTO = self.ctl_timeout_val(5e-3)    # 5ms
+            core.ControlTO = self.ctl_timeout_val(1e-3)    # 1ms
             core.ControlDRTO = self.ctl_timeout_val(10e-3) # 10ms
             self.control_write(core, genz.CoreStructure.ControlTO, sz=4)
             # set MaxRequests
