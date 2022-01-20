@@ -223,6 +223,8 @@ class Comp:
         drs = []
         # one-line component summary first
         print(self)
+        if self.verbosity < 1:
+            return drs
         # then resources (if any)
         self.ls_resources()
         if self.ctl is None:

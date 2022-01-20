@@ -1924,13 +1924,19 @@ class ControlTableArray(ControlTable):
             return r
         elif self.verbosity == 4:
             name = type(self.array[0]).__name__
+            hasV = hasattr(self.array[0], 'V')
             for i in range(len(self)):
-                r += '    {}[{}]={}\n'.format(name, i, repr(self.array[i]))
+                v = self.array[i].V if hasV else 1
+                if v:
+                    r += '    {}[{}]={}\n'.format(name, i, repr(self.array[i]))
         else:
             # Revisit: the str() output should be indented another 2 spaces
             name = type(self.array[0]).__name__
+            hasV = hasattr(self.array[0], 'V')
             for i in range(len(self)):
-                r += '    {}[{}]={}\n'.format(name, i, str(self.array[i]))
+                v = self.array[i].V if hasV and self.verbosity < 6 else 1
+                if v:
+                    r += '    {}[{}]={}\n'.format(name, i, str(self.array[i]))
 
         return r
 
@@ -1959,16 +1965,22 @@ class ControlTable2DArray(ControlTableArray):
             return r
         elif self.verbosity == 4:
             name = type(self.array[0][0]).__name__
+            hasV = hasattr(self.array[0][0], 'V')
             for i in range(self.rows):
                 for j in range(self.cols):
-                    r += '    {}[{}][{}]={}\n'.format(name, i, j,
+                    v = self.array[i][j].V if hasV else 1
+                    if v:
+                        r += '    {}[{}][{}]={}\n'.format(name, i, j,
                                                       repr(self.array[i][j]))
         else:
             # Revisit: the str() output should be indented another 2 spaces
             name = type(self.array[0][0]).__name__
+            hasV = hasattr(self.array[0][0], 'V')
             for i in range(self.rows):
                 for j in range(self.cols):
-                    r += '    {}[{}][{}]={}\n'.format(name, i, j,
+                    v = self.array[i][j].V if hasV and self.verbosity < 6 else 1
+                    if v:
+                        r += '    {}[{}][{}]={}\n'.format(name, i, j,
                                                       str(self.array[i][j]))
 
         return r
