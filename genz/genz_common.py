@@ -36,10 +36,16 @@ class CState(IntEnum):
     CUp = 2
     CLP = 3
     CDLP = 4
+    CRv5 = 5
+    CRv6 = 6
+    CRv7 = 7
 
     def __str__(self):
         _c_state = ['C-Down', 'C-CFG', 'C-Up', 'C-LP', 'C-DLP']
-        return _c_state[self.value]
+        return 'Unknown' if self.reserved() else _c_state[self.value]
+
+    def reserved(self):
+        return self.value > CState.CDLP
 
     def to_json(self):
         return str(self)
@@ -66,6 +72,11 @@ class PHYOpStatus(IntEnum):
     PHYLP2 = 8
     PHYLP3 = 9
     PHYLP4 = 10
+    PHYRvB = 11
+    PHYRvC = 12
+    PHYRvD = 13
+    PHYRvE = 14
+    PHYRvF = 15
 
     def __str__(self):
         _phy_status = ['PHY-Down', 'PHY-Up', 'PHY-Down-Retrain',

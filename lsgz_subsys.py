@@ -29,7 +29,7 @@ import re
 from uuid import UUID
 from pathlib import Path
 from importlib import import_module
-from genz.genz_common import GCID
+from genz.genz_common import GCID, CState
 from pdb import set_trace, post_mortem
 import traceback
 
@@ -142,9 +142,9 @@ def get_cstate(ctl, map):
     try:
         core = get_struct(core_path, map)
         cs = genz.CStatus(core.CStatus, core)
-        cstate = cs._c_state[cs.field.CState]
+        cstate = CState(cs.field.CState)
     except FileNotFoundError:
-        cstate = 'Unknown'
+        cstate = CState(7)
     return cstate
 
 def cuuid_serial(cuuid, serial):

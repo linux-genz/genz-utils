@@ -65,7 +65,8 @@ class CStatus(SpecialField, Union):
         ]
 
     _fields_    = [('field', CStatusFields), ('val', c_u64)]
-    _c_state = ['C-Down', 'C-CFG', 'C-Up', 'C-LP', 'C-DLP']
+    _c_state = ['C-Down', 'C-CFG', 'C-Up', 'C-LP', 'C-DLP',
+                'C-Rv5', 'C-Rv6', 'C-Rv7']
     _therm   = ['Nominal', 'Caution', 'Exceeded', 'Shutdown']
     _special = {'CState': _c_state, 'ThermStatus': _therm}
 
@@ -801,7 +802,11 @@ class IStatus(SpecialField, Union):
 
     @property
     def istate(self):
-        return self._i_state[self.field.IState]
+        try:
+            ist = self._i_state[self.field.IState]
+        except IndexError:
+            ist = 'Unknown'
+        return ist
 
 class IControl(SpecialField, Union):
     class IControlFields(Structure):
