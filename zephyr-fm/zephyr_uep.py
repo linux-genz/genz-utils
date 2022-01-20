@@ -59,8 +59,8 @@ def netlink_reader(*args, **kwargs):
     url = kwargs.get('url')
     keyboard = kwargs.get('keyboard', False)
     if verbosity > 0:
-        log.info('zephyr_uep started, genz_version={}, verbosity={}, url={}'.format(
-            genz_version, verbosity, url))
+        log.info('zephyr_uep started, pid={}, genz_version={}, verbosity={}, url={}'.format(
+            os.getpid(), genz_version, verbosity, url))
     genz = import_module('genz.genz_{}'.format(genz_version.replace('.', '_')))
     nl = GenericNetlinkSocket()
     nl.bind(GENZ_FAMILY_NAME, uep)
