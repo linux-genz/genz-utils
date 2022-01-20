@@ -110,6 +110,13 @@ class ErrSeverity(Enum):
     Caution = auto(),
     Critical = auto()
 
+class CReset(Enum):
+    NoReset = 0
+    FullReset = 1
+    WarmReset = 2
+    WarmNonSwitchReset = 3
+    ContentReset = 4
+
 class GCID():
     def __init__(self, val=None, sid=0, cid=None, str=None):
         if val is not None:

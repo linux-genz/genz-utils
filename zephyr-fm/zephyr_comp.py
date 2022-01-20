@@ -22,7 +22,7 @@
 # SOFTWARE.
 
 import ctypes
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
+from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, CReset
 import os
 import re
 import time
@@ -524,6 +524,7 @@ class Component():
             self.route_info = [[RouteInfo() for j in range(cols)]
                                for i in range(rows)]
             # invalidate SSDT (except PFM CID written earlier)
+            # Revisit: should we be doing this when reclaiming a C-Up comp?
             for cid in range(0, rows):
                 if cid != pfm.gcid.cid or ingress_iface is None:
                     for rt in range(0, cols):
@@ -540,6 +541,7 @@ class Component():
             # initialize OpCode Set structure
             self.opcode_set_init()
             # initialize Responder Page Grid structure
+            # Revisit: should we be doing this when reclaiming a C-Up comp?
             self.rsp_page_grid_init(core, valid=1)
             # if component is usable, set ComponentEnb - transition to C-Up
             if self.usable:
@@ -1209,12 +1211,13 @@ class Component():
         #    Revisit: handle these power states
         # Note: C-Down is handled in explore_interfaces() - we never get here.
         if peer_cstate is CState.CUp:
+            reset_required = False
             # get PeerGCID
             peer_gcid = iface.peer_gcid
             msg += 'peer gcid={}'.format(peer_gcid)
             if peer_gcid is None:
                 msg += 'peer is C-Up but GCID not valid - ignoring peer'
-                log.info(msg)
+                log.warning(msg)
                 return
             # Revisit: this assumes no other managers
             if peer_gcid in self.fab.comp_gcids: # another path
@@ -1225,7 +1228,43 @@ class Component():
                 log.info(msg)
                 # new path might enable additional or shorter routes
                 self.fab.recompute_routes(iface, peer_iface)
-            elif args.accept_cids:
+            elif args.reclaim:
+                msg += ', reclaiming C-Up component'
+                path = self.fab.make_path(peer_gcid)
+                comp = Component(iface.peer_cclass, self.fab, self.map, path,
+                                 self.mgr_uuid, br_gcid=self.br_gcid,
+                                 netlink=self.nl, verbosity=self.verbosity)
+                peer_iface = Interface(comp, iface.peer_iface_num, iface,
+                                       usable=True)
+                iface.peer_iface = peer_iface
+                gcid = self.fab.assign_gcid(comp, proposed_gcid=peer_gcid)
+                if gcid is None:
+                    msg += ', gcid conflict, reset required'
+                    log.warning(msg)
+                    reset_required = True
+                else:
+                    msg += ', retaining gcid={}'.format(gcid)
+                    log.info(msg)
+                if path.exists():
+                    comp.remove_fab_comp()
+                if not reset_required:
+                    self.fab.add_link(iface, peer_iface)
+                    route = self.fab.setup_bidirectional_routing(
+                        pfm, comp, write_to_ssdt=False)
+                    try:
+                        comp.add_fab_comp(setup=True)
+                    except Exception as e:
+                        log.error('add_fab_comp failed with exception {}'.format(e))
+                        reset_required = True
+                if not reset_required:
+                    usable = comp.comp_init(pfm, ingress_iface=peer_iface,
+                                            route=route[1])
+                    reset_required = not usable
+                    if usable and comp.has_switch:  # if switch, recurse
+                        comp.explore_interfaces(pfm, ingress_iface=peer_iface)
+                if reset_required:
+                    peer_cstate = comp.warm_reset(iface)
+            elif args.accept_cids: # Revisit: mostly duplicate of reclaim
                 # Revisit: add prev_comp handling
                 path = self.fab.make_path(peer_gcid)
                 comp = Component(iface.peer_cclass, self.fab, self.map, path,
@@ -1319,6 +1358,22 @@ class Component():
             self, to, iface))
         # tear down route from "self" to "to"'
         self.fab.teardown_routing(self, to, route)
+
+    def warm_reset(self, iface, prefix='control'):
+        log.debug('attempting warm reset of {}'.format(self))
+        core_file = self.path / prefix / 'core@0x0/core'
+        with core_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            core = self.map.fileToStruct('core', data, fd=f.fileno(),
+                                         verbosity=self.verbosity)
+            # Revisit: check read data (ZUUID?) is not all ones
+            cctl = genz.CControl(core.CControl, core)
+            cctl.field.ComponentReset = CReset.WarmReset
+            core.CControl = cctl.val
+            self.control_write(core, genz.CoreStructure.CControl, sz=8)
+        iface.update_peer_info()
+        # Revisit: if still not C-CFG, use peer_c_reset()
+        return iface.peer_cstate
 
     def __repr__(self):
         return '{}({})'.format(self.__class__.__name__, self.gcid)

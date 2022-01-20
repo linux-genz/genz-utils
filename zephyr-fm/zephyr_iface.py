@@ -29,7 +29,7 @@ import zephyr_conf
 from zephyr_conf import log
 
 class Interface():
-    def __init__(self, component, num, peer_iface=None):
+    def __init__(self, component, num, peer_iface=None, usable=False):
         self.comp = component
         self.peer_iface = peer_iface
         self.num = num
@@ -38,6 +38,7 @@ class Interface():
         self.vcat = None
         self.route_info = None
         # defaults until we can read actual state
+        self.usable = usable
         self.istate = IState.ICFG
         self.phy_status = PHYOpStatus.PHYUp
         self.phy_tx_lwr = 0
