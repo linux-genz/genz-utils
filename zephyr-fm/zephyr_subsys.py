@@ -153,8 +153,7 @@ def main():
     uep_proc.start()
     sys_devices = Path('/sys/devices')
     fab_paths = sys_devices.glob('genz*')
-    fab = None
-    for fab_path in fab_paths:
+    for fab_path in sorted(fab_paths):
         fab = Fabric(nl, map, fab_path, random_cids=args.random_cids,
                      accept_cids=args.accept_cids, fab_uuid=fab_uuid,
                      conf=conf, mgr_uuid=mgr_uuid, verbosity=args.verbosity)
@@ -165,7 +164,7 @@ def main():
         fab.fab_init()
         log.info('finished exploring fabric {}'.format(fab.fabnum))
 
-    if fab is None:
+    if len(fabrics) == 0:
         log.info('no local Gen-Z bridges found')
         return
 
