@@ -427,7 +427,7 @@ class Interface():
 
     def compute_mhc(self, cid, rt, hc, valid):
         if self.lprt is None:
-            return (hc, rt != 0)
+            return (hc, rt != 0, False)
         if valid:
             # Revisit: enum
             cur_min = min(self.lprt[cid], key=lambda x: x.HC if x.V else 63)
@@ -438,7 +438,8 @@ class Interface():
             new_min = min((self.lprt[cid][i] for i in range(len(self.lprt[cid]))
                           if i != rt), key=lambda x: x.HC if x.V else 63)
             new_min = new_min.HC if new_min.V else 63
-        return (new_min, new_min != cur_min and rt != 0)
+        return (new_min, new_min != cur_min and rt != 0,
+                not valid or new_min < cur_min)
 
     def lprt_read(self):
         if self.lprt_dir is None:

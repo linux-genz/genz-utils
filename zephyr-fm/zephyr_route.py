@@ -97,20 +97,22 @@ class RouteElement():
     def set_ssdt(self, to: Component, valid=1, update_rt_num=False):
         if update_rt_num:
             self.route_entries_avail(self.comp, to)
-        mhc, wr0 = self.comp.compute_mhc(to.gcid.cid, self.rt_num,
-                                         self.hc, valid)
+        mhc, wr0, wrN = self.comp.compute_mhc(to.gcid.cid, self.rt_num,
+                                              self.hc, valid)
         # Revisit: vca
-        self.comp.ssdt_write(to.gcid.cid, self.egress_iface.num,
+        if wrN:
+            self.comp.ssdt_write(to.gcid.cid, self.egress_iface.num,
                              rt=self.rt_num, valid=valid, mhc=mhc, hc=self.hc)
         # Revisit: ok to do 2 independent writes? Which order?
         if wr0:
             self.comp.ssdt_write(0, 0, mhc=mhc, mhcOnly=True)
 
     def set_lprt(self, to: Component, valid=1):
-        mhc, wr0 = self.ingress_iface.compute_mhc(to.gcid.cid, self.rt_num,
-                                                  self.hc, valid)
+        mhc, wr0, wrN = self.ingress_iface.compute_mhc(to.gcid.cid, self.rt_num,
+                                                       self.hc, valid)
         # Revisit: vca
-        self.ingress_iface.lprt_write(to.gcid.cid, self.egress_iface.num,
+        if wrN:
+            self.ingress_iface.lprt_write(to.gcid.cid, self.egress_iface.num,
                                       rt=self.rt_num, valid=valid, mhc=mhc,
                                       hc=self.hc)
         # Revisit: ok to do 2 independent writes? Which order?
