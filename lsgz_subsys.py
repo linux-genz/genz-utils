@@ -9,10 +9,10 @@
 # to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
 # copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -179,14 +179,15 @@ class Comp:
         self.verbosity = verbosity
         self.map = map
         self.dr =dr
-        # Revisit: this reads cstate even if Comp is not "selected"
+        self.cstate = None
         if map is not None:
             self.ctl = path / ('' if self.dr else 'control')
-            self.cstate = get_cstate(self.ctl, map)
         else:
             self.ctl = None
-            self.cstate = None
         self.res = []
+
+    def get_cstate(self):
+        self.cstate = get_cstate(self.ctl, self.map)
 
     def check_selected(self, args, match_cuuids, match_serials,
                        match_fabrics, match_gcids, match_cclasses):
@@ -221,6 +222,8 @@ class Comp:
     def ls_comp(self, ignore_dr=True):
         parents = {}
         drs = []
+        # defer cstate read until component is "selected"
+        self.get_cstate()
         # one-line component summary first
         print(self)
         if self.verbosity < 1:
@@ -340,15 +343,15 @@ def main():
     parser.add_argument('-k', '--keyboard', action='store_true',
                         help='break to interactive keyboard at certain points')
     parser.add_argument('-c', '--cclass', action='store', default=None, nargs='+',
-                        help='show only components with this component class (cclass)')
+                        help='select only components with this component class (cclass)')
     parser.add_argument('-f', '--fabric', action='store', default=None, nargs='+',
-                        help='show only components with this fabric number')
+                        help='select only components with this fabric number')
     parser.add_argument('-g', '--gcid', action='store', default=None, nargs='+',
-                        help='show only components with this GCID')
+                        help='select only components with this GCID')
     parser.add_argument('-s', '--serial', action='store', default=None, nargs='+',
-                        help='show only components with this serial number')
+                        help='select only components with this serial number')
     parser.add_argument('-u', '--cuuid', action='store', default=None, nargs='+',
-                        help='show only components with this class UUID (cuuid)')
+                        help='select only components with this class UUID (cuuid)')
     parser.add_argument('-v', '--verbosity', action='count', default=0,
                         help='increase output verbosity')
     parser.add_argument('-F', '--fake-root', action='store',
