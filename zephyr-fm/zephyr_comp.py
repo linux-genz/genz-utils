@@ -1227,6 +1227,7 @@ class Component():
         # Note: C-Down is handled in explore_interfaces() - we never get here.
         if peer_cstate is CState.CUp:
             reset_required = False
+            peer_c_reset_only = False
             # get PeerGCID
             peer_gcid = iface.peer_gcid
             msg += 'peer gcid={}'.format(peer_gcid)
@@ -1257,6 +1258,7 @@ class Component():
                     msg += ', gcid conflict, reset required'
                     log.warning(msg)
                     reset_required = True
+                    peer_c_reset_only = True
                 else:
                     msg += ', retaining gcid={}'.format(gcid)
                     log.info(msg)
@@ -1278,7 +1280,12 @@ class Component():
                     if usable and comp.has_switch:  # if switch, recurse
                         comp.explore_interfaces(pfm, ingress_iface=peer_iface)
                 if reset_required:
-                    peer_cstate = comp.warm_reset(iface)
+                    peer_cstate = comp.warm_reset(iface,
+                                            peer_c_reset_only=peer_c_reset_only)
+                    if peer_cstate is not CState.CCFG:
+                        log.warning('unable to reset - ignoring component on {}'.format(
+                            iface))
+                        return
             elif args.accept_cids: # Revisit: mostly duplicate of reclaim
                 # Revisit: add prev_comp handling
                 path = self.fab.make_path(peer_gcid)
@@ -1375,20 +1382,28 @@ class Component():
         # tear down route from "self" to "to"'
         self.fab.teardown_routing(self, to, route)
 
-    def warm_reset(self, iface, prefix='control'):
-        log.debug('attempting warm reset of {}'.format(self))
-        core_file = self.path / prefix / 'core@0x0/core'
-        with core_file.open(mode='rb+') as f:
-            data = bytearray(f.read())
-            core = self.map.fileToStruct('core', data, fd=f.fileno(),
-                                         verbosity=self.verbosity)
-            # Revisit: check read data (ZUUID?) is not all ones
-            cctl = genz.CControl(core.CControl, core)
-            cctl.field.ComponentReset = CReset.WarmReset
-            core.CControl = cctl.val
-            self.control_write(core, genz.CoreStructure.CControl, sz=8)
+    def warm_reset(self, iface, prefix='control', peer_c_reset_only=False):
+        if not peer_c_reset_only:
+            log.debug('attempting component warm reset of {}'.format(self))
+            core_file = self.path / prefix / 'core@0x0/core'
+            with core_file.open(mode='rb+') as f:
+                data = bytearray(f.read())
+                core = self.map.fileToStruct('core', data, fd=f.fileno(),
+                                             verbosity=self.verbosity)
+                # Revisit: check read data (ZUUID?) is not all ones
+                cctl = genz.CControl(core.CControl, core)
+                cctl.field.ComponentReset = CReset.WarmReset
+                core.CControl = cctl.val
+                self.control_write(core, genz.CoreStructure.CControl, sz=8)
+            # end with
+        # end if
         iface.update_peer_info()
-        # Revisit: if still not C-CFG, use peer_c_reset()
+        # if still not C-CFG, use peer_c_reset()
+        if iface.peer_cstate is not CState.CCFG:
+            log.debug('attempting peer_c_reset of {} via {}'.format(
+                self, iface))
+            iface.peer_c_reset()
+            iface.update_peer_info()
         return iface.peer_cstate
 
     def __repr__(self):

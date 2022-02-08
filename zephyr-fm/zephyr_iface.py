@@ -159,11 +159,17 @@ class Interface():
             log.debug('{}: writing IControl IfaceEnb'.format(self))
             self.comp.control_write(iface,
                             genz.InterfaceStructure.IControl, sz=4, off=4)
-            # Revisit: do we need to do this?
-            istatus = genz.IStatus(0, iface)
-            istatus.field.LinkRFCStatus = 1  # RW1C
+            # clear IStatus RW1C bits that we might care about later
+            istatus = genz.IStatus(0, iface) # all 0 IStatus
+            istatus.field.FullIfaceReset = 1
+            istatus.field.WarmIfaceReset = 1
+            istatus.field.LinkRFCStatus = 1
+            istatus.field.PeerLinkRFCReady = 1
+            istatus.field.ExceededTransientErrThresh = 1
+            istatus.field.LUpToLLPTransitionFailed = 1
+            istatus.field.IfaceContainment = 1
             iface.IStatus = istatus.val
-            log.debug('{}: writing IStatus'.format(self))
+            log.debug('{}: writing IStatus, val={:#x}'.format(self, istatus.val))
             self.comp.control_write(iface,
                             genz.InterfaceStructure.IStatus, sz=4, off=0)
             # verify I-Up
