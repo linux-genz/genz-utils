@@ -138,6 +138,8 @@ def get_parent(fpath, dpath, parents):
     return parent
 
 def get_cstate(ctl, map):
+    if ctl is None:
+        return None
     core_path = ctl / 'core@0x0' / 'core'
     try:
         core = get_struct(core_path, map)
