@@ -119,6 +119,7 @@ def main():
     genz = import_module('genz.genz_{}'.format(args.genz_version.replace('.', '_')))
     zephyr_conf.init(args, genz)
     args_vars = vars(args)
+    log.debug('args={}'.format(args_vars))
     nl = NetlinkManager(config='./zephyr-fm/alpaka.conf')
     map = genz.ControlStructureMap()
     mgr_uuid = None # by default, generate new mgr_uuid every run
