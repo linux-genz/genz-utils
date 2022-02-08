@@ -64,6 +64,7 @@ class CStatus(SpecialField, Union):
                     ('Rv',                  c_u64, 44),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', CStatusFields), ('val', c_u64)]
     _c_state = ['C-Down', 'C-CFG', 'C-Up', 'C-LP', 'C-DLP',
                 'C-Rv5', 'C-Rv6', 'C-Rv7']
@@ -96,6 +97,7 @@ class CControl(SpecialField, Union):
                     ('Rv',                          c_u64, 45),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', CControlFields), ('val', c_u64)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -154,6 +156,7 @@ class CAP1(SpecialField, Union):
                     ('LoopbackSup',         c_u64,  1),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', CAP1Fields), ('val', c_u64)]
     _max_pkt    = ['256B']
     _addr       = ['ZeroBased', 'NonZeroBased']
@@ -219,6 +222,7 @@ class CAP1Control(SpecialField, Union):
                     ('SWMgmt7',                    c_u64,  1),
         ]
 
+    _anonymous_ = ('field',)
     _fields_     = [('field', CAP1ControlFields), ('val', c_u64)]
     _max_pkt     = ['256B']
     _mgr_type    = ['Primary', 'Fabric']
@@ -266,6 +270,7 @@ class CAP2(SpecialField, Union):
                     ('Rv',                         c_u64, 18),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', CAP2Fields), ('val', c_u64)]
     _rkey       = ['Unsup', 'Req', 'Rsp', 'ReqRsp']
     _poison     = ['Unsup', '16B', '32B', '64B', '128B', '256B', '512B',
@@ -307,6 +312,7 @@ class CAP2Control(SpecialField, Union):
                     ('Rv',                         c_u64, 39),
         ]
 
+    _anonymous_ = ('field',)
     _fields_     = [('field', CAP2ControlFields), ('val', c_u64)]
     _di_pi_sz    = ['512B', '4KiB']
     _special = {'DIPIBlockSize': _di_pi_sz
@@ -325,6 +331,7 @@ class DestTableCAP1(SpecialField, Union):
                     ('Rv',                          c_u32, 28),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', DestTableCAP1Fields), ('val', c_u32)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -338,6 +345,7 @@ class DestTableControl(SpecialField, Union):
                     ('Rv',                          c_u32, 30),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', DestTableControlFields), ('val', c_u32)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -356,6 +364,7 @@ class EControl(SpecialField, Union):
                     ('ErrFaultInjEnb',              c_u16,  1),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', EControlFields), ('val', c_u16)]
     _err_log    = ['Crit', 'Crit+Caution', 'Crit+Caution+NonCrit']
     _err_tgt    = ['TgtPM', 'TgtPFMSFM', 'TgtErrMgrCID',   'TgtErrMgrGCID']
@@ -377,6 +386,7 @@ class EControl2(SpecialField, Union):
                     ('Rv',                          c_u32, 30),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', EControl2Fields), ('val', c_u32)]
     _pwr_tgt    = ['TgtPM', 'TgtPFMSFM', 'TgtPwrMgrCID',   'TgtPwrMgrGCID']
     _special = {'PwrUEPTgt': _pwr_tgt,
@@ -393,6 +403,7 @@ class EStatus(SpecialField, Union):
                     ('Rv',                          c_u16, 14),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', EStatusFields), ('val', c_u16)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -411,6 +422,7 @@ class ErrSigCAP1(SpecialField, Union):
                     ('Rv',                          c_u16,  8),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', ErrSigCAP1Fields), ('val', c_u16)]
     _vdef_err   = ['Unsup', 'CUUID', 'VdefUUID']
     _special = {'VdefErrLogUUID': _vdef_err,
@@ -429,6 +441,7 @@ class ErrSigCAP1Control(SpecialField, Union):
                     ('Rv',                          c_u16, 12),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', ErrSigCAP1ControlFields), ('val', c_u16)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -472,6 +485,7 @@ class CError(SpecialField, Union):
                     ('Vdef',                        c_u64,  8),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', CErrorFields), ('val', c_u64)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -546,6 +560,7 @@ class CErrorSigTgt(SpecialField, Union):
             self.InsufficientSpaceh = (val >> 1) & 0x3
             self.InsufficientSpacel = val & 0x1
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', CErrorSigTgtFields), ('val', c_u64 * 3)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -585,6 +600,7 @@ class CEvent(SpecialField, Union):
                     ('Vdef',                        c_u64,  4),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', CEventFields), ('val', c_u64)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -648,6 +664,7 @@ class CEventSigTgt(SpecialField, Union):
             self.CompThermThrottleRestoreh = (val >> 1) & 0x3
             self.CompThermThrottleRestorel = val & 0x1
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', CEventSigTgtFields), ('val', c_u64 * 3)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -668,6 +685,7 @@ class IEvent(SpecialField, Union):
                     ('Vdef',                        c_u64,  4),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', IEventFields), ('val', c_u64)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -700,6 +718,7 @@ class IEventSigTgt(SpecialField, Union):
                     ('Vdef3',                       c_u64,  3),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', IEventSigTgtFields), ('val', c_u64 * 3)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -728,6 +747,7 @@ class OpCodeSetCAP1(SpecialField, Union):
                     ('Rv',                  c_u64, 43),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', CAP1Fields), ('val', c_u64)]
     _endian     = ['Unsup', 'Little', 'Big', 'LittleBig']
     _prot       = ['V1']
@@ -747,6 +767,7 @@ class OpCodeSetCAP1Control(SpecialField, Union):
                     ('Rv',                         c_u32, 27),
         ]
 
+    _anonymous_ = ('field',)
     _fields_     = [('field', CAP1ControlFields), ('val', c_u32)]
     _cache_sz    = ['Disabled', '32B', '64B', '128B', '256B']
     _uniform     = ['None', 'Explicit', 'P2P64', 'P2PVdef']
@@ -763,6 +784,7 @@ class OpCodeSetIDControl1(SpecialField, Union):
                     ('Rv',                         c_u16, 15),
         ]
 
+    _anonymous_ = ('field',)
     _fields_     = [('field', Control1Fields), ('val', c_u16)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -789,6 +811,7 @@ class IStatus(SpecialField, Union):
                     ('Rv',                         c_u32, 11),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', IStatusFields), ('val', c_u32)]
     _i_state    = ['I-Down', 'I-CFG', 'I-Up', 'I-LP']
     _ctl_stat   = ['InProgress', 'ACKReceived', 'UnsupLinkCTL',
@@ -834,6 +857,7 @@ class IControl(SpecialField, Union):
                     ('Rv',                         c_u32,  7),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', IControlFields), ('val', c_u32)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -876,6 +900,7 @@ class ICAP1(SpecialField, Union):
                     ('P2PBackupSup',             c_u32,  1),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', ICAP1Fields), ('val', c_u32)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -913,6 +938,7 @@ class ICAP1Control(SpecialField, Union):
                     ('Rv',                               c_u32,  3),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', ICAP1ControlFields), ('val', c_u32)]
 
     _opclass    = ['NotConfig', 'Explicit', 'P2P64', 'P2PVdef',
@@ -930,6 +956,7 @@ class ICAP2(SpecialField, Union):
                     ('Rv',                       c_u32, 29),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', ICAP2Fields), ('val', c_u32)]
 
     _te_hist_sz = ['256', '512', '1024']
@@ -946,6 +973,7 @@ class ICAP2Control(SpecialField, Union):
                     ('Rv',                               c_u32, 30),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', ICAP2ControlFields), ('val', c_u32)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -967,6 +995,7 @@ class IError(SpecialField, Union):
                     ('Rv',                               c_u16,  7),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', IErrorFields), ('val', c_u16)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -994,6 +1023,7 @@ class IErrorES(SpecialField, Union):
                     ('Rv',                         c_u32, 19),
                     ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', IErrorESFields), ('val', c_u32)]
 
     # Revisit: names here duplicate class IErrorFields names
@@ -1047,6 +1077,7 @@ class IErrorSigTgt(SpecialField, Union):
             self.UnexpectedPHYFailureh = (val >> 1) & 0x3
             self.UnexpectedPHYFailurel = val & 0x1
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', IErrorSigTgtFields), ('val', c_u16 * 3)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -1082,6 +1113,7 @@ class PeerState(SpecialField, Union):
                     ('Rv',                               c_u32,  6),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', PeerStateFields), ('val', c_u32)]
 
     _c_state    = ['C-Down', 'C-CFG', 'C-Up', 'C-LP', 'C-DLP']
@@ -1112,6 +1144,7 @@ class LinkCTLControl(SpecialField, Union):
                     ('Rv',                               c_u32, 20),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', LinkCTLControlFields), ('val', c_u32)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -1131,6 +1164,7 @@ class PHYStatus(SpecialField, Union):
                     ('Rv',                       c_u32, 16),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', PHYStatusFields), ('val', c_u32)]
     _phy_op_status = ['PHY-Down', 'PHY-Up', 'PHY-Down-Retrain',
                       'PHY-Up-LP1', 'PHY-Up-LP2', 'PHY-Up-LP3', 'PHY-Up-LP4',
@@ -1151,6 +1185,7 @@ class PHYType(SpecialField, Union):
     class PHYTypeFields(Structure):
         _fields_ = [('PHYType',             c_u8,   8)]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', PHYTypeFields), ('val', c_u8)]
     _phy_type = ['25GFabric', '25GLocal', 'PCIe']
     _special = {'PHYType': _phy_type}
@@ -1172,6 +1207,7 @@ class PACAP1(SpecialField, Union):
                     ('Rv',                  c_u32, 21),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', PACAP1Fields), ('val', c_u32)]
     _pa_idx_sz = ['0bits', '8bits', '16bits']
     _pa_ent_sz = ['16bits']
@@ -1187,6 +1223,7 @@ class PACAP1Control(SpecialField, Union):
                     ('Rv',                               c_u32, 31),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', PACAP1ControlFields), ('val', c_u32)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -1197,6 +1234,7 @@ class CPageSz(SpecialField, Union):
     class CPageSzFields(Structure):
         _fields_ = [('CPageSz',             c_u8,   4)]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', CPageSzFields), ('val', c_u8)]
     _cpage_sz = ['4KiB', '64KiB', '1MiB', '32MiB']
     _special = {'CPageSz': _cpage_sz}
@@ -1213,6 +1251,7 @@ class CAccessCAP1(SpecialField, Union):
         ]
 
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', CAccessCAP1Fields), ('val', c_u8)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -1229,6 +1268,7 @@ class CAccessCTL(SpecialField, Union):
         ]
 
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', CAccessCTLFields), ('val', c_u8)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -1245,6 +1285,7 @@ class PGZMMUCAP1(SpecialField, Union):
         ]
 
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', PGZMMUCAP1Fields), ('val', c_u32)]
     _type    = ['ReqZMMU', 'RspZMMU']
     _special = {'ZMMUType': _type}
@@ -1263,6 +1304,7 @@ class PTZMMUCAP1(SpecialField, Union):
         ]
 
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', PTZMMUCAP1Fields), ('val', c_u32)]
     _type    = ['ReqZMMU', 'RspZMMU']
     _special = {'ZMMUType': _type}
@@ -1342,6 +1384,7 @@ class RCCAP1(SpecialField, Union):
                     ('Rv',                                c_u16, 12),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', RCCAP1Fields), ('val', c_u16)]
     _tbl_sz     = ['48B']
     _special = {'RtCtlTableSz': _tbl_sz}
@@ -1361,6 +1404,7 @@ class SwitchCAP1(SpecialField, Union):
                     ('Rv',                                c_u32, 26),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', SwitchCAP1Fields), ('val', c_u32)]
     _scale   = ['ps', 'ns']
     _special = {'ULATScale': _scale, 'MLATScale': _scale}
@@ -1378,6 +1422,7 @@ class SwitchCAP1Control(SpecialField, Union):
                     ('Rv',                                c_u32, 28),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', SwitchCAP1ControlFields), ('val', c_u32)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -1390,6 +1435,7 @@ class SwitchOpCTL(SpecialField, Union):
                     ('Rv',                                c_u16, 15),
         ]
 
+    _anonymous_ = ('field',)
     _fields_    = [('field', SwitchOpCTLFields), ('val', c_u16)]
 
     def __init__(self, value, parent, verbosity=0):
@@ -1914,6 +1960,11 @@ class ControlTable(ControlStructure):
 # for PATable, RIT, SSAP, MCAP, MSAP, MSMCAP,
 # CAccessRKeyTable, CAccessLP2PTable, PGTable, PTETable
 class ControlTableArray(ControlTable):
+    fullEntryWrite = False
+
+    def cs_offset(self, row, *unused):
+        return sizeof(self.element) * row
+
     def __getitem__(self, key):
         return self.array[key]
 
@@ -1950,6 +2001,8 @@ class ControlTableArray(ControlTable):
 
 # for RequesterVCAT, ResponderVCAT, VCAT, SSDT, MSDT, LPRT, MPRT
 class ControlTable2DArray(ControlTableArray):
+    fullEntryWrite = True
+
     @property
     def rows(self):
         return len(self.array)
@@ -2881,13 +2934,19 @@ class UnknownStructure(ControlStructure):
                 ('Size',                       c_u32, 16)]
     # Revisit: print rest of structure in hex?
 
+class ControlTableElement(ControlStructure):
+    def __str__(self):
+        if self.verbosity <= 4:
+            return super().__repr__()
+        return super().__str__()
+
 class PATable(ControlTableArray):
     def fileToStructInit(self):
         super().fileToStructInit()
         # Revisit: subfields
         fields = [('PeerAttr',  c_u16, 16)
         ]
-        PA = type('PA', (ControlStructure,), {'_fields_': fields,
+        PA = type('PA', (ControlTableElement,), {'_fields_': fields,
                                               'verbosity': self.verbosity,
                                               'Size': 2}) # Revisit
         items = self.Size // sizeof(PA)
@@ -2903,7 +2962,7 @@ class RequesterVCATTable(ControlTable2DArray):
         if self.parent.HCS:
             fields.extend([('TH', c_u32, 7), ('R0', c_u32, 25)])
             sz = 8
-        VCAT = type('VCAT', (ControlStructure,), {'_fields_': fields,
+        VCAT = type('VCAT', (ControlTableElement,), {'_fields_': fields,
                                                   'verbosity': self.verbosity,
                                                   'Size': sz})
         rows = 16  # always 16 rows
@@ -2920,7 +2979,7 @@ class ResponderVCATTable(ControlTable2DArray):
         if self.parent.HCS:
             fields.extend([('TH', c_u32, 7), ('R0', c_u32, 25)])
             sz = 8
-        VCAT = type('VCAT', (ControlStructure,), {'_fields_': fields,
+        VCAT = type('VCAT', (ControlTableElement,), {'_fields_': fields,
                                                   'verbosity': self.verbosity,
                                                   'Size': sz})
         items = self.Size // sizeof(VCAT)
@@ -2938,7 +2997,7 @@ class VCATTable(ControlTable2DArray):
         if self.core.sw.HCS:
             fields.extend([('TH', c_u32, 7), ('R0', c_u32, 25)])
             sz = 8
-        VCAT = type('VCAT', (ControlStructure,), {'_fields_': fields,
+        VCAT = type('VCAT', (ControlTableElement,), {'_fields_': fields,
                                                   'verbosity': self.verbosity,
                                                   'Size': sz})
         items = self.Size // sizeof(VCAT)
@@ -2948,13 +3007,15 @@ class VCATTable(ControlTable2DArray):
         self.element = VCAT
 
 class RITTable(ControlTableArray):
+    fullEntryWrite = True
+
     def fileToStructInit(self):
         super().fileToStructInit()
         # Revisit: need parent/core so we can dynamically build RIT based on
         # MaxInterface, RITPadSize, etc.
         fields = [('EIM',       c_u32, 32)
         ]
-        RIT = type('RIT', (ControlStructure,), {'_fields_': fields,
+        RIT = type('RIT', (ControlTableElement,), {'_fields_': fields,
                                                 'verbosity': self.verbosity,
                                                 'Size': 4}) # Revisit
         items = self.Size // sizeof(RIT)
@@ -2972,7 +3033,7 @@ class SSDTMSDTLPRTMPRTTable(ControlTable2DArray):
                   ('VCA',       c_u32,  5),
                   ('EI',        c_u32, 12),
         ]
-        SSDT = type(self._name, (ControlStructure,), {'_fields_': fields,
+        SSDT = type(self._name, (ControlTableElement,), {'_fields_': fields,
                                                   'verbosity': self.verbosity,
                                                   'Size': 4})
         rows = self.rows
@@ -3048,7 +3109,7 @@ class SSAPMCAPMSAPMSMCAPTable(ControlTableArray):
         fields.append(('ACRSP',           c_u32,  2))
         if pad_sz > 0:
             fields.append(('Pad',         c_u32,  pad_sz))
-        SSAP = type(self._name, (ControlStructure,), {'_fields_': fields,
+        SSAP = type(self._name, (ControlTableElement,), {'_fields_': fields,
                                                   'verbosity': self.verbosity,
                                                   'Size': 4})
         items = self.Size // sizeof(SSAP)
@@ -3081,7 +3142,7 @@ class CAccessRKeyTable(ControlTableArray):
         fields = [('RORKey',      c_u64, 32),
                   ('RWRKey',      c_u64, 32),
         ]
-        RKey = type('RKey', (ControlStructure,), {'_fields_': fields,
+        RKey = type('RKey', (ControlTableElement,), {'_fields_': fields,
                                                   'verbosity': self.verbosity,
                                                   'Size': 8})
         items = self.Size // sizeof(RKey)
@@ -3096,7 +3157,7 @@ class CAccessLP2PTable(ControlTableArray):
                   ('P2PAC',       c_u8,  3),
                   ('Rv',          c_u8,  2),
         ]
-        LP2P = type('LP2P', (ControlStructure,), {'_fields_': fields,
+        LP2P = type('LP2P', (ControlTableElement,), {'_fields_': fields,
                                                   'verbosity': self.verbosity,
                                                   'Size': 1})
         items = self.Size // sizeof(LP2P)
@@ -3113,7 +3174,7 @@ class PGTable(ControlTableArray):
                   ('PageCount',   c_u64, 24),
                   ('BasePTEIdx',  c_u64, 32),
         ]
-        PG = type('PG', (ControlStructure,), {'_fields_': fields,
+        PG = type('PG', (ControlTableElement,), {'_fields_': fields,
                                               'verbosity': self.verbosity,
                                               'Size': 16})
         items = self.Size // sizeof(PG)
@@ -3332,7 +3393,7 @@ class PTETable(ControlTableArray):
         if needADDR:
             pte_dict['addr_l_bits'] = needADDR
             pte_dict['ADDR'] = property(pte_addr_get, pte_addr_set)
-        PTE = type('{}PTE'.format(pfx), (ControlStructure,), pte_dict)
+        PTE = type('{}PTE'.format(pfx), (ControlTableElement,), pte_dict)
         items = self.Size // sizeof(PTE)
         self.array = (PTE * items).from_buffer(self.data)
         self.element = PTE
