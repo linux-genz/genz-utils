@@ -1043,6 +1043,8 @@ class Component():
     def compute_mhc(self, cid, rt, hc, valid):
         if self.ssdt is None:
             return (hc, rt != 0, False)
+        # Revisit: what about changes to other fields, like VCA & EI?
+        curV = self.ssdt[cid][rt].V
         if valid:
             # Revisit: enum
             cur_min = min(self.ssdt[cid], key=lambda x: x.HC if x.V else 63)
@@ -1053,8 +1055,9 @@ class Component():
             new_min = min((self.ssdt[cid][i] for i in range(len(self.ssdt[cid]))
                           if i != rt), key=lambda x: x.HC if x.V else 63)
             new_min = new_min.HC if new_min.V else 63
-        return (new_min, new_min != cur_min and rt != 0,
-                not valid or new_min < cur_min)
+        wr0 = new_min != cur_min and rt != 0
+        wrN = not valid or new_min < cur_min or valid != curV
+        return (new_min, wr0, wrN)
 
     def ssdt_read(self):
         if self.ssdt is not None or self.ssdt_dir is None:

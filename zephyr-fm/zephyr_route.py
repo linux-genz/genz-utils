@@ -105,7 +105,7 @@ class RouteElement():
                              rt=self.rt_num, valid=valid, mhc=mhc, hc=self.hc)
         # Revisit: ok to do 2 independent writes? Which order?
         if wr0:
-            self.comp.ssdt_write(0, 0, mhc=mhc, mhcOnly=True)
+            self.comp.ssdt_write(to.gcid.cid, 0, mhc=mhc, mhcOnly=True)
 
     def set_lprt(self, to: Component, valid=1):
         mhc, wr0, wrN = self.ingress_iface.compute_mhc(to.gcid.cid, self.rt_num,
@@ -117,7 +117,7 @@ class RouteElement():
                                       hc=self.hc)
         # Revisit: ok to do 2 independent writes? Which order?
         if wr0:
-            self.ingress_iface.lprt_write(0, 0, mhc=mhc, mhcOnly=True)
+            self.ingress_iface.lprt_write(to.gcid.cid, 0, mhc=mhc, mhcOnly=True)
 
     def to_json(self):
         return str(self)
