@@ -490,6 +490,9 @@ class Component():
             cap2ctl.field.SFMSIDValid = 0
             core.CAP2Control = cap2ctl.val
             self.control_write(core, genz.CoreStructure.CAP2Control, sz=8)
+            # set CompNonce
+            core.CompNonce = self.nonce
+            self.control_write(core, genz.CoreStructure.CompNonce, sz=8)
             # check that at least 1 interface can be brought Up
             for ifnum in range(0, core.MaxInterface):
                 try:
@@ -1215,20 +1218,22 @@ class Component():
             msg += 'peer manager type is not Fabric - claiming anyway, '
             #log.info(msg)
             #return
-        # We need to distinguish 5 cases here:
+        # We need to distinguish 3 main cstate cases here:
         # 1. cstate is C-CFG - component is ready for us to configure
         #    using directed relay.
-        # Revisit: we can't read MGR-UUID, so this doesn't work
-        # Revisit: Russ says nonce exchange can work, but it's optional
-        # 2. cstate is C-Up: Read MGR-UUID - 3 sub-cases:
-        #    a. MGR-UUID matches our current MGR-UUID:
-        #       Topology has a cycle; this is another path to a component
-        #       we've already configured. Add new link to topology (for
-        #       multipath routing); do nothing else.
-        #    b. MGR-UUID matches a previous MGR-UUID we've used:
-        #       Revisit: try to talk to it using previous C-Access
-        #       If that fails, reset component and handle as case 1.
-        #    c. MGR-UUID is unknown to us (or read fails):
+        # 2. cstate is C-Up:
+        #    a. Component has no valid GCID (should not happen) - ignore it
+        #       Revisit: try peer-c-reset link CTL
+        #    b. Component has GCID match in our topology
+        #       Do nonce exchange with peer - 2 sub-cases:
+        #       i. Nonce matches
+        #          Topology has a cycle; this is another path to a component
+        #          we've already configured. Add new link to topology and
+        #          recompute routes; do nothing else.
+        #       ii. Nonce mismatch
+        #           Not the component we thought it was
+        #           Revisit: try to contact foreign FM
+        #    c. GCID is unknown to us:
         #       Revisit: try to contact foreign FM
         # 3. cstate is C-LP/C-DLP:
         #    Revisit: handle these power states
@@ -1243,10 +1248,17 @@ class Component():
                 msg += 'peer is C-Up but GCID not valid - ignoring peer'
                 log.warning(msg)
                 return
-            # Revisit: this assumes no other managers
-            if peer_gcid in self.fab.comp_gcids: # another path
+            if peer_gcid in self.fab.comp_gcids: # another path?
                 comp = self.fab.comp_gcids[peer_gcid]
                 peer_iface = comp.interfaces[iface.peer_iface_num]
+                iface.set_peer_iface(peer_iface)
+                nonce_valid = iface.do_nonce_exchange()
+                if not nonce_valid:
+                    iface.set_peer_iface(None)
+                    msg += ' nonce mismatch'
+                    log.warning(msg)
+                    # Revisit: contact foreign FM
+                    return
                 self.fab.add_link(iface, peer_iface)
                 msg += ' additional path to {}'.format(comp)
                 log.info(msg)
@@ -1260,7 +1272,7 @@ class Component():
                                  netlink=self.nl, verbosity=self.verbosity)
                 peer_iface = Interface(comp, iface.peer_iface_num, iface,
                                        usable=True)
-                iface.peer_iface = peer_iface
+                iface.set_peer_iface(peer_iface)
                 gcid = self.fab.assign_gcid(comp, proposed_gcid=peer_gcid)
                 if gcid is None:
                     msg += ', gcid conflict, reset required'
@@ -1302,7 +1314,7 @@ class Component():
                                  self.mgr_uuid, br_gcid=self.br_gcid,
                                  netlink=self.nl, verbosity=self.verbosity)
                 peer_iface = Interface(comp, iface.peer_iface_num, iface)
-                iface.peer_iface = peer_iface
+                iface.set_peer_iface(peer_iface)
                 gcid = self.fab.assign_gcid(comp, proposed_gcid=peer_gcid)
                 if gcid is None:
                     msg += ' gcid conflict, ignoring component'
@@ -1335,7 +1347,7 @@ class Component():
                                  self.mgr_uuid, dr=dr, br_gcid=self.br_gcid,
                                  netlink=self.nl, verbosity=self.verbosity)
                 peer_iface = Interface(comp, iface.peer_iface_num, iface)
-                iface.peer_iface = peer_iface
+                iface.set_peer_iface(peer_iface)
                 gcid = self.fab.assign_gcid(comp)
                 msg += 'assigned gcid={}'.format(gcid)
                 self.fab.add_link(iface, peer_iface)

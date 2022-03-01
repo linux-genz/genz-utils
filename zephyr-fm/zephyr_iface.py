@@ -31,12 +31,13 @@ from zephyr_conf import log
 class Interface():
     def __init__(self, component, num, peer_iface=None, usable=False):
         self.comp = component
-        self.peer_iface = peer_iface
+        self.set_peer_iface(peer_iface, init=True)
         self.num = num
         self.hvs = None
         self.lprt = None
         self.vcat = None
         self.route_info = None
+        self.peer_nonce = None
         # defaults until we can read actual state
         self.usable = usable
         self.istate = IState.ICFG
@@ -185,6 +186,10 @@ class Interface():
             # save PeerCState & PeerGCID
             self.peer_cstate = self.get_peer_cstate(iface)
             self.peer_gcid = self.get_peer_gcid(iface)
+            if self.peer_iface is not None:
+                nonce_valid = self.nonce_exchange(iface)
+                if not nonce_valid:
+                    log.warning('{}: invalid nonce exchange'.format(self))
         # end with
         if is_switch:
             # initialize VCAT
@@ -235,6 +240,57 @@ class Interface():
         # Revisit: major side-effect - IErrorStatus is cleared (bits are RW1CS)
         self.comp.control_write(iface,
                             genz.InterfaceStructure.IErrorStatus, sz=8)
+
+    def nonce_exchange(self, iface) -> bool:
+        # do nonce init of peer
+        self.peer_iface.do_nonce_init(sendNonce=False)
+        # do nonce init and exchange
+        nonce_valid = self.nonce_init(iface, sendNonce=True)
+        return nonce_valid
+
+    def do_nonce_exchange(self) -> bool:
+        # do nonce init of peer
+        self.peer_iface.do_nonce_init(sendNonce=False)
+        # do nonce init and exchange
+        nonce_valid = self.do_nonce_init(sendNonce=True)
+        return nonce_valid
+
+    def do_nonce_init(self, sendNonce=True) -> bool:
+        iface_file = self.iface_dir / 'interface'
+        with iface_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            iface = self.comp.map.fileToStruct('interface', data,
+                                fd=f.fileno(), verbosity=self.comp.verbosity)
+            status = self.nonce_init(iface, sendNonce=sendNonce)
+        return status
+
+    def nonce_init(self, iface, sendNonce=True) -> bool:
+        log.debug('{}: nonce_init'.format(self))
+        try:
+            self.peer_nonce = self.peer_comp.nonce
+        except AttributeError:
+            log.debug('{}: no peer_comp yet'.format(self))
+            return False
+        genz = zephyr_conf.genz
+        icap1ctl = genz.ICAP1Control(iface.ICAP1Control, iface)
+        # (temporarily) disable PeerNonceValidationEnb
+        icap1ctl.PeerNonceValidationEnb = 0
+        iface.ICAP1Control = icap1ctl.val
+        self.comp.control_write(iface,
+                            genz.InterfaceStructure.ICAP1Control, sz=4, off=4)
+        # write PeerNonce
+        iface.PeerNonce = self.peer_nonce
+        self.comp.control_write(iface,
+                            genz.InterfaceStructure.PeerNonce, sz=8)
+        # (re)enable PeerNonceValidationEnb
+        icap1ctl.PeerNonceValidationEnb = 1
+        iface.ICAP1Control = icap1ctl.val
+        self.comp.control_write(iface,
+                            genz.InterfaceStructure.ICAP1Control, sz=4, off=4)
+        # initiate nonce exchange if sendNonce is True
+        if sendNonce:
+            return self.send_nonce_exchange(iface)
+        return False
 
     def update_peer_info(self):
         iface_file = self.iface_dir / 'interface'
@@ -294,6 +350,21 @@ class Interface():
         icontrol.field.PathTimeReq = 0
         iface.IControl = icontrol.val
         return status
+
+    def send_nonce_exchange(self, iface, timeout=10000) -> bool:
+        genz = zephyr_conf.genz
+        icontrol = genz.IControl(iface.IControl, iface)
+        icontrol.PeerNonceReq = 1
+        iface.IControl = icontrol.val
+        self.comp.control_write(iface, genz.InterfaceStructure.IControl,
+                                sz=4, off=4)
+        status = self.wait_link_ctl(iface, timeout)
+        icontrol.PeerNonceReq = 0
+        iface.IControl = icontrol.val
+        if status != 1: # Revisit: enum
+            return False
+        istatus = genz.IStatus(iface.IStatus, iface)
+        return istatus.PeerNonceDetected == 1
 
     def wait_link_ctl(self, iface, timeout):
         genz = zephyr_conf.genz
@@ -392,6 +463,13 @@ class Interface():
         # Revisit: should this re-read value?
         peer_state = genz.PeerState(iface.PeerState, iface)
         return peer_state.field.PeerMgrType
+
+    def set_peer_iface(self, peer_iface, init=False) -> None:
+        if not init and self.peer_iface is not None:
+            self.peer_iface.peer_iface = None
+        self.peer_iface = peer_iface
+        if peer_iface is not None:
+            peer_iface.peer_iface = self
 
     @property
     def peer_comp(self):
