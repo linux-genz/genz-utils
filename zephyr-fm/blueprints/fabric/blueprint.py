@@ -161,3 +161,43 @@ def uep():
     # Revisit: validate json against schema
     resp = fab.handle_uep(body)
     return flask.make_response(flask.jsonify(resp), 200)
+
+
+@Journal.BP.route('/%s/routes/add' % (Journal.name), methods=['POST'])
+def routes_add():
+    """
+        Accepts POST request with a json body describing the UEP and the
+    component that received it.
+    """
+    global Journal
+    mainapp = Journal.mainapp
+    fab = mainapp.conf.fab
+    body = flask.request.get_json()
+
+    if body is None:
+        msg = { 'error ' : ''}
+        return flask.make_response(flask.jsonify(msg), 400)
+
+    # Revisit: validate json against schema
+    resp = fab.add_routes(body)
+    return flask.make_response(flask.jsonify(resp), 200)
+
+
+@Journal.BP.route('/%s/routes/remove' % (Journal.name), methods=['POST'])
+def routes_remove():
+    """
+        Accepts POST request with a json body describing the UEP and the
+    component that received it.
+    """
+    global Journal
+    mainapp = Journal.mainapp
+    fab = mainapp.conf.fab
+    body = flask.request.get_json()
+
+    if body is None:
+        msg = { 'error ' : ''}
+        return flask.make_response(flask.jsonify(msg), 400)
+
+    # Revisit: validate json against schema
+    resp = fab.remove_routes(body)
+    return flask.make_response(flask.jsonify(resp), 200)

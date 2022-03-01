@@ -255,10 +255,7 @@ class Fabric(nx.MultiGraph):
 
     def setup_routing(self, fr: Component, to: Component,
                       write_ssdt=True, routes=None) -> List[Route]:
-        try:
-            cur_rts = self.routes.get_routes(fr, to)
-        except KeyError:
-            cur_rts = []
+        cur_rts = self.get_routes(fr, to)
         new_rts = []
         for route in self.find_routes(fr, to, routes=routes,
                                       max_routes=zephyr_conf.args.max_routes):
@@ -285,11 +282,19 @@ class Fabric(nx.MultiGraph):
         return (to_routes, fr_routes)
 
     def teardown_routing(self, fr: Component, to: Component,
-                         route: Route) -> None:
-        # Revisit: tear down HW route from "fr" to "to",
-        # Revisit: but some of the components may not be reachable from PFM
-        # remove route from routes list
-        self.routes.remove(fr, to, route)
+                         routes: List[Route]) -> None:
+        # Revisit: when tearing down HW routes from "fr" to "to",
+        # Revisit: some of the components may not be reachable from PFM
+        cur_rts = self.get_routes(fr, to)
+        for route in routes:
+            if route not in cur_rts:
+                log.debug('skipping missing route {}'.format(route))
+            else:
+                log.info('removing route from {} to {} via {}'.format(
+                    fr, to, route))
+                self.write_route(route, enable=False)
+                self.routes.remove(fr, to, route)
+        # end for
 
     def recompute_routes(self, iface1, iface2):
         # Revisit: this is O(n**2) during crawl-out, worse later
@@ -333,7 +338,7 @@ class Fabric(nx.MultiGraph):
             log.debug('route {} impacted by unusable {}'.format(rt, iface))
             # route around failed link (if possible)
             try:
-                self.teardown_routing(rt.fr, rt.to, rt)
+                self.teardown_routing(rt.fr, rt.to, [rt])
                 self.setup_routing(rt.fr, rt.to)
             except nx.exception.NetworkXNoPath:
                 # no valid route anymore, remove unreachable comp
@@ -413,3 +418,55 @@ class Fabric(nx.MultiGraph):
         nl = nx.node_link_data(self)
         js = json.dumps(nl, indent=2) # Revisit: indent
         return js
+
+    def get_routes(self, fr: Component, to: Component):
+        try:
+            return self.routes.get_routes(fr, to)
+        except KeyError:
+            return []
+
+    def add_routes(self, body):
+        fab_uuid = UUID(body['fab_uuid'])
+        if fab_uuid != self.fab_uuid:
+            return { 'failed': [ 'fab_uuid mismatch' ] }
+        try:
+            routes = self.routes.parse(body['routes'], self)
+        except:
+            return { 'failed': [ 'routes parse error' ] }
+        for key, rts in routes.items():
+            fr, to = key
+            for rt in rts.get_routes(fr, to):
+                if rt in self.get_routes(fr, to):
+                    log.info('not adding existing route {}'.format(rt))
+                elif self.route_entries_avail(rt):
+                    self.route_info_update(rt, True)
+                    self.setup_routing(fr, to, routes=[rt])
+                else:
+                    log.warning('insufficient route entries to add {}'.format(rt))
+            # end for rt
+        # end for key
+        # Revisit: return correct success/failed dict
+        return { 'success': [] }
+
+    def remove_routes(self, body):
+        fab_uuid = UUID(body['fab_uuid'])
+        if fab_uuid != self.fab_uuid:
+            return { 'failed': [ 'fab_uuid mismatch' ] }
+        try:
+            routes = self.routes.parse(body['routes'], self)
+        except:
+            return { 'failed': [ 'routes parse error' ] }
+        for key, rts in routes.items():
+            fr, to = key
+            for rt in rts.get_routes(fr, to):
+                if rt not in self.get_routes(fr, to):
+                    log.info('cannot remove non-existent route {}'.format(rt))
+                elif self.route_entries_avail(rt):
+                    self.route_info_update(rt, False)
+                    self.teardown_routing(fr, to, [rt])
+                else:
+                    log.warning('missing route entries removing {}'.format(rt))
+            # end for rt
+        # end for key
+        # Revisit: return correct success/failed dict
+        return { 'success': [] }

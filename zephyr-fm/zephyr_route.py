@@ -23,6 +23,7 @@
 
 import ctypes
 import json
+import re
 from typing import List, Tuple
 from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
 from pdb import set_trace
@@ -321,6 +322,62 @@ class Routes():
             return self.ifaces[iface].copy()
         except KeyError:
             return []
+
+    fr_to_re = re.compile(r'^(?P<fr_class>[\w]+)\((?P<fr_gcid>[^\)]+)\)->(?P<to_class>[\w]+)\((?P<to_gcid>[^\)]+)\)$')
+
+    fr_to_iface_re = re.compile(r'^(?P<fr_gcid>[^\.]+)\.(?P<fr_iface>[\d]+)->(?P<to_gcid>[^\.]+)\.(?P<to_iface>[\d]+)$')
+
+    def parse_fr_to(self, fr_to_str: str, fab):
+        m = self.fr_to_re.match(fr_to_str)
+        fr_class = m.group('fr_class') # Revisit: unused
+        fr_gcid = GCID(str=m.group('fr_gcid'))
+        fr = fab.comp_gcids[fr_gcid]
+        to_class = m.group('to_class') # Revisit: unused
+        to_gcid = GCID(str=m.group('to_gcid'))
+        to = fab.comp_gcids[to_gcid]
+        return (fr, to)
+
+    def parse_fr_to_iface(self, fr_to_iface_str: str, fab):
+        m = self.fr_to_iface_re.match(fr_to_iface_str)
+        fr_gcid = GCID(str=m.group('fr_gcid'))
+        fr_iface_num = int(m.group('fr_iface'))
+        fr = fab.comp_gcids[fr_gcid]
+        fr_iface = fr.interfaces[fr_iface_num]
+        to_gcid = GCID(str=m.group('to_gcid'))
+        to_iface_num = int(m.group('to_iface'))
+        to = fab.comp_gcids[to_gcid]
+        to_iface = to.interfaces[to_iface_num]
+        return (fr_iface, to_iface)
+
+    def parse_route(self, route_list: list, fab):
+        path = []
+        elems = []
+        ingress_iface = None
+        hc = len(route_list) - 1
+        for e in route_list:
+            fr_iface, to_iface = self.parse_fr_to_iface(e, fab)
+            path.append(fr_iface.comp)
+            elem = RouteElement(fr_iface.comp, ingress_iface, fr_iface,
+                                to_iface, hc=hc)
+            elems.append(elem)
+            ingress_iface = to_iface
+            hc -= 1
+        path.append(to_iface.comp)
+        rt = Route(path, elems)
+        return rt
+
+    def parse(self, routes_dict: dict, fab):
+        ret_dict = {}
+        for k in routes_dict.keys():
+            fr, to = self.parse_fr_to(k, fab)
+            rts = Routes(fab.fab_uuid)
+            for rtl in routes_dict[k]:
+                rt = self.parse_route(rtl, fab)
+                rts.add(fr, to, rt)
+            # end for rtl
+            ret_dict[(fr, to)] = rts
+        # end for k
+        return ret_dict
 
     def to_json(self):
         routes_dict = {}

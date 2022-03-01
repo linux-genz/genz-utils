@@ -780,7 +780,7 @@ class Component():
             # IError setup is done by iface_init()
             if not self.local_br:
                 # Set MV/MgmtVC/Iface
-                pfm_rts = self.fab.routes.get_routes(self, self.fab.pfm)
+                pfm_rts = self.fab.get_routes(self, self.fab.pfm)
                 ces.MgmtVC0 = 0 # Revisit: VC should come from route
                 ces.MgmtIface0 = pfm_rts[0][0].egress_iface.num
                 ces.MV0 = 1
@@ -1383,7 +1383,7 @@ class Component():
         log.warning('{}: unreachable comp {} due to {} failure'.format(
             self, to, iface))
         # tear down route from "self" to "to"'
-        self.fab.teardown_routing(self, to, route)
+        self.fab.teardown_routing(self, to, [route])
 
     def warm_reset(self, iface, prefix='control', peer_c_reset_only=False):
         if not peer_c_reset_only:
