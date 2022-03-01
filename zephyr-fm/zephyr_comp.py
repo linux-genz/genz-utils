@@ -142,10 +142,15 @@ class Component():
 
     # for LLMUTO, NLMUTO, NIRT, FPST, REQNIRTO, REQABNIRTO
     def timeout_val(self, time):
-        return int(time / Component.timer_unit_list[self.timer_unit])
+        try:
+            return int(time / Component.timer_unit_list[self.timer_unit])
+        except IndexError:
+            log.warning('invalid timer_unit value {}'.format(self.timer_unit))
+            return 0
 
     # for ControlTO, ControlDRTO
     def ctl_timeout_val(self, time):
+        # all ctl_timer_unit values are valid
         return int(time / Component.ctl_timer_unit_list[self.ctl_timer_unit])
 
     # Revisit: the sz & off params are workarounds for ctypes bugs
@@ -1276,6 +1281,7 @@ class Component():
                     except Exception as e:
                         log.error('add_fab_comp failed with exception {}'.format(e))
                         reset_required = True
+                        peer_c_reset_only = True
                 if not reset_required:
                     usable = comp.comp_init(pfm, ingress_iface=peer_iface,
                                             route=route[1])
