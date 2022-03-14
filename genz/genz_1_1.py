@@ -1194,6 +1194,54 @@ class PHYType(SpecialField, Union):
         super().__init__(value, parent, verbosity=verbosity)
         self.val = value
 
+class IStatStatus(SpecialField, Union):
+    class IStatStatusFields(Structure):
+        _fields_ = [('IStatsResetStatus',          c_u8,  1), # RW1C
+                    ('SnapshotStatus',             c_u8,  1), # RW1C
+                    ('Rv',                         c_u8,  6),
+        ]
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', IStatStatusFields), ('val', c_u8)]
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class IStatControl(SpecialField, Union):
+    class IStatControlFields(Structure):
+        _fields_ = [('StatsEnb',                   c_u8,  1), # RW
+                    ('StatsReset',                 c_u8,  1), # WO
+                    ('InitiateStatsSnapshot',      c_u8,  1), # WO
+                    ('Rv',                         c_u8,  5),
+        ]
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', IStatControlFields), ('val', c_u8)]
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class IStatCAP1(SpecialField, Union):
+    class IStatCAP1Fields(Structure):
+        _fields_ = [('ProvisionedStatsFields',   c_u16,  2),
+                    ('MaxSnapshotTime',          c_u16,  2),
+                    ('Rv',                       c_u16, 12),
+        ]
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', IStatCAP1Fields), ('val', c_u16)]
+    _provisioned = ['Common', 'CommonReqRsp', 'CommonPktRelay', 'CommonReqRspPktRelay']
+    _snap_time = ['1ms', '10ms', '100ms', '1s']
+    _special = {'ProvisionedStatsFields': _provisioned,
+                'MaxSnapshotTime': _snap_time,
+                }
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
 class PACAP1(SpecialField, Union):
     class PACAP1Fields(Structure):
         _fields_ = [('PAIdxSz',             c_u32,  2),
@@ -1769,7 +1817,7 @@ class ControlStructureMap(LittleEndianStructure):
                 'opcode_set'                  : 'OpCodeSetStructure',
                 'interface'                   : 'InterfaceFactory',
                 'interface_phy'               : 'InterfacePHYStructure',
-                'interface_statistics'        : 'InterfaceStatisticsStructure',
+                'interface_statistics'        : 'InterfaceStatisticsFactory',
                 'component_error_and_signal_event' : 'ComponentErrorSignalStructure',
                 'component_media'             : 'ComponentMediaStructure',
                 'component_switch'            : 'ComponentSwitchStructure',
@@ -2624,45 +2672,6 @@ class InterfacePHYStructure(ControlStructure):
 
     _special_dict = {'PHYType': PHYType, 'PHYStatus': PHYStatus}
 
-class InterfaceStatisticsStructure(ControlStructure):
-    _fields_ = [('Type',                       c_u64, 12),  # Basic Statistics Fields
-                ('Vers',                       c_u64,  4),
-                ('Size',                       c_u64, 16),
-                ('Status',                     c_u64,  4),
-                ('SCTL',                       c_u64,  4),
-                ('R0',                         c_u64,  8),
-                ('VendorDefinedPtr',           c_u64, 16),
-                ('CRCTransientErrors',         c_u64, 16),
-                ('MiscE2ETE',                  c_u64, 12),
-                ('E2ENTE',                     c_u64, 12),
-                ('LinkTransientError',         c_u64, 16),
-                ('LinkNTEError',               c_u64,  8),
-                ('TxStompedECRC',              c_u64, 16),
-                ('RxStompedECRC',              c_u64, 16),
-                ('EgressAKEYV',                c_u64, 16),
-                ('IngressAKEYV',               c_u64, 16),
-                ('VC0ExFC',                    c_u64, 16),
-                ('VC1ExFC',                    c_u64, 16),
-                ('VC2ExFC',                    c_u64, 16),
-                ('VC3ExFC',                    c_u64, 16),
-                ('VC4ExFC',                    c_u64, 16),
-                ('VC5ExFC',                    c_u64, 16),
-                ('VC6ExFC',                    c_u64, 16),
-                ('VC7ExFC',                    c_u64, 16),
-                ('FPTExpirations',             c_u64, 16),
-                ('R1',                         c_u64, 32),
-                ('InterfaceSPIR',              c_u64, 16),
-                ('VC0SPIR',                    c_u64, 16),
-                ('VC1SPIR',                    c_u64, 16),
-                ('VC2SPIR',                    c_u64, 16),
-                ('VC3SPIR',                    c_u64, 16),
-                ('VC4SPIR',                    c_u64, 16),
-                ('VC5SPIR',                    c_u64, 16),
-                ('VC6SPIR',                    c_u64, 16),
-                ('VC7SPIR',                    c_u64, 16),
-                # Revisit: jmh - finish this
-                ]
-
 class ComponentPAStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12),
                 ('Vers',                       c_u64,  4),
@@ -3028,6 +3037,111 @@ class ComponentRKDStructure(ControlStructure):
         if val:
             rkdAuth |= mask
         self.embeddedArray[row].RKDAuth = rkdAuth
+
+class IStatsVCArray(ControlTableArray):
+    def fileToStructInit(self):
+        super().fileToStructInit()
+        # Per-VC Relay Statistics Fields
+        fields = [('TotalXmitPkts',              c_u64, 64), #0x50/0x90
+                  ('TotalXmitBytes',             c_u64, 64), #0x58/0x98
+                  ('TotalRecvPkts',              c_u64, 64), #0x60/0xA0
+                  ('TotalRecvBytes',             c_u64, 64), #0x68/0xA8
+                  ('Occupancy',                  c_u64, 64), #0x70/0xB0
+                  ]
+        IStatsVC = type('IStatsVC', (ControlTableElement,), {'_fields_': fields,
+                                                             'verbosity': self.verbosity,
+                                                             'Size': 40}) # Revisit
+        sz = self.Size - self.parent.relayOff
+        items = sz // 40
+        self.array = (IStatsVC * items).from_buffer(self.data, self.offset)
+        self.element = IStatsVC
+
+# base class from which to dynamically build InterfaceStatisticsStructure
+class InterfaceStatisticsTemplate(ControlStructure):
+                # Common Statistics Fields
+    _fields =  [('Type',                       c_u64, 12), #0x0
+                ('Vers',                       c_u64,  4),
+                ('Size',                       c_u64, 16),
+                ('IStatCAP1',                  c_u64, 16),
+                ('IStatControl',               c_u64,  8),
+                ('IStatStatus',                c_u64,  8),
+                ('VendorDefinedPTR',           c_u64, 32), #0x8
+                ('ISnapshotPTR',               c_u64, 32),
+                ('ISnapshotInterval',          c_u64, 64), #0x10
+                ('PCRCErrors',                 c_u64, 32), #0x18
+                ('ECRCErrors',                 c_u64, 32),
+                ('TxStompedECRC',              c_u64, 32), #0x20
+                ('RxStompedECRC',              c_u64, 32),
+                ('NonCRCTransientErrors',      c_u64, 32), #0x28
+                ('LLRRecovery',                c_u64, 32),
+                ('PktDeadlineDiscards',        c_u64, 32), #0x30
+                ('MarkedECN',                  c_u64, 32),
+                ('ReceivedECN',                c_u64, 32), #0x38
+                ('LinkNTE',                    c_u64, 16),
+                ('AKEYViolations',             c_u64, 16),
+                ('R0',                         c_u64, 64), #0x40
+                ('R1',                         c_u64, 64), #0x48
+                ]
+                # Requester/Responder Statistics Fields
+    _req_rsp = [('TotalXmitReqs',              c_u64, 64), #0x50
+                ('TotalXmitReqBytes',          c_u64, 64), #0x58
+                ('TotalRecvReqs',              c_u64, 64), #0x60
+                ('TotalRecvReqBytes',          c_u64, 64), #0x68
+                ('TotalXmitRsps',              c_u64, 64), #0x70
+                ('TotalXmitRspBytes',          c_u64, 64), #0x78
+                ('TotalRecvRsps',              c_u64, 64), #0x80
+                ('TotalRecvRspBytes',          c_u64, 64), #0x88
+                ]
+    _vc_arr =  [('VCArray',                    IStatsVCArray), #0x50/0x90
+                ]
+
+    _special_dict = {'IStatStatus': IStatStatus, 'IStatControl': IStatControl,
+                     'IStatCAP1': IStatCAP1}
+
+    def fileToStructInit(self):
+        super().fileToStructInit()
+        if self.relayOff > 0:
+            # Revisit: saving as self.VCArray doesn't work
+            self.embeddedArray = self.VCArray.fileToStruct('IStatsVCArray', self.data,
+                                    verbosity=self.verbosity, fd=self.fd,
+                                    path=self.path, parent=self,
+                                    core=self.core, offset=self.offset+self.relayOff)
+        else:
+            self.embeddedArray = None
+
+# factory class to dynamically build InterfaceStatisticsStructure
+class InterfaceStatisticsFactory(ControlStructure):
+    def from_buffer(data, offset=0):
+        sz = len(data)
+        elems = 0
+        stats = InterfaceStatisticsStructure.from_buffer(data, offset)
+        cap1 = IStatCAP1(stats.IStatCAP1, stats)
+        if cap1.ProvisionedStatsFields == ProvisionedIStats.Common:
+            fields = InterfaceStatisticsTemplate._fields
+            relay_offset = 0
+        elif cap1.ProvisionedStatsFields == ProvisionedIStats.CommonReqRsp:
+            fields = (InterfaceStatisticsTemplate._fields +
+                      InterfaceStatisticsTemplate._req_rsp)
+            relay_offset = 0
+        elif cap1.ProvisionedStatsFields == ProvisionedIStats.CommonPktRelay:
+            fields = InterfaceStatisticsTemplate._fields
+            relay_offset = 0x50 # Revisit: hardcoded value
+        else:  # CommonReqRspPktRelay
+            fields = (InterfaceStatisticsTemplate._fields +
+                      InterfaceStatisticsTemplate._req_rsp)
+            relay_offset = 0x90 # Revisit: hardcoded value
+        if relay_offset > 0:
+            elems = (sz - relay_offset) // (5 * 8) # Revisit: hardcoded value
+            fields.extend(InterfaceStatisticsTemplate._vc_arr)
+        InterfaceStats = type('InterfaceStatisticsStructure',
+                         (InterfaceStatisticsTemplate,), {'_fields_': fields,
+                                                          'relayOff': relay_offset,
+                                                          'vcElems': elems,
+                                                          'Size': sz})
+        return InterfaceStats.from_buffer(data, offset)
+
+class InterfaceStatisticsStructure(ControlStructure):
+    _fields_ = InterfaceStatisticsTemplate._fields
 
 class RequesterVCATTable(ControlTable2DArray):
     def fileToStructInit(self):

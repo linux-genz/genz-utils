@@ -60,6 +60,12 @@ class IState(IntEnum):
         _i_state = ['I-Down', 'I-CFG', 'I-Up', 'I-LP']
         return _i_state[self.value]
 
+class ProvisionedIStats(IntEnum):
+    Common = 0
+    CommonReqRsp = 1
+    CommonPktRelay = 2
+    CommonReqRspPktRelay = 3
+
 class PHYOpStatus(IntEnum):
     PHYDown = 0
     PHYUp = 1
