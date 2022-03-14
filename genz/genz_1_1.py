@@ -1393,6 +1393,35 @@ class RCCAP1(SpecialField, Union):
         super().__init__(value, parent, verbosity=verbosity)
         self.val = value
 
+class RKDCAP1(SpecialField, Union):
+    class RKDCAP1Fields(Structure):
+        _fields_ = [('RKDTableType',                      c_u16,  3),
+                    ('Rv',                                c_u16, 13),
+        ]
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', RKDCAP1Fields), ('val', c_u16)]
+    _tbl_type   = ['Fixed4096bit']
+    _special = {'RKDTableType': _tbl_type}
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class RKDControl1(SpecialField, Union):
+    class RKDControl1Fields(Structure):
+        _fields_ = [('RKDValidationEnb',                  c_u16,  1),
+                    ('TrustedThreadEnb',                  c_u16,  1),
+                    ('Rv',                                c_u16, 14),
+        ]
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', RKDControl1Fields), ('val', c_u16)]
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
 class SwitchCAP1(SpecialField, Union):
     class SwitchCAP1Fields(Structure):
         _fields_ = [('CtlOpClassPktFilteringSup',         c_u32,  1),
@@ -1902,7 +1931,10 @@ class ControlStructure(ControlStructureMap):
         skipNext = False
         for field in self._fields_:
             name = field[0]
-            width = field[2]
+            try:
+                width = field[2]
+            except IndexError:
+                width = 0
             if skipNext:
                 bitOffset += width
                 skipNext = False
@@ -1915,6 +1947,10 @@ class ControlStructure(ControlStructureMap):
                 r += '    {0:{nw}}@0x{1:0>3x} = {2}\n'.format(
                     name[:-1], byteOffset, uu, nw=max_len)
                 skipNext = True
+            elif width == 0:
+                arrayStr = textwrap.indent(str(self.embeddedArray), '  ')
+                r += '    {0:{nw}}@0x{1:0>3x} = {2}\n'.format(
+                    name, byteOffset, arrayStr[2:], nw=max_len)
             else:
                 r += '    {0:{nw}}@0x{1:0>3x}{{{2:2}:{3:2}}} = 0x{4:0>{hw}x}\n'.format(
                     name, byteOffset, highBit, lowBit,
@@ -1930,8 +1966,6 @@ class ControlStructure(ControlStructureMap):
                     if specialStr != '':
                         r += '{}\n'.format(specialStr)
             bitOffset += width
-        #for subStruct in self.subStructs:
-        #    r += str(subStruct)
         return r
 
     def __repr__(self):
@@ -2952,6 +2986,48 @@ class PATable(ControlTableArray):
         items = self.Size // sizeof(PA)
         self.array = (PA * items).from_buffer(self.data)
         self.element = PA
+
+class RKDArray(ControlTableArray):
+    def fileToStructInit(self):
+        super().fileToStructInit()
+        fields = [('RKDAuth',  c_u64, 64)
+        ]
+        RKD = type('RKD', (ControlTableElement,), {'_fields_': fields,
+                                                   'verbosity': self.verbosity,
+                                                   'Size': 8}) # Revisit
+        items = 64 # always 64 elements
+        self.array = (RKD * items).from_buffer(self.data, self.offset)
+        self.element = RKD
+
+class ComponentRKDStructure(ControlStructure):
+    _fields_ = [('Type',                       c_u64, 12),
+                ('Vers',                       c_u64,  4),
+                ('Size',                       c_u64, 16),
+                ('RKDCAP1',                    c_u64, 16),
+                ('RKDControl1',                c_u64, 16),
+                ('R0',                         c_u64, 64),
+                ('AuthArray',                  RKDArray)
+                ]
+
+    _special_dict = {'RKDCAP1': RKDCAP1, 'RKDControl1': RKDControl1}
+
+    def fileToStructInit(self):
+        super().fileToStructInit()
+        # Revisit: saving as self.AuthArray doesn't work
+        self.embeddedArray = self.AuthArray.fileToStruct('RKDArray', self.data,
+                                    verbosity=self.verbosity, fd=self.fd,
+                                    path=self.path, parent=self,
+                                    core=self.core, offset=self.offset+0x10)
+
+    def assign_rkd(self, rkd, val):
+        row = rkd // 64
+        bit = rkd % 64
+        mask = 1 << bit
+        rkdAuth = self.embeddedArray[row].RKDAuth
+        rkdAuth &= ~mask
+        if val:
+            rkdAuth |= mask
+        self.embeddedArray[row].RKDAuth = rkdAuth
 
 class RequesterVCATTable(ControlTable2DArray):
     def fileToStructInit(self):
