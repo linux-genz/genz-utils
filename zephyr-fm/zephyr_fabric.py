@@ -86,6 +86,7 @@ class Fabric(nx.MultiGraph):
         self.nonce_list = [ 0 ]
         self.routes = Routes(fab_uuid=fab_uuid)
         self.resources = Resources(self)
+        self.pfm = None
         super().__init__(fab_uuid=self.fab_uuid, mgr_uuids=[self.mgr_uuid])
         log.info('fabric: {}, num={}, fab_uuid={}, mgr_uuid={}'.format(
             path, self.fabnum, self.fab_uuid, self.mgr_uuid))
@@ -95,8 +96,10 @@ class Fabric(nx.MultiGraph):
         # Revisit: CID conficts between accepted & assigned are possible
         random_cids = self.random_cids
         if self.refill_gcids:
-            self.avail_gcids = (random.sample(range(1, ssdt_sz), ssdt_sz-1)
-                                if random_cids else list(range(1, ssdt_sz)))
+            min_cid, max_cid = self.conf.data.get('cid_range', (1, ssdt_sz-1))
+            self.avail_gcids = (
+                random.sample(range(min_cid, max_cid+1), max_cid-min_cid+1)
+                if random_cids else list(range(min_cid, max_cid+1)))
             self.refill_gcids = False
         if proposed_gcid is not None:
             try:
@@ -135,27 +138,60 @@ class Fabric(nx.MultiGraph):
                 self.nonce_list.append(r)
                 return r
 
-    def fab_init(self):
+    def br_paths(self):
+        def br_paths_generator(br_paths, local_bridges):
+            # order of local_bridges controls order returned and thus PFM
+            mapping = { self.get_cuuid_serial(bp) : bp for bp in br_paths }
+            for br in local_bridges:
+                try:
+                    br_path = mapping[br]
+                except KeyError:
+                    log.warning('local bridge {} not found'.format(br))
+                    continue
+                yield br_path
+            # end for
+
         br_paths = self.path.glob('bridge*')
-        # Revisit: deal with multiple bridges that may or may not be on same fabric
-        for br_path in br_paths:
-            cuuid = get_cuuid(br_path)
-            serial = get_serial(br_path)
-            cuuid_serial = str(cuuid) + ':' + serial
+        local_bridges = self.conf.data.get('local_bridges', [])
+        if len(local_bridges) == 0:
+            return br_paths
+        else:
+            return br_paths_generator(br_paths, local_bridges)
+
+    def get_cuuid_serial(self, br_path):
+        cuuid = get_cuuid(br_path)
+        serial = get_serial(br_path)
+        return str(cuuid) + ':' + serial
+
+    def fab_init(self):
+        for br_path in self.br_paths():
+            cuuid_serial = self.get_cuuid_serial(br_path)
             cur_gcid = get_gcid(br_path)
             brnum = component_num(br_path)
             cclass = int(get_cclass(br_path))
-            tmp_gcid = cur_gcid if cur_gcid.sid == TEMP_SUBNET else INVALID_GCID
-            br = LocalBridge(cclass, self, self.map, br_path, self.mgr_uuid,
-                             local_br=True, brnum=brnum, dr=None,
-                             tmp_gcid=tmp_gcid, netlink=self.nl,
-                             verbosity=self.verbosity)
-            gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size(haveCore=False)[0])
-            self.set_pfm(br)
-            log.info('{}:{} bridge{} {}'.format(self.fabnum, gcid, brnum, cuuid_serial))
-            br.comp_init(self.pfm)
-            self.bridges.append(br)
-            br.explore_interfaces(self.pfm)
+            if self.pfm is None: # this bridge will be our PFM component
+                tmp_gcid = cur_gcid if cur_gcid.sid == TEMP_SUBNET else INVALID_GCID
+                br = LocalBridge(cclass, self, self.map, br_path, self.mgr_uuid,
+                                 local_br=True, brnum=brnum, dr=None,
+                                 tmp_gcid=tmp_gcid, netlink=self.nl,
+                                 verbosity=self.verbosity)
+                gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size(haveCore=False)[0])
+                self.set_pfm(br)
+                log.info('{}:{} bridge{} {}'.format(self.fabnum, gcid, brnum, cuuid_serial))
+                br.comp_init(self.pfm)
+                self.bridges.append(br)
+                br.explore_interfaces(self.pfm)
+            else: # not first bridge (self.pfm is not None)
+                gcid = cur_gcid
+                try:
+                    br = self.cuuid_serial[cuuid_serial]
+                except KeyError:
+                    log.warning('{}:{} bridge{} {} not connected to fabric'.
+                                format(self.fabnum, gcid, brnum, cuuid_serial))
+                    continue
+                # Revisit: check C-Up and mgr_uuid?
+                log.info('{}:{} bridge{} {} alternate bridge to fabric{0}'.format(self.fabnum, gcid, brnum, cuuid_serial))
+                self.bridges.append(br)
         # end for br_path
 
     def set_pfm(self, pfm):

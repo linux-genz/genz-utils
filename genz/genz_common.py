@@ -123,6 +123,12 @@ class CReset(Enum):
     WarmNonSwitchReset = 3
     ContentReset = 4
 
+class HostMgrUUID(IntEnum):
+    Zero = 0
+    Core = 1
+    Vdef = 2
+    Rv   = 3
+
 class GCID():
     def __init__(self, val=None, sid=0, cid=None, str=None):
         if val is not None:

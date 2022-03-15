@@ -60,9 +60,9 @@ def uuid_to_json(self):
 UUID.to_json = uuid_to_json
 
 class FMServer(flask_fat.APIBaseline):
-    def __init__(self, conf, *args, **kwargs):
+    def __init__(self, config, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.conf = conf
+        self.conf = config
         self.add_callback = {}
         self.remove_callback = {}
 
@@ -95,12 +95,16 @@ def main():
     global cols
     global genz
     parser = argparse.ArgumentParser()
+    parser.add_argument('-c', '--conf', default='zephyr-fm/zephyr-fabric.conf',
+                        help='fabric config file')
     parser.add_argument('-k', '--keyboard', action='count', default=0,
                         help='break to interactive keyboard at certain points')
     parser.add_argument('-v', '--verbosity', action='count', default=0,
                         help='increase output verbosity')
     parser.add_argument('-A', '--accept-cids', action='store_true',
                         help='accept pre-existing HW CIDs for all components')
+    parser.add_argument('--cfg', default=None,
+                        help='cfg file')
     parser.add_argument('-r', '--reclaim', action='store_true',
                         help='reclaim C-Up components via reset')
     parser.add_argument('-M', '--max-routes', action='store', default=None, type=int,
@@ -123,7 +127,7 @@ def main():
     nl = NetlinkManager(config='./zephyr-fm/alpaka.conf')
     map = genz.ControlStructureMap()
     mgr_uuid = None # by default, generate new mgr_uuid every run
-    conf = Conf('zephyr-fm/zephyr-fabric.conf')
+    conf = Conf(args.conf)
     try:
         data = conf.read_conf_file()
         fab_uuid = UUID(data['fabric_uuid'])
@@ -136,6 +140,8 @@ def main():
         data['fabric_uuid'] = str(fab_uuid)
         data['add_resources'] = []
         data['boundary_interfaces'] = []
+        data['cid_range'] = []
+        data['local_bridges'] = []
         conf.write_conf_file(data)
     log.debug('conf={}'.format(conf))
     fabrics = {}

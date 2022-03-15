@@ -22,7 +22,7 @@
 # SOFTWARE.
 
 import ctypes
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, CReset
+from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, CReset, HostMgrUUID
 import os
 import re
 import time
@@ -452,17 +452,20 @@ class Component():
                 self.control_write(core, genz.CoreStructure.MGRUUIDl, sz=16)
             # Revisit: read back MGRUUID, to confirm we own component
             # not safe until orthus can handle errors
-            # set HostMgrMGRUUIDEnb (if local_br), MGRUUIDEnb
+            # set PFMSID/PFMCID (must be before PrimaryFabMgrRole = 1)
+            # Revisit: subnets
+            core.PFMCID = pfm.gcid.cid
+            self.control_write(core, genz.CoreStructure.PMCID, sz=8)
+            # set HostMgrMGRUUIDEnb, MGRUUIDEnb
             cap1ctl = genz.CAP1Control(core.CAP1Control, core)
-            if self.local_br:
-                cap1ctl.field.HostMgrMGRUUIDEnb = 1 # Revisit: enum
-            cap1ctl.field.MGRUUIDEnb = 1
+            uuEnb = HostMgrUUID.Core if self.local_br else HostMgrUUID.Zero
+            cap1ctl.HostMgrMGRUUIDEnb = uuEnb
+            cap1ctl.MGRUUIDEnb = 1
             # set ManagerType, PrimaryFabMgrRole
             # clear PrimaryMgrRole, SecondaryFabMgrRole, PwrMgrEnb
             cap1ctl.field.ManagerType = 1
             cap1ctl.field.PrimaryMgrRole = 0
-            if self.local_br:
-                cap1ctl.field.PrimaryFabMgrRole = 1
+            cap1ctl.PrimaryFabMgrRole = 1 if self.local_br else 0
             cap1ctl.field.SecondaryFabMgrRole = 0
             cap1ctl.field.PwrMgrEnb = 0
             # Revisit: set OOBMgmtDisable
@@ -477,10 +480,6 @@ class Component():
             cap1ctl.field.SWMgmt7 = 0
             core.CAP1Control = cap1ctl.val
             self.control_write(core, genz.CoreStructure.CAP1Control, sz=8)
-            # set PFMSID/PFMCID
-            # Revisit: subnets
-            core.PFMCID = pfm.gcid.cid
-            self.control_write(core, genz.CoreStructure.PMCID, sz=8)
             # set PFMCIDValid; clear other CID/SID valid bits
             cap2ctl = genz.CAP2Control(core.CAP2Control, core)
             cap2ctl.field.PMCIDValid = 0

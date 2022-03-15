@@ -65,6 +65,8 @@ class ResourceList():
         except KeyError:
             log.warning('producer component {} not found in fabric{}'.format(
                 res_dict['producer'], fab.fabnum))
+            self.producer = None
+            self.res_dict['resources'] = []
             return
         self.res_dict['gcid']     = self.producer.gcid.val
         self.res_dict['cclass']   = self.producer.cclass
