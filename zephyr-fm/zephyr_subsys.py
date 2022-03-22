@@ -43,6 +43,10 @@ from middleware.netlink_mngr import NetlinkManager
 from typing import List, Tuple
 from threading import Thread
 import multiprocessing as mp
+import socket
+import os
+import sys
+from zeroconf import IPVersion, ServiceInfo, Zeroconf
 from pdb import set_trace, post_mortem
 import traceback
 
@@ -65,6 +69,7 @@ class FMServer(flask_fat.APIBaseline):
         self.conf = config
         self.add_callback = {}
         self.remove_callback = {}
+        self.init_socket()
 
     def get_endpoints(self, consumers):
         add_endpoints = []
@@ -78,6 +83,17 @@ class FMServer(flask_fat.APIBaseline):
         # end for
         return (add_endpoints, rm_endpoints)
 
+    def init_socket(self):
+        # choose a random available port by setting config PORT to 0
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.bind((self.config['HOST'], self.config['PORT']))
+        self.sock.listen()
+        # tell the underlying WERKZEUG server to use the socket we just created
+        os.environ['WERKZEUG_SERVER_FD'] = str(self.sock.fileno())
+        _, self.port = self.sock.getsockname()
+        self.hostname = socket.gethostname()
+        self.ip = socket.gethostbyname(self.hostname)
+
 def cmd_add(url, **args):
     from datetime import datetime
     data = {
@@ -88,6 +104,27 @@ def cmd_add(url, **args):
     if resp is None:
         return {}
     return json.loads(resp.text).get('data', {})
+
+
+def zeroconf_register(fab, mainapp):
+    desc = {'mgr_uuid': fab.mgr_uuid.bytes,
+            'fab_uuid': fab.fab_uuid.bytes,
+            'pfm': int(not args.sfm)}
+    info = ServiceInfo(
+        '_genz-fm._tcp.local.',
+        f'zephyr{fab.fabnum}.{mainapp.hostname}._genz-fm._tcp.local.',
+        addresses=[socket.inet_aton(mainapp.ip)],
+        port=mainapp.port,
+        properties=desc,
+        server=f'{mainapp.hostname}.local.'
+    )
+
+    mainapp.zeroconfInfo = info
+    ip_version = (IPVersion.All if args.ip6 else
+                  IPVersion.V6Only if args.ip6_only else IPVersion.V4Only)
+    zeroconf = Zeroconf(ip_version=ip_version)
+    zeroconf.register_service(info)
+    return zeroconf
 
 
 def main():
@@ -118,6 +155,11 @@ def main():
                         help='Gen-Z spec version of Control Space structures')
     parser.add_argument('-P', '--post_mortem', action='store_true',
                         help='enter debugger on uncaught exception')
+    ip_group = parser.add_mutually_exclusive_group()
+    ip_group.add_argument('--ip6', action='store_true',
+                          help='listen on IPv4 and IPv6')
+    ip_group.add_argument('--ip6-only', action='store_true',
+                          help='listen on IPv6 only')
     args = parser.parse_args()
     log.debug('Gen-Z version = {}'.format(args.genz_version))
     genz = import_module('genz.genz_{}'.format(args.genz_version.replace('.', '_')))
@@ -148,14 +190,14 @@ def main():
     if args.keyboard > 3:
         set_trace()
     mainapp = FMServer(conf, 'zephyr', **args_vars)
-    thread = Thread(target=mainapp.run)
+    thread = Thread(target=mainapp.run, daemon=True)
     thread.start()
     if args.keyboard > 3:
         set_trace()
     mp.set_start_method('forkserver')
     uep_args = { 'genz_version': args.genz_version,
                  'verbosity':    args.verbosity,
-                 'url':          'http://localhost:2021/fabric/uep' }
+                 'url':          f'http://localhost:{mainapp.port}/fabric/uep' }
     uep_proc = mp.Process(target=netlink_reader, kwargs=uep_args)
     uep_proc.start()
     sys_devices = Path('/sys/devices')
@@ -178,12 +220,29 @@ def main():
     if args.keyboard > 3:
         set_trace()
 
-    conf.add_resources()  # Revisit: multiple fabrics
+    conf.add_resources()
 
     if args.keyboard > 3:
         set_trace()
 
-    thread.join()
+    zeroconf = zeroconf_register(fab, mainapp)
+
+    if args.keyboard > 3:
+        set_trace()
+
+    try:
+        thread.join()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        log.info('zeroconf unregister service')
+        zeroconf.unregister_service(mainapp.zeroconfInfo)
+        zeroconf.close()
+        log.info('terminate UEP process')
+        uep_proc.terminate()
+        uep_proc.join()
+        log.info('sys.exit')
+        sys.exit()
 
 if __name__ == '__main__':
     try:
