@@ -260,11 +260,15 @@ class Comp:
             return parents[dname]
         except KeyError:
             pass
+        parent = parents['core@0x0'] # default parent
         pdpath = path.parent.parents[0]
         ppath = pdpath / file_re.sub('', pdpath.name)
-        parent = get_struct(ppath, self.map, core=self.core,
-                            verbosity=self.verbosity)
-        parents[dname] = parent
+        try:
+            parent = get_struct(ppath, self.map, core=self.core,
+                                verbosity=self.verbosity)
+            parents[dname] = parent
+        except FileNotFoundError:
+            pass
         return parent
 
     def field_off_sz(self, field, sz=None, off=0):
@@ -273,8 +277,8 @@ class Comp:
         start_byte = floor(start_bit / 8)
         end_byte = floor((start_bit + bit_sz - 1) / 8)
         byte_sz = end_byte - start_byte + 1
-        print('  start_bit={}, bit_sz={}, start_byte={}, end_byte={}'.format(
-            start_bit, bit_sz, start_byte, end_byte))
+        #print('  start_bit={}, bit_sz={}, start_byte={}, end_byte={}'.format(
+        #    start_bit, bit_sz, start_byte, end_byte)) # Revisit
         return (off + field.offset + start_byte, byte_sz)
 
     def control_write(self, struct, elem, field_name: str,

@@ -1906,6 +1906,8 @@ class ControlStructureMap(LittleEndianStructure):
 
 #Revisit: jmh - this is almost totally version independent
 class ControlStructure(ControlStructureMap):
+    fullEntryWrite = False
+
     def __init__(self):
         super().__init__()
         bitOffset = 0
@@ -2042,8 +2044,6 @@ class ControlTable(ControlStructure):
 # for PATable, RIT, SSAP, MCAP, MSAP, MSMCAP,
 # CAccessRKeyTable, CAccessLP2PTable, PGTable, PTETable
 class ControlTableArray(ControlTable):
-    fullEntryWrite = False
-
     def cs_offset(self, row, *unused):
         return sizeof(self.element) * row
 
