@@ -155,6 +155,10 @@ def main():
                         help='Gen-Z spec version of Control Space structures')
     parser.add_argument('-P', '--post_mortem', action='store_true',
                         help='enter debugger on uncaught exception')
+    parser.add_argument('--control-to', action='store', default=1e-3,
+                        type=float, help='Control TO')
+    parser.add_argument('--control-drto', action='store', default=10e-3,
+                        type=float, help='Control DRTO')
     parser.add_argument('--no-nonce', action='store_true',
                         help='do no nonce exchanges')
     ip_group = parser.add_mutually_exclusive_group()

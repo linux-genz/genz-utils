@@ -518,8 +518,8 @@ class Component():
             # Revisit: set REQNIRTO, REQABNIRTO
             # set ControlTO, ControlDRTO
             # Revisit: how to compute reasonable values?
-            core.ControlTO = self.ctl_timeout_val(1e-3)    # 1ms
-            core.ControlDRTO = self.ctl_timeout_val(10e-3) # 10ms
+            core.ControlTO = self.ctl_timeout_val(args.control_to)
+            core.ControlDRTO = self.ctl_timeout_val(args.control_drto)
             self.control_write(core, genz.CoreStructure.ControlTO, sz=4)
             # set MaxRequests
             # Revisit: Why would FM choose < MaxREQSuppReqs? Only for P2P?
