@@ -242,30 +242,32 @@ class Interface():
                             genz.InterfaceStructure.IErrorStatus, sz=8)
 
     def nonce_exchange(self, iface) -> bool:
+        args = zephyr_conf.args
         # do nonce init of peer
-        self.peer_iface.do_nonce_init(sendNonce=False)
+        self.peer_iface.do_nonce_init(sendNonce=False, noNonce=args.no_nonce)
         # do nonce init and exchange
-        nonce_valid = self.nonce_init(iface, sendNonce=True)
+        nonce_valid = self.nonce_init(iface, sendNonce=True, noNonce=args.no_nonce)
         return nonce_valid
 
     def do_nonce_exchange(self) -> bool:
+        args = zephyr_conf.args
         # do nonce init of peer
-        self.peer_iface.do_nonce_init(sendNonce=False)
+        self.peer_iface.do_nonce_init(sendNonce=False, noNonce=args.no_nonce)
         # do nonce init and exchange
-        nonce_valid = self.do_nonce_init(sendNonce=True)
+        nonce_valid = self.do_nonce_init(sendNonce=True, noNonce=args.no_nonce)
         return nonce_valid
 
-    def do_nonce_init(self, sendNonce=True) -> bool:
+    def do_nonce_init(self, sendNonce=True, noNonce=False) -> bool:
         iface_file = self.iface_dir / 'interface'
         with iface_file.open(mode='rb+') as f:
             data = bytearray(f.read())
             iface = self.comp.map.fileToStruct('interface', data,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
-            status = self.nonce_init(iface, sendNonce=sendNonce)
+            status = self.nonce_init(iface, sendNonce=sendNonce, noNonce=noNonce)
         return status
 
-    def nonce_init(self, iface, sendNonce=True) -> bool:
-        log.debug('{}: nonce_init'.format(self))
+    def nonce_init(self, iface, sendNonce=True, noNonce=False) -> bool:
+        log.debug(f'{self}: nonce_init, sendNonce={sendNonce}, noNonce={noNonce}')
         try:
             self.peer_nonce = self.peer_comp.nonce
         except AttributeError:
@@ -278,6 +280,8 @@ class Interface():
         iface.ICAP1Control = icap1ctl.val
         self.comp.control_write(iface,
                             genz.InterfaceStructure.ICAP1Control, sz=4, off=4)
+        if noNonce:
+            return True # claim valid when explicitly disabled
         # write PeerNonce
         iface.PeerNonce = self.peer_nonce
         self.comp.control_write(iface,
