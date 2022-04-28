@@ -1,0 +1,13 @@
+#!/bin/bash
+
+file=$1
+host=$2
+uuid=$3
+port=${4:-2021}
+tmp_file=$file.$$
+sed -e "s/???/$uuid/" < $file > $tmp_file
+zephyr="http://${host}:${port}"
+echo "curl -X POST -H "Content-Type: application/json" -d @${tmp_file} ${zephyr}/resource/remove"
+cat $tmp_file
+curl -X POST -H "Content-Type: application/json" -d @${tmp_file} ${zephyr}/resource/remove
+rm $tmp_file

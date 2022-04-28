@@ -1,0 +1,9 @@
+#!/bin/bash
+
+file=$1
+host=$2
+port=${3:-2021}
+zephyr="http://${host}:${port}"
+echo "curl -s -o ${file} ${zephyr}/fabric/resources"
+curl -s -o ${file} ${zephyr}/fabric/resources
+cat $file
