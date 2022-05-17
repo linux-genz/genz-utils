@@ -1044,11 +1044,11 @@ class IErrorES(SpecialField, Union):
 
     @property
     def errName(self):
-        return iErrorData[self.field.BitK][0]
+        return self.iErrorData[self.field.BitK][0]
 
     @property
     def errSeverity(self):
-        return iErrorData[self.field.BitK][1]
+        return self.iErrorData[self.field.BitK][1]
 
 class IErrorSigTgt(SpecialField, Union):
     class IErrorSigTgtFields(Structure):
