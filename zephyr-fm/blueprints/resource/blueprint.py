@@ -51,7 +51,7 @@ def create_resource():
         return flask.make_response(flask.jsonify(msg), 400)
 
     add_res = mainapp.conf.add_resource(resource)
-    endpoints, _ = mainapp.get_endpoints(resource['consumers'])
+    endpoints = mainapp.get_endpoints(resource['consumers'], 'add')
     # If nobody subscribed to this "create" event, then nobody will be notified.
     if len(endpoints) == 0:
         msg = { 'warning' : 'Nothing happened. There are no subscribers to this event, yet.' }
@@ -103,7 +103,7 @@ def remove_resource():
         msg = { 'error' : 'remove_resource: {}'.format(str(err)) }
         return flask.make_response(flask.jsonify(msg), 400)
 
-    _, endpoints = mainapp.get_endpoints(resource['consumers'])
+    endpoints = mainapp.get_endpoints(resource['consumers'], 'remove')
     # If nobody subscribed to this "remove" event, then nobody will be notified.
     if len(endpoints) == 0:
         msg = { 'warning' : 'Nothing happened. There are no subscribers to this event.' }

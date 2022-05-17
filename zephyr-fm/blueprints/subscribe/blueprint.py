@@ -20,10 +20,15 @@ log = logging.getLogger('zephyr')
 
 """ ------------------------------- ROUTES ------------------------------- """
 
-@Journal.BP.route('/%s/add_event' % (Journal.name), methods=['POST'])
-def add_subscribe():
+@Journal.BP.route(f'/{Journal.name}/llamas', methods=['POST'])
+def subscribe_llamas():
     """
-        Subscribe to an Add event.
+        Subscribe llamas endpoints.
+    @param req.body: {
+        'callbacks'    : {'name': <endpoint>},
+        'alias'        : <value>, # unused
+        'bridges'      : <List[cuuid:serial]>,
+    }
     """
     response = {}
     status = 'nothing'
@@ -32,91 +37,71 @@ def add_subscribe():
     if not body:
         body = flask.request.form
 
-    callback_endpoint = body.get('callback', None)
+    callback_endpoints = body.get('callbacks', None)
     endpoint_alias = body.get('alias', None)
     bridges = body.get('bridges', [])
-    if not endpoint_alias:
-        endpoint_alias = callback_endpoint
 
-    if callback_endpoint is None:
-        response['error'] = 'No callback in body!\n%s' % body
+    if callback_endpoints is None:
+        response['error'] = f'No callbacks in body!\n{body}'
         status = 'error'
         code = 400
     elif len(bridges) == 0:
-        response['error'] = 'No bridges in body!\n%s' % body
+        response['error'] = f'No bridges in body!\n{body}'
         status = 'error'
         code = 400
     else:
-        if endpoint_alias in Journal.mainapp.add_callback:
-            status = 'Endpoint alias "%s" already in the list.' % endpoint_alias
-            code = 403
-        elif callback_endpoint in Journal.mainapp.add_callback.values():
-            status = 'Endpoint "%s" already in the list.' % callback_endpoint
+        if callback_endpoints in Journal.mainapp.callbacks.values():
+            status = f'Endpoints "{callback_endpoints}" already in the list'
             code = 403
         else:
-            status = 'Callback endpoint %s added' % callback_endpoint
-            if endpoint_alias != callback_endpoint:
-                status = '%s with the alias name "%s"' % (status, endpoint_alias)
+            status = f'Callback endpoints "{callback_endpoints}" added'
 
-            Journal.mainapp.add_callback[endpoint_alias] = callback_endpoint
+            # save callback endpoints and move local bridges
+            fab = Journal.mainapp.conf.fab
             for br in bridges:
-                Journal.mainapp.add_callback[br] = callback_endpoint
+                Journal.mainapp.callbacks[br] = callback_endpoints
+                resp = send_move_local_bridge(fab, br, callback_endpoints['local_bridge'])
+                log.debug(f'send_move_local_bridge resp={resp}')
+
+            # send resources
+            for br in bridges:
                 try:
                     add = Journal.mainapp.conf.get_resources(br)
                 except KeyError:
-                    log.debug('bridge {} has no Conf resources'.format(br))
+                    log.debug(f'bridge {br} has no Conf resources')
                     continue
                 for res in add:
-                    resp = send_resource(res, [callback_endpoint])
+                    resp = send_resource(res, [callback_endpoints['add']])
                     # Revisit: do something with resp
+                # end for res
+            # end for br
+        # end if
 
-        log.info('subscribe/add_event: %s' % status)
+    log.info(f'subscribe/llamas: {status}')
     response['status'] = status
 
     return flask.make_response(flask.jsonify(response), code)
 
-@Journal.BP.route('/%s/remove_event' % (Journal.name), methods=['POST'])
-def remove_subscribe():
-    """
-        Subscribe to a Remove event.
-    """
-    response = {}
-    status = 'nothing'
-    code = 200
-    body = flask.request.get_json()
-    if not body:
-        body = flask.request.form
 
-    callback_endpoint = body.get('callback', None)
-    endpoint_alias = body.get('alias', None)
-    bridges = body.get('bridges', [])
-    if not endpoint_alias:
-        endpoint_alias = callback_endpoint
-
-    if callback_endpoint is None:
-        response['error'] = 'No callback in body!\n%s' % body
-        status = 'error'
-        code = 400
-    elif len(bridges) == 0:
-        response['error'] = 'No bridges in body!\n%s' % body
-        status = 'error'
-        code = 400
-    else:
-        if endpoint_alias in Journal.mainapp.remove_callback:
-            status = 'Endpoint alias "%s" already in the list.' % endpoint_alias
-            code = 403
-        elif callback_endpoint in Journal.mainapp.remove_callback.values():
-            status = 'Endpoint "%s" already in the list.' % callback_endpoint
-            code = 403
-        else:
-            status = 'Callback endpoint %s added' % callback_endpoint
-            if endpoint_alias != callback_endpoint:
-                status = '%s with the alias name "%s"' % (status, endpoint_alias)
-
-            Journal.mainapp.remove_callback[endpoint_alias] = callback_endpoint
-            for br in bridges:
-                Journal.mainapp.remove_callback[br] = callback_endpoint
-        log.info('subscribe/remove_event: %s' % status)
-    response['status'] = status
-
-    return flask.make_response(flask.jsonify(response), code)
+def send_move_local_bridge(fab, br_cuuid_serial, endpoint):
+    try:
+        br = fab.cuuid_serial[br_cuuid_serial]
+    except KeyError:
+        log.warning(f'bridge {br_cuuid_serial} not found')
+        return None
+    # Revisit: other checks, like valid gcid, status is C-Up?
+    data = {
+        'gcid'        : br.gcid.val,
+        'cuuid_serial': br_cuuid_serial,
+        'mgr_uuid'    : str(fab.mgr_uuid),
+    }
+    try:
+        log.debug(f'Sending {data} to {endpoint}')
+        msg = HTTP_REQUESTS.post(endpoint, json=data)
+        resp = msg.json()
+        fab.set_comp_name(br, resp['name'])
+        if not msg.ok:
+            log.warning(f'send_move_local_bridge HTTP status {msg.status_code}')
+        return resp
+    except Exception as err:
+        return None

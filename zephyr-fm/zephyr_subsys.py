@@ -67,21 +67,18 @@ class FMServer(flask_fat.APIBaseline):
     def __init__(self, config, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.conf = config
-        self.add_callback = {}
-        self.remove_callback = {}
+        self.callbacks = {} # key: bridge cuuid:serial
         self.init_socket()
 
-    def get_endpoints(self, consumers):
-        add_endpoints = []
-        rm_endpoints = []
+    def get_endpoints(self, consumers, name):
+        endpoints = []
         for con in consumers:
             try:
-                add_endpoints.append(self.add_callback[con])
-                rm_endpoints.append(self.remove_callback[con])
+                endpoints.append(self.callbacks[con][name])
             except KeyError:
-                log.debug('consumer {} has no subscribed endpoint'.format(con))
+                log.debug(f'consumer {con} has no subscribed {name} endpoint')
         # end for
-        return (add_endpoints, rm_endpoints)
+        return endpoints
 
     def init_socket(self):
         # choose a random available port by setting config PORT to 0
