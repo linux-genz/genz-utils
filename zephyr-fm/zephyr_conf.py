@@ -115,6 +115,8 @@ class Conf():
                 res = fab.resources.by_instance_uuid[instance_uuid]
                 res_list = res.res_list
                 res_list.remove_consumers(res, conf_rm['consumers'])
+                if len(res.consumers) == 0: # last consumer removed
+                    fab.resources.remove(res) # remove res itself
         return res_list.to_json()
 
     def get_resources(self, cuuid_serial) -> List['ResourceList']:
