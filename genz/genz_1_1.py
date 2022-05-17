@@ -2619,8 +2619,9 @@ class InterfaceTemplate(ControlStructure):
         r = super().__str__()
         if self.verbosity == 1:
             istatus = IStatus(self.IStatus, self)
-            r = '{:6s}'.format(istatus.istate)
+            r = f'{istatus.istate:6s}'
             peer_state = PeerState(self.PeerState, self)
+            cstate = CState(peer_state.PeerCState)
             peer_cid = self.PeerCID if peer_state.field.PeerCIDValid else None
             peer_sid = (self.PeerSID if peer_state.field.PeerSIDValid else
                         0) # Revisit
@@ -2631,7 +2632,9 @@ class InterfaceTemplate(ControlStructure):
             peer_iface = (self.PeerInterfaceID
                           if peer_state.field.PeerIfaceIDValid == 1 else None)
             if peer_gcid:
-                r += ' Peer {}.{}'.format(peer_gcid, peer_iface)
+                r += f' Peer {peer_gcid}.{peer_iface} ({cstate})'
+            elif istatus.IState != IState.IDown:
+                r += f' Peer GCID invalid ({cstate})'
         return r
 
 # factory class to dynamically build InterfaceStructure
