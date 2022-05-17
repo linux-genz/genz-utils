@@ -1620,6 +1620,7 @@ class ControlOpcodes(Opcodes):
               'CStatePowerCtl'                      : 0x0b,
               'RKeyUpdate'                          : 0x0c,
               'AEAD'                                : 0x0d,
+              'WritePartial'                        : 0x13,
               'Read'                                : 0x1b,
               'CtlCTXIDNIRRelease'                  : 0x1c,
               'CtlNIRRelease'                       : 0x1d,
@@ -3081,7 +3082,7 @@ class InterfaceStatisticsTemplate(ControlStructure):
                 ('IStatStatus',                c_u64,  8),
                 ('VendorDefinedPTR',           c_u64, 32), #0x8
                 ('ISnapshotPTR',               c_u64, 32),
-                ('ISnapshotInterval',          c_u64, 64), #0x10
+                ('ISnapshotInterval',          c_u64, 64), #0x10 snapshot starts here
                 ('PCRCErrors',                 c_u64, 32), #0x18
                 ('ECRCErrors',                 c_u64, 32),
                 ('TxStompedECRC',              c_u64, 32), #0x20
@@ -4003,7 +4004,7 @@ class Core64WritePartialPkt(ExplicitReqHdr):
                   ('Addrl',                      c_u32, 32), # Byte 16
                   ('Maskl',                      c_u32, 32), # Byte 20
                   ('Maskh',                      c_u32, 32)] # Byte 24
-    os3_fields = [('R1',                         c_u32,  5), # Byte YY
+    os3_fields = [('R1',                         c_u32,  5), # Byte 92
                   ('PD',                         c_u32,  1),
                   ('FPS',                        c_u32,  2),
                   ('ECRC',                       c_u32, 24)]
@@ -4053,7 +4054,7 @@ class Core64WritePartialPkt(ExplicitReqHdr):
             r += ', R0: {:02x}, R1: {:02x}'.format(self.R0, self.R1)
         r += (',{},{},,,,,{}' if self.csv else ', PD: {0}, FPS: {1}, ECRC:{3}{2:06x}').format(self.PD, self.FPS, self.ECRC, self.ecrc_sep)
         if self.verbosity:
-            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4))
+            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4)) # no PadCNT
             for i in reversed(range(self.pay_len)):
                 r += ' {:08x}'.format(self.Payload[i])
         return r
@@ -4225,6 +4226,87 @@ class ControlWritePkt(ExplicitHdr):
         r += (',,,,,,,,,{},,,,,{}' if self.csv else ', FPS: {0}, ECRC:{2}{1:06x}').format(self.FPS, self.ECRC, self.ecrc_sep)
         if self.verbosity:
             r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
+            for i in reversed(range(self.pay_len)):
+                r += ' {:08x}'.format(self.Payload[i])
+        return r
+
+class ControlWritePartialPkt(ExplicitHdr):
+    os1_fields = [('R0',                         c_u32,  2),
+                  ('RK',                         c_u32,  1),
+                  ('DR',                         c_u32,  1),
+                  ('R1',                         c_u32,  8)]
+    os2_fields = [('DRIface',                    c_u32, 12), # Byte 12
+                  ('Addrh',                      c_u32, 20),
+                  ('Addrl',                      c_u32, 32), # Byte 16
+                  ('Maskl',                      c_u32, 32), # Byte 20
+                  ('Maskh',                      c_u32, 32)] # Byte 24
+    os2b_fields = [('MGRUUID0',                  c_u32, 32), # Byte 92
+                  ('MGRUUID1',                   c_u32, 32),
+                  ('MGRUUID2',                   c_u32, 32),
+                  ('MGRUUID3',                   c_u32, 32)]
+    os3_fields = [('R2',                         c_u32,  6), # Byte 108
+                  ('FPS',                        c_u32,  2),
+                  ('ECRC',                       c_u32, 24)]
+
+    _uuid_fields = [('MGRUUID0', 'MGRUUID1', 'MGRUUID2', 'MGRUUID3')]
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        fields = ExplicitHdr.hd_fields + ControlWritePartialPkt.os1_fields
+        hdr_len = 12 # Revisit: constant 12
+        if exp_pkt.NH:
+            hdr_len += 4
+        if exp_pkt.GC:
+            fields.extend(ExplicitHdr.ms_fields)
+            hdr_len += 1
+        if exp_pkt.RK:
+            fields.extend(ExplicitHdr.rk_fields)
+            hdr_len += 1
+        fields.extend(ControlWritePartialPkt.os2_fields)
+        pay_len = exp_pkt.LEN - hdr_len
+        fields.append(('Payload', c_u32 * pay_len))
+        fields.extend(ControlWritePartialPkt.os2b_fields)
+        if exp_pkt.NH:
+            fields.extend(ExplicitHdr.nh_fields)
+        fields.extend(ControlWritePartialPkt.os3_fields)
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type = type(className, (ControlWritePartialPkt,),
+                        {'_fields_': fields,
+                         'data': exp_pkt.data,
+                         'verbosity': exp_pkt.verbosity,
+                         'pay_len': pay_len})
+        pkt = pkt_type.from_buffer(exp_pkt.data)
+        return pkt
+
+    @property
+    def Addr(self):
+        return self.Addrh << 32 | self.Addrl
+
+    @property
+    def Mask(self):
+        return self.Maskh << 32 | self.Maskl
+
+    @property
+    def MGRUUID(self):
+        return self.uuid(self._uuid_fields[0])
+
+    def __str__(self):
+        r = super().__str__()
+        if self.verbosity > 1 and not self.csv:
+            r += ', R0: {}'.format(self.R0)
+        r += (',,,{},{}' if self.csv else ', RK: {}, DR: {}').format(self.RK, self.DR)
+        if self.DR:
+            r += (',{}' if self.csv else ', DRIface: {}').format(self.DRIface)
+        elif self.csv:
+            r += ','
+        if self.verbosity > 1 and not self.csv:
+            r += ', R1: {:02x}'.format(self.R1)
+        r += (',,{},{},{}' if self.csv else ', PadCNT: N/A, Addr: {:013x}, Mask: {:016x}, MGRUUID: {}').format(
+            self.Addr, self.Mask, self.MGRUUID)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R2: {:02x}'.format(self.R2)
+        r += (',,,,,,,,,{},,,,,{}' if self.csv else ', FPS: {0}, ECRC:{2}{1:06x}').format(self.FPS, self.ECRC, self.ecrc_sep)
+        if self.verbosity:
+            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4)) # no PadCNT
             for i in reversed(range(self.pay_len)):
                 r += ' {:08x}'.format(self.Payload[i])
         return r
