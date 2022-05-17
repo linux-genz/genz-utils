@@ -68,7 +68,10 @@ def netlink_reader(*args, **kwargs):
     hdrs = {'Content-type': 'application/json', 'Accept': 'text/plain'}
     while True:
         log.debug('waiting for kernel netlink UEP msg')
-        msg = nl.get()
+        try:
+            msg = nl.get()
+        except KeyboardInterrupt:
+            return
         for i in range(len(msg)):
             if msg[i]['cmd'] != GENZ_C_NOTIFY_UEP or msg[i]['version'] != 1:
                 continue # Revisit: log warning
