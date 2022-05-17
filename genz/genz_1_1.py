@@ -1916,6 +1916,9 @@ class ControlStructure(ControlStructureMap):
             byteOffset, highBit, lowBit, hexWidth = self.bitField(width, bitOffset)
             field.byteOffset = byteOffset
 
+    def all_ones_type_vers_size(self):
+        return self.Type == 0xfff and self.Vers == 0xf and self.Size == 0xffff
+
     @property
     def sz_bytes(self):
         return self.Size << 4
@@ -2033,6 +2036,10 @@ class ControlTable(ControlStructure):
     def fileToStructInit(self):
         if self.path is not None:
             self._stat = self.path.stat()
+
+    def all_ones_type_vers_size(self):
+        # tables have no Type/Vers/Size
+        return False
 
     @property
     def Size(self):
@@ -2303,6 +2310,10 @@ class CoreStructure(ControlStructure):
     @property
     def CUUID(self): # Revisit: generate this (and others) from _uuid_fields
         return self.uuid(('CUUIDh', 'CUUIDl'))
+
+    @property
+    def ZUUID(self): # Revisit: generate this (and others) from _uuid_fields
+        return self.uuid(('ZUUIDh', 'ZUUIDl'))
 
     def fileToStructInit(self):
         self.sw = None

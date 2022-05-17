@@ -131,6 +131,9 @@ class Fabric(nx.MultiGraph):
         comp.update_cstate()
         self.nodes[comp]['cstate'] = str(comp.cstate) # Revisit: to_json() doesn't work
 
+    def set_comp_name(self, comp, name: str):
+        self.nodes[comp]['name'] = name
+
     def generate_nonce(self):
         while True:
             r = randgen.getrandbits(64)
@@ -178,9 +181,13 @@ class Fabric(nx.MultiGraph):
                 gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size(haveCore=False)[0])
                 self.set_pfm(br)
                 log.info('{}:{} bridge{} {}'.format(self.fabnum, gcid, brnum, cuuid_serial))
-                br.comp_init(self.pfm)
-                self.bridges.append(br)
-                br.explore_interfaces(self.pfm)
+                usable = br.comp_init(self.pfm)
+                if usable:
+                    self.bridges.append(br)
+                    br.explore_interfaces(self.pfm)
+                else:
+                    self.set_pfm(None)
+                    log.warning(f'{self.fabnum}:{gcid} bridge{brnum} is not usable')
             else: # not first bridge (self.pfm is not None)
                 gcid = cur_gcid
                 try:

@@ -22,7 +22,7 @@
 # SOFTWARE.
 
 import ctypes
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, CReset, HostMgrUUID
+from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, CReset, HostMgrUUID, genzUUID
 import os
 import re
 import time
@@ -90,7 +90,7 @@ class Component():
         instance = super(Component, subclass).__new__(subclass)
         return instance
 
-    def __init__(self, cclass, fab, map, path, mgr_uuid, verbosity=0,
+    def __init__(self, cclass, fab, map, path, mgr_uuid, verbosity=0, gcid=None,
                  local_br=False, dr=None, tmp_gcid=None, br_gcid=None,
                  netlink=None, uuid=None):
         self.cclass = cclass
@@ -101,7 +101,8 @@ class Component():
         self.verbosity = verbosity
         self.local_br = local_br
         self.tmp_gcid = tmp_gcid
-        self.gcid = tmp_gcid if tmp_gcid is not None else INVALID_GCID
+        self.gcid = (gcid if gcid is not None else
+                     tmp_gcid if tmp_gcid is not None else INVALID_GCID)
         self.br_gcid = br_gcid
         self.dr = dr
         self.nl = netlink
@@ -153,18 +154,28 @@ class Component():
         # all ctl_timer_unit values are valid
         return int(time / Component.ctl_timer_unit_list[self.ctl_timer_unit])
 
+    def check_all_ones(self, sz, off, data):
+        ones = (1 << (sz * 8)) - 1
+        val = int.from_bytes(data[off:off+sz], 'little')
+        if val == ones:
+            raise ValueError # Revisit: raise better exception?
+
     # Revisit: the sz & off params are workarounds for ctypes bugs
-    def control_read(self, struct, field, sz=None, off=0):
+    def control_read(self, struct, field, sz=None, off=0, check=False):
         off += field.offset
         if sz is None:
             sz = ctypes.sizeof(field)  # Revisit: this doesn't work
         struct.data[off:off+sz] = os.pread(struct.fd, sz, off)
+        if check: # check that we didn't read bad all-ones data
+            self.check_all_ones(sz, off, struct.data)
 
     # Revisit: the sz & off params are workarounds for ctypes bugs
-    def control_write(self, struct, field, sz=None, off=0):
+    def control_write(self, struct, field, sz=None, off=0, check=False):
         off += field.offset
         if sz is None:
             sz = ctypes.sizeof(field)  # Revisit: this doesn't work
+        if check: # check that we're not writing bad all-ones data
+            self.check_all_ones(sz, off, struct.data)
         os.pwrite(struct.fd, struct.data[off:off+sz], off)
 
     def add_fab_comp(self, setup=False):
@@ -179,7 +190,7 @@ class Component():
         }
         msg = self.nl.build_msg(cmd=cmd_name, data=data)
         ret = self.nl.sendmsg(msg)
-        self.fab.update_path('/sys/devices/genz1')  # Revisit: hardcoded path
+        self.fab.update_path('/sys/devices/genz1')  # Revisit: MultiBridge hardcoded path
         if setup:
             self.setup_paths('control')
         else:
@@ -333,7 +344,16 @@ class Component():
                                          verbosity=self.verbosity)
             log.debug('{}: {}'.format(self.gcid, core))
             self.core = core
-            # Revisit: verify good data (check ZUUID?)
+            # verify good data, at structure start
+            if core.all_ones_type_vers_size():
+                log.warning(f'{self}: core structure returned all-ones data')
+                self.usable = False
+                return False
+            # verify good data near structure end (check ZUUID)
+            if core.ZUUID != genzUUID:
+                log.warning(f'{self}: invalid core structure ZUUID {core.ZUUID}')
+                self.usable = False
+                return False
             # save cstate and use below to control writes (e.g., CID0)
             cstatus = genz.CStatus(core.CStatus, core)
             self.cstate = CState(cstatus.field.CState)
@@ -359,6 +379,8 @@ class Component():
                 # end if ifnum
                 try:
                     self.interfaces[ifnum].iface_read(prefix=prefix)
+                except ValueError:
+                    log.warning(f'{self.interfaces[ifnum]}: iface_read returned all-ones data')
                 except IndexError:
                     pass
             # end for
@@ -412,11 +434,23 @@ class Component():
             core.NLLRspDeadline = 1001
             core.RspDeadline = 800 # responder packet execution time
             self.control_write(core, genz.CoreStructure.LLRspDeadline, sz=4)
+            # almost done with DR - read back the first thing we wrote
+            # (CV/CID0), and if it's still set correctly assume that CCTO
+            # did not expire; also check that it's not all-ones
+            try:
+                self.control_read(core, genz.CoreStructure.CV,
+                                  sz=8, check=True)
+            except ValueError:
+                log.warning(f'{self}: CV/CID0 returned all-ones data')
+                self.usable = False
+                return False
+            # Revisit: retry if CCTO expired?
+            if core.CV == 0 and core.CID0 == 0:
+                log.warning(f'{self}: CV/CID0 is 0 - CCTO expired')
+                self.usable = False
+                return False
             # we have set up just enough for "normal" responses to work -
             # tell the kernel about the new/changed component and stop DR
-            # Revisit: before doing so, read back the first thing we wrote
-            # (CV/CID0/SID0), and if it's still set correctly assume that CCTO
-            # did not expire; otherwise, do what? Go back and try again?
             try:
                 if self.cstate is CState.CCFG:
                     self.add_fab_comp()
@@ -450,8 +484,15 @@ class Component():
                 core.MGRUUIDh = int.from_bytes(self.mgr_uuid.bytes[8:16],
                                            byteorder='little')
                 self.control_write(core, genz.CoreStructure.MGRUUIDl, sz=16)
-            # Revisit: read back MGRUUID, to confirm we own component
-            # not safe until orthus can handle errors
+            # read back MGRUUID, to confirm we own component by verifying
+            # not all-ones
+            try:
+                self.control_read(core, genz.CoreStructure.MGRUUIDl,
+                                  sz=16, check=True)
+            except ValueError:
+                log.warning(f'{self}: all-ones MGRUUID - component not owned')
+                self.usable = False
+                return False
             # set PFMSID/PFMCID (must be before PrimaryFabMgrRole = 1)
             # Revisit: subnets
             core.PFMCID = pfm.gcid.cid
@@ -527,6 +568,7 @@ class Component():
             core.MaxRequests = core.MaxREQSuppReqs
             self.control_write(core, genz.CoreStructure.MaxRequests, sz=8)
             # Revisit: set MaxPwrCtl (to NPWR?)
+            # Revisit: try/except ValueError
             rows, cols = self.ssdt_size(prefix=prefix)
             # initialize SSDT route info
             from zephyr_route import RouteInfo
@@ -1329,9 +1371,12 @@ class Component():
                 except Exception as e:
                     log.error('add_fab_comp failed with exception {}'.format(e))
                     return
-                comp.comp_init(pfm, ingress_iface=peer_iface, route=route[1])
-                if comp.has_switch:  # if switch, recurse
+                usable = comp.comp_init(pfm, ingress_iface=peer_iface, route=route[1])
+                if usable and comp.has_switch:  # if switch, recurse
                     comp.explore_interfaces(pfm, ingress_iface=peer_iface)
+                elif not usable:
+                    log.warning(f'{comp} is not usable')
+                    return
             else:
                 msg += ' ignoring unknown component'
                 log.warning(msg)
@@ -1356,6 +1401,16 @@ class Component():
                 peer_iface = iface.peer_iface
                 gcid = comp.gcid
                 msg += 'reusing previously-assigned gcid={}'.format(gcid)
+            # deal with "leftover" comp path from previous zephyr run
+            path = self.fab.make_path(gcid)
+            if path.exists():
+                leftover = Component(iface.peer_cclass, self.fab, self.map,
+                                     path, self.mgr_uuid,
+                                     gcid=gcid, br_gcid=self.br_gcid,
+                                     netlink=self.nl, verbosity=self.verbosity)
+                leftover.remove_fab_comp()
+                self.fab.remove_node(leftover)
+                del self.fab.components[leftover.uuid]
             log.info(msg)
             route = self.fab.setup_bidirectional_routing(
                 pfm, comp, write_to_ssdt=False) # comp_init() will write SSDT
@@ -1364,10 +1419,12 @@ class Component():
             except Exception as e:
                 log.error('add_fab_dr_comp failed with exception {}'.format(e))
                 return
-            comp.comp_init(pfm, prefix='dr', ingress_iface=peer_iface,
-                           route=route[1])
-            if comp.has_switch:  # if switch, recurse
+            usable = comp.comp_init(pfm, prefix='dr', ingress_iface=peer_iface,
+                                    route=route[1])
+            if usable and comp.has_switch:  # if switch, recurse
                 comp.explore_interfaces(pfm, ingress_iface=peer_iface)
+            elif not usable:
+                log.warning(f'{comp} is not usable')
         # end if peer_cstate
 
     def explore_interfaces(self, pfm, ingress_iface=None, explore_ifaces=None,

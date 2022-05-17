@@ -176,8 +176,7 @@ class Comp:
         self.cclass = get_cclass(path)
         self.serial = get_serial(path)
         self.cuuid_sn = cuuid_serial(self.cuuid, self.serial)
-        self.name = (name if name is not None else genz.cclass_name[self.cclass]
-                     if self.cclass is not None else 'Unknown')
+        self.name = name if name is not None else self.cclass_name
         self.verbosity = verbosity
         self.map = map
         self.dr =dr
@@ -190,6 +189,13 @@ class Comp:
 
     def get_cstate(self):
         self.cstate = get_cstate(self.ctl, self.map)
+
+    @property
+    def cclass_name(self):
+        try:
+            return genz.cclass_name[self.cclass]
+        except IndexError:
+            return 'Unknown'
 
     def check_selected(self, args, match_cuuids, match_serials,
                        match_fabrics, match_gcids, match_cclasses):

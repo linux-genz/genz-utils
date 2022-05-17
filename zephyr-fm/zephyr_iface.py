@@ -72,6 +72,8 @@ class Interface():
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
             log.debug('{}: interface{}={}'.format(self.comp.gcid, self.num, iface))
             self.hvs = iface.HVS  # for num_vcs()
+            if iface.all_ones_type_vers_size():
+                raise ValueError
         # end with
         return iface
 
@@ -92,6 +94,10 @@ class Interface():
             iface = self.comp.map.fileToStruct('interface', data,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
             log.debug('{}: iface_init interface{}={}'.format(self.comp.gcid, self.num, iface))
+            if iface.all_ones_type_vers_size():
+                log.warning(f'{self.comp.gcid}: interface{self.num} returned all-ones data')
+                self.usable = False
+                return False
             self.hvs = iface.HVS
             if not self.phy_init():
                 log.info('{}: interface{} is not PHY-Up'.format(
@@ -158,8 +164,13 @@ class Interface():
             ictl.field.IfaceEnb = 1
             iface.IControl = ictl.val
             log.debug('{}: writing IControl IfaceEnb'.format(self))
-            self.comp.control_write(iface,
-                            genz.InterfaceStructure.IControl, sz=4, off=4)
+            try:
+                self.comp.control_write(iface, genz.InterfaceStructure.IControl,
+                                        sz=4, off=4, check=True)
+            except ValueError:
+                log.warning(f'{self}: prevented IControl write of all-ones')
+                self.usable = False
+                return False
             # clear IStatus RW1C bits that we might care about later
             istatus = genz.IStatus(0, iface) # all 0 IStatus
             istatus.field.FullIfaceReset = 1
@@ -218,9 +229,13 @@ class Interface():
         iface.IErrorSigTgt = ((ierr_tgt.val[2] << 32) |
                               (ierr_tgt.val[1] << 16) | ierr_tgt.val[0])
         log.debug('{}: writing IErrorSigTgt'.format(self))
-        # Revisit: at least on orthus, sz=6 turns into an 8-byte ControlWrite
-        self.comp.control_write(iface,
-                            genz.InterfaceStructure.IErrorSigTgt, sz=6)
+        try:
+            self.comp.control_write(iface, genz.InterfaceStructure.IErrorSigTgt,
+                                    sz=6, check=True)
+        except ValueError:
+            log.warning(f'{self}: prevented IErrorSigTgt write of all-ones')
+            self.usable = False
+            return
         # Set IErrorDetect - last, after other IError fields setup
         ierr_det = genz.IErrorDetect(iface.IErrorDetect, iface)
         ierr_det.field.ExcessivePHYRetraining = 1
@@ -238,8 +253,13 @@ class Interface():
         #self.comp.control_write(iface,
         #                    genz.InterfaceStructure.IErrorDetect, sz=2, off=2)
         # Revisit: major side-effect - IErrorStatus is cleared (bits are RW1CS)
-        self.comp.control_write(iface,
-                            genz.InterfaceStructure.IErrorStatus, sz=8)
+        try:
+            self.comp.control_write(iface, genz.InterfaceStructure.IErrorStatus,
+                                    sz=8, check=True)
+        except ValueError:
+            log.warning(f'{self}: prevented IErrorStatus write of all-ones')
+            self.usable = False
+            return
 
     def nonce_exchange(self, iface) -> bool:
         args = zephyr_conf.args
