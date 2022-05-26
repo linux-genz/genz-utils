@@ -68,13 +68,15 @@ class ResourceList():
             self.producer = None
             self.res_dict['resources'] = []
             return
-        self.res_dict['gcid']     = self.producer.gcid.val
-        self.res_dict['cclass']   = self.producer.cclass
-        self.res_dict['serial']   = self.producer.serial
-        self.res_dict['br_gcid']  = 0 # Revisit: MultiBridge
-        self.res_dict['cuuid']    = str(self.producer.cuuid)
-        self.res_dict['fru_uuid'] = str(self.producer.fru_uuid)
-        self.res_dict['mgr_uuid'] = str(self.producer.mgr_uuid)
+        self.res_dict['producer']  = self.producer.cuuid_serial
+        self.res_dict['consumers'] = []
+        self.res_dict['gcid']      = self.producer.gcid.val
+        self.res_dict['cclass']    = self.producer.cclass
+        self.res_dict['serial']    = self.producer.serial
+        self.res_dict['br_gcid']   = 0 # Revisit: MultiBridge
+        self.res_dict['cuuid']     = str(self.producer.cuuid)
+        self.res_dict['fru_uuid']  = str(self.producer.fru_uuid)
+        self.res_dict['mgr_uuid']  = str(self.producer.mgr_uuid)
         self.res_dict['resources'] = [ res.to_json() for res in self.resources ]
         self.add_consumers(res_dict['consumers'])
 
@@ -91,6 +93,7 @@ class ResourceList():
                     cons, self.fab.fabnum))
                 continue
             if cons_comp not in self.consumers:
+                self.res_dict['consumers'].append(cons_comp.cuuid_serial)
                 self.consumers.add(cons_comp)
                 routes = self.fab.setup_bidirectional_routing(
                     cons_comp, self.producer)
@@ -106,6 +109,7 @@ class ResourceList():
                     cons, self.fab.fabnum))
                 continue
             if cons_comp in self.consumers:
+                self.res_dict['consumers'].remove(cons_comp.cuuid_serial)
                 self.consumers.discard(cons_comp)
                 # Revisit: fix this
                 # Routes need reference counting (per resource)
