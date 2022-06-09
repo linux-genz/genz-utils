@@ -96,7 +96,9 @@ class Fabric(nx.MultiGraph):
         # Revisit: CID conficts between accepted & assigned are possible
         random_cids = self.random_cids
         if self.refill_gcids:
-            min_cid, max_cid = self.conf.data.get('cid_range', (1, ssdt_sz-1))
+            default_range = (1, ssdt_sz-1)
+            cid_range = self.conf.data.get('cid_range', default_range)
+            min_cid, max_cid = cid_range if len(cid_range) == 2 else default_range
             self.avail_gcids = (
                 random.sample(range(min_cid, max_cid+1), max_cid-min_cid+1)
                 if random_cids else list(range(min_cid, max_cid+1)))
