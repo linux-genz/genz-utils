@@ -141,6 +141,8 @@ def main():
                         help='cfg file')
     parser.add_argument('-r', '--reclaim', action='store_true',
                         help='reclaim C-Up components via reset')
+    parser.add_argument('-s', '--sfm', action='store_true',
+                        help='run as Secondary Fabric Manager')
     parser.add_argument('-M', '--max-routes', action='store', default=None, type=int,
                         help='limit number of routes between components')
     parser.add_argument('-R', '--random-cids', action='store_true',
@@ -192,6 +194,9 @@ def main():
     fabrics = {}
     if args.keyboard > 3:
         set_trace()
+    if args.sfm: # Revisit
+        log.info('running as secondary fabric manager not yet supported')
+        return
     mainapp = FMServer(conf, 'zephyr', **args_vars)
     thread = Thread(target=mainapp.run, daemon=True)
     thread.start()
