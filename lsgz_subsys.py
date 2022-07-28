@@ -194,7 +194,7 @@ class Comp:
     def cclass_name(self):
         try:
             return genz.cclass_name[self.cclass]
-        except IndexError:
+        except (IndexError, TypeError):
             return 'Unknown'
 
     def check_selected(self, args, match_cuuids, match_serials,
