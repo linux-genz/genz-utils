@@ -41,6 +41,7 @@ re_ohb_last_match  = re.compile('^time: (?P<time>0x[0-9a-fA-F]+)\s+' +
 re_ohb_other_match = re.compile('^time: (?P<time>0x[0-9a-fA-F]+)\s+' +
                                 'data: (?P<user>0x[0-9a-fA-F]+)\s+' +
                                 '(?P<data>.*)')
+re_zmmu_match = re.compile('^Starting .*ZMMU .*Dump$')
 
 class PacketSorter():
     def __init__(self):
@@ -111,6 +112,9 @@ def process_text(fname):
         line_num = 0
         for line in f:
             line_num += 1
+            m_zmmu = re_zmmu_match.match(line)
+            if m_zmmu is not None:
+                break
             if in_pkt:
                 m_last = re_ohb_last_match.match(line)
                 if m_last is not None:
