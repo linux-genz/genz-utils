@@ -49,7 +49,7 @@ class uep(genlmsg):
                ('GENZ_A_UEP_BRIDGE_GCID', 'uint32'),
                ('GENZ_A_UEP_TS_SEC', 'uint64'),
                ('GENZ_A_UEP_TS_NSEC', 'uint64'),
-               ('GENZ_A_UEP_PKT', 'array(uint8)'),
+               ('GENZ_A_UEP_REC', 'array(uint8)'),
                )
 
 
@@ -79,9 +79,9 @@ def netlink_reader(*args, **kwargs):
             attrs = dict(msg[i]['attrs'])
             mgr_uuid = UUID(bytes=bytes(attrs['GENZ_A_UEP_MGR_UUID']))
             attrs['GENZ_A_UEP_MGR_UUID'] = mgr_uuid
-            uep_pkt = genz.Packet.dataToPkt(bytearray(attrs['GENZ_A_UEP_PKT']),
+            uep_rec = genz.UEPEventRecord.dataToRec(bytearray(attrs['GENZ_A_UEP_REC']),
                                             verbosity=verbosity)
-            attrs['GENZ_A_UEP_PKT'] = uep_pkt
+            attrs['GENZ_A_UEP_REC'] = uep_rec
             # We have to convert to json ourselves because if we try to let
             # requests do it, it doesn't get our magic to_json() stuff
             js = json.dumps(attrs)

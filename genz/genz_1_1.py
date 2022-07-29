@@ -3627,6 +3627,36 @@ class RouteControlTable(ControlTable):
 
     _special_dict = {'RCCAP1': RCCAP1}
 
+class UEPEventRecord(ControlTable):
+    _fields_ = [('A',                              c_u32,  1), #0x0
+                ('Vers',                           c_u32,  2),
+                ('CV',                             c_u32,  1),
+                ('SV',                             c_u32,  1),
+                ('GC',                             c_u32,  1),
+                ('IV',                             c_u32,  1),
+                ('R0',                             c_u32,  1),
+                ('Event',                          c_u32,  8),
+                ('R1',                             c_u32,  4),
+                ('IfaceID',                        c_u32, 12),
+                ('SCID',                           c_u32, 12), #0x4
+                ('SSID',                           c_u32, 16),
+                ('R2',                             c_u32,  4),
+                ('RCCID',                          c_u32, 12), #0x8
+                ('RCSID',                          c_u32, 16),
+                ('R3',                             c_u32,  4),
+                ('ES',                             c_u32, 32), #0xC
+                ('EventID',                        c_u32, 16), #0x10
+                ('R4',                             c_u32, 16),
+                ]
+
+    def dataToRec(data, verbosity=0, csv=False):
+        rec = UEPEventRecord.from_buffer(data)
+        rec.data = data
+        rec.verbosity = verbosity
+        rec.csv = csv
+        return rec
+
+
 class Packet(LittleEndianStructure):
     _ocl = OpClasses()
 

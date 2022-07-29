@@ -441,23 +441,23 @@ class Fabric(nx.MultiGraph):
         ts_sec = body.get('GENZ_A_UEP_TS_SEC')
         ts_nsec = body.get('GENZ_A_UEP_TS_NSEC')
         # Revisit: do something with ts_sec/ts_nsec
-        pkt = body.get('GENZ_A_UEP_PKT')  # dict, not genz.Packet
+        rec = body.get('GENZ_A_UEP_REC')  # dict, not genz.UEPEventRecord
         if local:
             sender = br
         else:
-            gc = pkt['GC']
-            scid = pkt['SCID']
-            sender_gcid = GCID(cid=scid, sid=(pkt['SSID'] if gc else
+            gc = rec['GC']
+            scid = rec['SCID']
+            sender_gcid = GCID(cid=scid, sid=(rec['SSID'] if gc else
                                               br.gcid.sid))
             sender = self.comp_gcids[sender_gcid]
-        if pkt['IV']:
-            iface = sender.interfaces[pkt['IfaceID']]
+        if rec['IV']:
+            iface = sender.interfaces[rec['IfaceID']]
         else:
             iface = None
         if zephyr_conf.args.keyboard > 2:
             set_trace()
         # dispatch to event handler based on EventName
-        return self.dispatch(pkt['EventName'], br, sender, iface, pkt)
+        return self.dispatch(rec['EventName'], br, sender, iface, rec)
 
     def to_json(self):
         nl = nx.node_link_data(self)
