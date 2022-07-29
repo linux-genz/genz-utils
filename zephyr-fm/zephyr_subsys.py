@@ -47,6 +47,7 @@ import socket
 import os
 import sys
 from zeroconf import IPVersion, ServiceInfo, Zeroconf
+from setproctitle import getproctitle, setproctitle
 from pdb import set_trace, post_mortem
 import traceback
 
@@ -128,6 +129,9 @@ def main():
     global args
     global cols
     global genz
+    script_name = Path(__file__).name
+    proc_title = script_name + ' ' + ' '.join(sys.argv[1:])
+    setproctitle(proc_title)
     parser = argparse.ArgumentParser()
     parser.add_argument('-c', '--conf', default='zephyr-fm/zephyr-fabric.conf',
                         help='fabric config file')
@@ -166,7 +170,7 @@ def main():
     ip_group.add_argument('--ip6-only', action='store_true',
                           help='listen on IPv6 only')
     args = parser.parse_args()
-    log.debug('Gen-Z version = {}'.format(args.genz_version))
+    log.debug(f'"{proc_title}": Gen-Z version = {args.genz_version}')
     genz = import_module('genz.genz_{}'.format(args.genz_version.replace('.', '_')))
     zephyr_conf.init(args, genz)
     args_vars = vars(args)
