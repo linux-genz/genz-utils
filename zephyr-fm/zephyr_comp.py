@@ -418,21 +418,25 @@ class Component():
             # Revisit: compute values depending on topology, as described
             # in Core spec section 15.2, Deadline Semantics
             # Revisit: if no Component Peer Attr struct, LL/NLL must be same
-            core.LLReqDeadline = 600
-            core.NLLReqDeadline = 1000
+            core.LLReqDeadline = 586
+            core.NLLReqDeadline = 976
             if self.cstate is not CState.CUp:
                 # DeadlineTick can only be modified in non-C-Up
-                core.DeadlineTick = 1000  # 1us
+                # Revisit: current HW only directly supports power-of-2 values
+                core.DeadlineTick = 1024  # 1.024us
             self.control_write(core, genz.CoreStructure.LLReqDeadline, sz=4)
-            # Revisit: set DRReqDeadline
+            # set DRReqDeadline
+            # Revisit: compute values depending on topology
+            core.DRReqDeadline = 1023
+            self.control_write(core, genz.CoreStructure.SID0, sz=4)
             # set LLRspDeadline, NLLRspDeadline, RspDeadline
             # Revisit: compute values depending on topology, as described
             # in Core spec section 15.2, Deadline Semantics
             # Revisit: only for responders
             # Revisit: if no Component Peer Attr struct, LL/NLL must be same
-            core.LLRspDeadline = 601
-            core.NLLRspDeadline = 1001
-            core.RspDeadline = 800 # responder packet execution time
+            core.LLRspDeadline = 587
+            core.NLLRspDeadline = 977
+            core.RspDeadline = 782 # responder packet execution time
             self.control_write(core, genz.CoreStructure.LLRspDeadline, sz=4)
             # almost done with DR - read back the first thing we wrote
             # (CV/CID0), and if it's still set correctly assume that CCTO
