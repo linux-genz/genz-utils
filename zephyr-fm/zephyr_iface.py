@@ -150,12 +150,11 @@ class Interface():
             if status == 0:
                 log.warning('{}: send_peer_attr1 timeout on interface{}'.format(
                     self.comp.gcid, self.num))
-            # Revisit: path time does not currently work in HW
             # send Path Time Link CTL
-            #status = self.send_path_time(iface, timeout=100000)
-            #if status == 0:
-            #    log.warning('{}: send_path_time timeout on interface{}'.format(
-            #        self.comp.gcid, self.num))
+            status = self.send_path_time(iface, timeout=100000)
+            if status == 0:
+                log.warning('{}: send_path_time timeout on interface{}'.format(
+                    self.comp.gcid, self.num))
             # save PeerInterfaceID
             self.peer_iface_num = self.get_peer_iface_num(iface)
             ictl = genz.IControl(iface.IControl, iface)
