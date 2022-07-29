@@ -2968,9 +2968,11 @@ class ComponentSwitchStructure(ControlStructure):
                      'SwitchOpCTL': SwitchOpCTL}
 
 class VendorDefinedStructure(ControlStructure):
-    _fields_ = [('Type',                       c_u32, 12), #0x0
-                ('Vers',                       c_u32,  4),
-                ('Size',                       c_u32, 16)]
+    _fields_ = [('Type',                       c_u64, 12), #0x0
+                ('Vers',                       c_u64,  4),
+                ('Size',                       c_u64, 16),
+                ('VdefData0',                  c_u64, 32),
+                ('VdefData1',                  c_u64, 64)]
     # Revisit: print rest of structure in hex?
 
 class VendorDefinedUUIDStructure(ControlStructure):
