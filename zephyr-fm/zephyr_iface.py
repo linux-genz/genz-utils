@@ -36,6 +36,7 @@ class Interface():
         self.hvs = None
         self.lprt = None
         self.vcat = None
+        self.istats = None
         self.route_info = None
         self.peer_nonce = None
         # defaults until we can read actual state
@@ -62,6 +63,10 @@ class Interface():
             self.vcat_dir = list(self.iface_dir.glob('vcat@*'))[0]
         except IndexError:
             self.vcat_dir = None
+        try:
+            self.istats_dir = list(self.iface_dir.glob('interface_statistics@*'))[0]
+        except IndexError:
+            self.istats_dir = None
 
     def iface_read(self, prefix='control'):
         self.setup_paths(prefix)
@@ -202,6 +207,7 @@ class Interface():
                 if not nonce_valid:
                     log.warning('{}: invalid nonce exchange'.format(self))
         # end with
+        self.istats_write(enb=True)
         if is_switch:
             # initialize VCAT
             # Revisit: multiple Action columns
@@ -618,6 +624,37 @@ class Interface():
                                     off=self.vcat.cs_offset(vc, action), sz=sz)
         # end with
 
+    def istats_write(self, enb=True, reset=False, snapshot=False):
+        if self.istats_dir is None:
+            return
+        # Revisit: avoid open/close (via "with") on every write?
+        istats_file = self.istats_dir / 'interface_statistics'
+        with istats_file.open(mode='rb+', buffering=0) as f:
+            if self.istats is None:
+                data = bytearray(f.read())
+                self.istats = self.comp.map.fileToStruct('interface_statistics',
+                                data, path=istats_file, core=self.comp.core,
+                                fd=f.fileno(), verbosity=self.comp.verbosity)
+            else:
+                self.istats.set_fd(f)
+            genz = zephyr_conf.genz
+            istat_ctl = genz.IStatControl(self.istats.IStatControl, self.istats)
+            istat_ctl.StatsEnb = int(enb)
+            istat_ctl.StatsReset = int(reset)
+            istat_ctl.InitiateStatsSnapshot = int(snapshot)
+            self.istats.IStatControl = istat_ctl.val
+            log.debug(f'{self}: writing IStatControl, val={istat_ctl.val:#x}')
+            # Revisit: current control-oc HW is broken for sz < 4
+            #self.comp.control_write(self.istats,
+            #                    genz.InterfaceStatisticsStructure.IStatControl,
+            #                    sz=1, off=6)
+            self.istats.IStatStatus = 0
+            self.comp.control_write(self.istats,
+                                genz.InterfaceStatisticsStructure.IStatCAP1,
+                                sz=4, off=4)
+            # Revisit: implement snapshots
+        #end with
+
     def update_lprt_dir(self):
         if self.lprt_dir is None:
             return
@@ -630,6 +667,12 @@ class Interface():
         self.vcat_dir = list(self.iface_dir.glob('vcat@*'))[0]
         log.debug('new vcat_dir = {}'.format(self.vcat_dir))
 
+    def update_istats_dir(self):
+        if self.istats_dir is None:
+            return
+        self.istats_dir = list(self.iface_dir.glob('interface_statistics@*'))[0]
+        log.debug('new istats_dir = {}'.format(self.istats_dir))
+
     def update_path(self, prefix=None):
         if prefix is not None:
             self._prefix = prefix
@@ -639,6 +682,7 @@ class Interface():
         log.debug('iface{}: new path: {}'.format(self.num, self.iface_dir))
         self.update_lprt_dir()
         self.update_vcat_dir()
+        self.update_istats_dir()
 
     @property
     def boundary_interface(self):
