@@ -152,6 +152,55 @@ def send_resource(resource: dict, endpoints: list):
     return flask.make_response(flask.jsonify(response), 200)
 
 
+@Journal.BP.route(f'/{Journal.name}/sfm', methods=['POST'])
+def sfm():
+    """
+        Accepts POST request with a json body detailing resource changes
+    that the PFM wants to alert the SFM about.
+    POST body model:
+    {
+        'fabric_uuid' : 'string',
+        'mgr_uuid'    : 'string',
+        'operation'   : 'string',
+        'resource': {
+          # See get_resource_schema()
+        }
+    }
+
+    """
+    global Journal
+    mainapp = Journal.mainapp
+    body = flask.request.get_json()
+    fab = mainapp.conf.fab
+
+    if body is None:
+        msg = { 'error ' : 'body is None'}
+        return flask.make_response(flask.jsonify(msg), 400)
+
+    resource = body.get('resource', None)
+    # Revisit: validate resource against schema
+    fabric_uuid = body.get('fabric_uuid', None)
+    # Revisit: check mgr_uuid
+    op = body.get('operation', None)
+
+    # Check that the fabric_uuid matches ours
+    if fabric_uuid != str(fab.fab_uuid):
+        msg = { 'error' : f'Incorrect fabric_uuid: {fabric_uuid}.' }
+        return flask.make_response(flask.jsonify(msg), 404)
+
+    # Check for a valid operation
+    if not op in [ 'add', 'remove', 'add_cons', 'rm_cons' ]:
+        msg = { 'error' : f'Unknown operation: {op}.' }
+        return flask.make_response(flask.jsonify(msg), 404)
+    if op == 'add' or op == 'add_cons':
+        fab.conf.add_resource(resource, op=op, send=False)
+    else: # op == 'remove' or op == 'rm_cons'
+        fab.conf.remove_resource(resource, op=op, send=False)
+
+    response = { 'ok': f'{op}'}
+    return flask.make_response(flask.jsonify(response), 200)
+
+
 def get_resource_schema():
     """
     The Resource schema that is sent in the body by the resource creator.

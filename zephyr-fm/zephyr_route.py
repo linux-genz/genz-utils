@@ -269,10 +269,13 @@ class Route():
         return '(' + ','.join('{}'.format(e) for e in self._elems) + ')'
 
 class Routes():
-    def __init__(self, fab_uuid=None):
+    def __init__(self, fab_uuid=None, routes=None):
         self.fab_uuid = fab_uuid
         self.fr_to = {}  # key: (fr:Component, to:Component)
         self.ifaces = {} # key: Interface
+        if routes is not None:
+            for rt in routes:
+                self.add(rt.fr, rt.to, route=rt)
 
     def get_routes(self, fr: Component, to: Component) -> List[Route]:
         return self.fr_to[(fr, to)]
@@ -349,7 +352,7 @@ class Routes():
         to_iface = to.interfaces[to_iface_num]
         return (fr_iface, to_iface)
 
-    def parse_route(self, route_list: list, fab):
+    def parse_route(self, route_list: list, fab) -> Route:
         path = []
         elems = []
         ingress_iface = None
@@ -366,16 +369,17 @@ class Routes():
         rt = Route(path, elems)
         return rt
 
-    def parse(self, routes_dict: dict, fab):
+    def parse(self, routes_dict: dict, fab, fab_rts=None):
         ret_dict = {}
         for k in routes_dict.keys():
             fr, to = self.parse_fr_to(k, fab)
-            rts = Routes(fab.fab_uuid)
+            rts = Routes(fab.fab_uuid) if fab_rts is None else fab_rts
             for rtl in routes_dict[k]:
                 rt = self.parse_route(rtl, fab)
                 rts.add(fr, to, rt)
             # end for rtl
-            ret_dict[(fr, to)] = rts
+            if fab_rts is None:
+                ret_dict[(fr, to)] = rts
         # end for k
         return ret_dict
 

@@ -31,6 +31,8 @@ from flask_fat import ConfigBuilder
 from uuid import UUID, uuid4
 from pathlib import Path
 from importlib import import_module
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from base64 import b64encode, b64decode
 from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
 import zephyr_conf
 from zephyr_conf import log, Conf
@@ -68,14 +70,15 @@ class FMServer(flask_fat.APIBaseline):
     def __init__(self, config, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.conf = config
-        self.callbacks = {} # key: bridge cuuid:serial
+        self.llamas_callbacks = {} # key: bridge cuuid:serial
+        self.sfm_callbacks = {} # key: bridge cuuid:serial
         self.init_socket()
 
     def get_endpoints(self, consumers, name):
         endpoints = []
         for con in consumers:
             try:
-                endpoints.append(self.callbacks[con][name])
+                endpoints.append(self.llamas_callbacks[con][name])
             except KeyError:
                 log.debug(f'consumer {con} has no subscribed {name} endpoint')
         # end for
@@ -117,6 +120,7 @@ def zeroconf_register(fab, mainapp):
         server=f'{mainapp.hostname}.local.'
     )
 
+    fab.mainapp = mainapp # Revisit: should this be here?
     mainapp.zeroconfInfo = info
     ip_version = (IPVersion.All if args.ip6 else
                   IPVersion.V6Only if args.ip6_only else IPVersion.V4Only)
@@ -177,7 +181,7 @@ def main():
     log.debug('args={}'.format(args_vars))
     nl = NetlinkManager(config='./zephyr-fm/alpaka.conf')
     map = genz.ControlStructureMap()
-    mgr_uuid = None # by default, generate new mgr_uuid every run
+    mgr_uuid = None # by default, PFM generates new mgr_uuid every run
     conf = Conf(args.conf)
     try:
         data = conf.read_conf_file()
@@ -188,19 +192,19 @@ def main():
         # create new skeleton file
         data = {}
         fab_uuid = uuid4()
+        key = AESGCM.generate_key(bit_length=256)
         data['fabric_uuid'] = str(fab_uuid)
         data['add_resources'] = []
         data['boundary_interfaces'] = []
         data['cid_range'] = []
         data['local_bridges'] = []
+        # Revisit: use pub/priv keys to establish a session key
+        data['aesgcm_key'] = b64encode(key).decode('ascii')
         conf.write_conf_file(data)
     log.debug('conf={}'.format(conf))
     fabrics = {}
     if args.keyboard > 3:
         set_trace()
-    if args.sfm: # Revisit
-        log.info('running as secondary fabric manager not yet supported')
-        return
     mainapp = FMServer(conf, 'zephyr', **args_vars)
     thread = Thread(target=mainapp.run, daemon=True)
     thread.start()
@@ -222,22 +226,30 @@ def main():
         conf.set_fab(fab)
         if args.keyboard > 1:
             set_trace()
-        fab.fab_init()
-        log.info('finished exploring fabric {}'.format(fab.fabnum))
+        if args.sfm:
+            fab.sfm_init()
+        else:
+            fab.fab_init()
+            log.info('finished exploring fabric {}'.format(fab.fabnum))
+    # end for fab_path
 
     if len(fabrics) == 0:
         log.info('no local Gen-Z bridges found')
         return
 
-    if args.keyboard > 3:
-        set_trace()
+    if not args.sfm:
+        if args.keyboard > 3:
+            set_trace()
 
-    conf.add_resources()
+        conf.add_resources()
 
     if args.keyboard > 3:
         set_trace()
 
     zeroconf = zeroconf_register(fab, mainapp)
+    if args.sfm:
+        log.info('running as secondary fabric manager')
+        mainapp.zeroconfBrowser = fab.zeroconf_browser(zeroconf)
 
     if args.keyboard > 3:
         set_trace()

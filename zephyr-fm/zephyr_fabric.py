@@ -26,15 +26,20 @@ import json
 from typing import List, Tuple, Iterator
 from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
 import random
+import posixpath
+import requests
 from pathlib import Path
 from pdb import set_trace
 import networkx as nx
 from uuid import UUID, uuid4
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from base64 import b64encode, b64decode
+from zeroconf import Zeroconf, ServiceInfo, ServiceBrowser
 import zephyr_conf
 from zephyr_conf import log, INVALID_GCID
 from zephyr_iface import Interface
 from zephyr_comp import (Component, LocalBridge, component_num, get_cuuid,
-                         get_cclass, get_gcid, get_serial)
+                         get_cclass, get_gcid, get_serial, get_mgr_uuid)
 from zephyr_route import RouteElement, Routes, Route
 from zephyr_res import Resources
 
@@ -72,7 +77,7 @@ class Fabric(nx.MultiGraph):
         self.path = path
         self.fabnum = component_num(path)
         self.fab_uuid = fab_uuid
-        self.mgr_uuid = uuid4() if mgr_uuid is None else mgr_uuid
+        self.mgr_uuid = uuid4() if mgr_uuid is None and not zephyr_conf.args.sfm else mgr_uuid
         self.random_cids = random_cids
         self.accept_cids = accept_cids
         self.conf = conf
@@ -86,8 +91,12 @@ class Fabric(nx.MultiGraph):
         self.nonce_list = [ 0 ]
         self.routes = Routes(fab_uuid=fab_uuid)
         self.resources = Resources(self)
+        self.aesgcm = AESGCM(b64decode(conf.data['aesgcm_key']))
         self.pfm = None
-        super().__init__(fab_uuid=self.fab_uuid, mgr_uuids=[self.mgr_uuid])
+        self.sfm = None
+        self.fms = {}
+        mgr_uuids = [] if self.mgr_uuid is None else [self.mgr_uuid]
+        super().__init__(fab_uuid=self.fab_uuid, mgr_uuids=mgr_uuids)
         log.info('fabric: {}, num={}, fab_uuid={}, mgr_uuid={}'.format(
             path, self.fabnum, self.fab_uuid, self.mgr_uuid))
 
@@ -129,6 +138,7 @@ class Fabric(nx.MultiGraph):
         self.nodes[comp]['fru_uuid'] = comp.fru_uuid
         self.nodes[comp]['max_data'] = comp.max_data
         self.nodes[comp]['max_iface'] = comp.max_iface
+        self.nodes[comp]['nonce'] = self.encrypt_nonce(comp.nonce)
         self.nodes[comp]['rsp_page_grid_ps'] = comp.rsp_page_grid_ps
         comp.update_cstate()
         self.nodes[comp]['cstate'] = str(comp.cstate) # Revisit: to_json() doesn't work
@@ -142,6 +152,18 @@ class Fabric(nx.MultiGraph):
             if not r in self.nonce_list:
                 self.nonce_list.append(r)
                 return r
+
+    def encrypt_nonce(self, comp_nonce: int) -> str:
+        data = comp_nonce.to_bytes(8, 'little')
+        ct_nonce = randgen.randbytes(12)
+        ct = self.aesgcm.encrypt(ct_nonce, data, None)
+        return b64encode(ct_nonce + ct).decode('ascii')
+
+    def decrypt_nonce(self, nonce_str: str) -> int:
+        nonce_plus_ct = b64decode(nonce_str)
+        ct_nonce = nonce_plus_ct[0:12]
+        ct = nonce_plus_ct[12:]
+        return int.from_bytes(self.aesgcm.decrypt(ct_nonce, ct, None), 'little')
 
     def br_paths(self):
         def br_paths_generator(br_paths, local_bridges):
@@ -203,9 +225,56 @@ class Fabric(nx.MultiGraph):
                 self.bridges.append(br)
         # end for br_path
 
+    def sfm_init(self):
+        for br_path in self.br_paths():
+            cuuid_serial = self.get_cuuid_serial(br_path)
+            cur_gcid = get_gcid(br_path)
+            brnum = component_num(br_path)
+            cclass = int(get_cclass(br_path))
+            if self.sfm is None: # this bridge will be our SFM component
+                self.mgr_uuid = get_mgr_uuid(br_path)
+                gcid = cur_gcid
+                tmp_gcid = cur_gcid if cur_gcid.sid == TEMP_SUBNET else INVALID_GCID
+                # temporary component until we get the PFM-assigned uuid
+                br = LocalBridge(cclass, self, self.map, br_path, self.mgr_uuid,
+                                 local_br=True, brnum=brnum, dr=None,
+                                 tmp_gcid=tmp_gcid, netlink=self.nl,
+                                 gcid=gcid, verbosity=self.verbosity)
+                gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size(haveCore=False)[0],
+                                        proposed_gcid=cur_gcid)
+                self.set_sfm(br)
+                log.info('{}:{} bridge{} {}'.format(self.fabnum, gcid, brnum, cuuid_serial))
+                usable = br.comp_init(None) # None: not PFM
+                if usable:
+                    self.bridges.append(br)
+                    log.debug(f'bridges: {self.bridges}')
+                else:
+                    self.set_sfm(None)
+                    log.warning(f'{self.fabnum}:{gcid} bridge{brnum} is not usable')
+            else: # not first bridge (self.sfm is not None)
+                gcid = cur_gcid
+                try:
+                    br = self.cuuid_serial[cuuid_serial]
+                except KeyError:
+                    log.warning('{}:{} bridge{} {} not connected to fabric'.
+                                format(self.fabnum, gcid, brnum, cuuid_serial))
+                    continue
+                # Revisit: check C-Up and mgr_uuid?
+                log.info('{}:{} bridge{} {} alternate bridge to fabric{0}'.format(self.fabnum, gcid, brnum, cuuid_serial))
+                self.bridges.append(br)
+        # end for br_path
+
+    def zeroconf_browser(self, zeroconf):
+        services = ['_genz-fm._tcp.local.']
+        return ServiceBrowser(zeroconf, services, self)
+
     def set_pfm(self, pfm):
         self.pfm = pfm
         self.graph['pfm'] = pfm
+
+    def set_sfm(self, sfm):
+        self.sfm = sfm
+        self.graph['sfm'] = sfm
 
     def all_shortest_paths(self, fr: Component, to: Component,
                            cutoff_factor: float = 3.0,
@@ -515,3 +584,276 @@ class Fabric(nx.MultiGraph):
         # end for key
         # Revisit: return correct success/failed dict
         return { 'success': [] }
+
+    def enable_sfm(self, sfm: Component):
+        for comp in self.components.values():
+            comp.enable_sfm(sfm)
+        self.set_sfm(sfm)
+
+    # zeroconf ServiceBrowser service handlers
+    def add_service(self, zeroconf: Zeroconf, type: str, name: str) -> None:
+        log.debug(f'Service {name} of type {type} Added')
+        info = zeroconf.get_service_info(type, name)
+        log.debug(f'Info from zeroconf.get_service_info: {info}')
+        if name in self.fms:
+            log.error(f'duplicate FM name {name}')
+            return
+        fm = FM(info)
+        self.fms[name] = fm
+        if fm.fab_uuid != self.fab_uuid:
+            log.info(f'ignoring FM {name} due to fab_uuid mismatch {fm.fab_uuid} != {self.fab_uuid}')
+            return
+        if fm.mgr_uuid != self.mgr_uuid:
+            log.info(f'ignoring FM {name} due to mgr_uuid mismatch {fm.mgr_uuid} != {self.mgr_uuid}')
+            return
+        if not fm.pfm:
+            log.info(f'ignoring non-PFM {name}')
+            return
+        self.subscribe_sfm(fm)
+        topo, pfm, sfm, mgr_uuids = self.get_fm_topo(fm)
+        self.add_mgr_uuids(mgr_uuids)
+        self.add_comps_from_topo(topo, pfm, sfm)
+        self.add_links_from_topo(topo)
+        self.get_fm_routes(fm)
+        self.get_fm_resources(fm)
+
+    def remove_service(self, zeroconf: Zeroconf, type: str, name: str) -> None:
+        log.debug(f'Service {name} of type {type} Removed')
+        info = zeroconf.get_service_info(type, name)
+        log.debug(f'Info from zeroconf.get_service_info: {info}')
+        set_trace() # Revisit
+        try:
+            fm = self.fms[name]
+        except KeyError:
+            log.error(f'attempt to remove unknown FM {name}')
+            return
+        del self.fms[name]
+        # Revisit: finish this
+
+    def update_service(self, zeroconf: Zeroconf, type: str, name: str) -> None:
+        log.debug(f'Service {name} of type {type} Updated')
+        info = zeroconf.get_service_info(type, name)
+        log.debug(f'Info from zeroconf.get_service_info: {info}')
+        unknown = False
+        set_trace() # Revisit
+        try:
+            fm = self.fms[name]
+        except KeyError:
+            log.warning(f'attempt to update unknown FM {name}')
+            unknown = True
+            fm = FM(info) # treat as if this was an 'add'
+        # Revisit: finish this
+
+    def endpoints_url(self, fm: 'FM', fm_endpoint=None):
+        cfg = self.mainapp.config
+        port = self.mainapp.port
+        eps = cfg['ENDPOINTS']
+        mainapp_eps = self.mainapp.kwargs.get('endpoints', None)
+        if mainapp_eps is not None:
+            eps = mainapp_eps
+        if fm_endpoint is None:
+            fm_endpoint = self.mainapp.config.get('SFM_SUBSCRIBE', 'subscribe/sfm')
+        # Revisit: multiple FM addresses
+        url = (f'http://{fm.addresses[0]}:{fm.port}/{fm_endpoint}' if fm is not None
+               else None)
+
+        this_hostname = self.mainapp.config.get('THIS_HOSTNAME', None)
+        if this_hostname is None:
+            this_hostname = f'http://{self.mainapp.hostname}:{port}'
+
+        # Revisit: llamas has these - needed?
+        #if not utils.is_port_in_url(this_hostname):
+        #    this_hostname = f'{this_hostname}:{port}'
+        #if utils.is_valid_url(this_hostname) is False:
+        #    raise RuntimeError('Invalid THIS_HOSTNAME url in config: %s ' % this_hostname)
+
+        endpoints = {}
+        for k, v in eps.items():
+            endpoints[k] = posixpath.join(this_hostname, v)
+
+        return (url, endpoints)
+
+    def subscribe_sfm(self, pfm: 'FM'):
+        if pfm.is_subscribed: # already subscribed
+            return
+
+        bridges = [br.cuuid_serial for br in self.bridges]
+
+        url, callback_endpoints = self.endpoints_url(pfm)
+        data = {
+            'callbacks' : callback_endpoints,
+            'alias'     : None,
+            'bridges'   : bridges
+        }
+
+        log.debug(f'subscribe_sfm: url={url}, data={data}') # Revisit: temp debug
+        try:
+            resp = requests.post(url, json=data)
+        except Exception as err:
+            resp = None
+            log.debug(f'subscribe_sfm(): {err}')
+
+        is_success = resp is not None and resp.status_code < 300
+
+        if is_success:
+            pfm.is_subscribed = True
+            log.info(f'--- Subscribed to {url}, callbacks at {callback_endpoints}')
+        else:
+            log.error('---- Failed to subscribe to redfish event! {} {} ---- '.format(url, callback_endpoints))
+            if resp is not None:
+                # Revisit: log the actual status message from the response
+                log.error(f'subscription error reason [{resp.status_code}]: {resp.reason}')
+
+    def get_fm_topo(self, fm: 'FM'):
+        url, _ = self.endpoints_url(fm, fm_endpoint='fabric/topology')
+        r = requests.get(url=url) # Revisit: timeout
+        data = r.json()
+        pfm = data['graph'].get('pfm', None)
+        sfm = data['graph'].get('sfm', None)
+        mgr_uuids = data['graph'].get('mgr_uuids', [])
+        # Revisit: check that pfm matches fm and sfm matches self.sfm
+        topo = nx.node_link_graph(data)
+        return (topo, pfm, sfm, mgr_uuids)
+
+    def add_comps_from_topo(self, topo, pfm, sfm):
+        for node in topo.nodes(data=True):
+            cuuid_serial = node[0]
+            attrs = node[1]
+            nonce = self.decrypt_nonce(attrs['nonce'])
+            update_sfm = False
+            if cuuid_serial == self.sfm.cuuid_serial:
+                log.debug(f'updating component for SFM local bridge {cuuid_serial}')
+                del self.components[self.sfm.uuid]
+                del self.cuuid_serial[cuuid_serial]
+                del self.comp_gcids[self.sfm.gcid]
+                brnum = self.sfm.brnum
+                self.remove_node(self.sfm)
+                update_sfm = True
+            if cuuid_serial in self.cuuid_serial:
+                log.debug(f'skipping known component {cuuid_serial}')
+                continue
+            cclass = attrs['cclass']
+            gcid = GCID(str=attrs['gcids'][0])
+            path = self.make_path(gcid)
+            uuid = UUID(attrs['instance_uuid'])
+            name = attrs.get('name', None)
+            ps = int(attrs['rsp_page_grid_ps'])
+            if update_sfm:
+                # Replace temp LocalBridge from sfm_init() with one having
+                # the correct instance_uuid from PFM
+                comp = LocalBridge(cclass, self, self.map, path,
+                                   self.mgr_uuid, netlink=self.nl, nonce=nonce,
+                                   local_br=True, brnum=brnum,
+                                   gcid=gcid, uuid=uuid,
+                                   verbosity=self.verbosity)
+                self.nodes[comp]['gcids'] = [ comp.gcid ]
+                self.bridges[brnum] = comp
+                self.set_sfm(comp)
+            else:
+                comp = Component(cclass, self, self.map, path,
+                                 self.mgr_uuid, netlink=self.nl, nonce=nonce,
+                                 gcid=gcid, uuid=uuid, br_gcid=self.sfm.gcid,
+                                 verbosity=self.verbosity)
+                gcid = self.assign_gcid(comp, proposed_gcid=gcid)
+                comp.add_fab_comp(setup=True)
+            # Revisit: instead, call rsp_page_grid_init(readOnly=True)
+            comp.rsp_page_grid_ps = ps
+            comp.comp_init(None) # None: not PFM
+            if cuuid_serial == pfm:
+                self.set_pfm(comp)
+            if name is not None:
+                self.set_comp_name(comp, name)
+        # end for node
+        log.debug('finished adding components from PFM topology')
+
+    def add_links_from_topo(self, topo):
+        for edge in topo.edges(data=True):
+            fr = self.cuuid_serial[edge[0]] # Revisit: unused
+            to = self.cuuid_serial[edge[1]] # Revisit: unused
+            attrs = edge[2]
+            items = [x for x in attrs.items()]
+            fr_uuid = UUID(items[0][0])
+            to_uuid = UUID(items[1][0])
+            fr_iface = self.components[fr_uuid].lookup_iface(items[0][1]['num'])
+            to_iface = self.components[to_uuid].lookup_iface(items[1][1]['num'])
+            fr_iface.iface_state()
+            to_iface.iface_state()
+            self.add_link(fr_iface, to_iface)
+        # end for
+
+    def add_mgr_uuids(self, mgr_uuids):
+        for m in mgr_uuids:
+            mgr_uuid = UUID(m)
+            self.graph['mgr_uuids'].append(mgr_uuid)
+
+    def get_fm_routes(self, fm: 'FM'):
+        url, _ = self.endpoints_url(fm, fm_endpoint='fabric/routes')
+        r = requests.get(url=url) # Revisit: timeout
+        data = r.json()
+        fab_uuid = data.get('fab_uuid', None)
+        if fab_uuid is not None:
+            fab_uuid = UUID(fab_uuid)
+        if fab_uuid is None or fab_uuid != self.fab_uuid:
+            log.warning(f'get_fm_routes: wrong FM fab_uuid {fab_uuid}')
+            return None
+        route_data = data.get('routes', None)
+        self.routes.parse(route_data, self, fab_rts=self.routes)
+        return self.routes
+
+    def get_fm_resources(self, fm: 'FM') -> None:
+        url, _ = self.endpoints_url(fm, fm_endpoint='fabric/resources')
+        r = requests.get(url=url) # Revisit: timeout
+        data = r.json()
+        fab_uuid = data.get('fab_uuid', None)
+        if fab_uuid is not None:
+            fab_uuid = UUID(fab_uuid)
+        if fab_uuid is None or fab_uuid != self.fab_uuid:
+            log.warning(f'get_fm_resources: wrong FM fab_uuid {fab_uuid}')
+            return None
+        res_data = data.get('fab_resources', None)
+        self.conf.fab_resources(res_data)
+
+    def send_sfm(self, callback: str, item: str, js, op=None):
+        if self.sfm is None: # no SFM
+            return
+        url = self.mainapp.sfm_callbacks[self.sfm.cuuid_serial][callback]
+        data = {
+            'fabric_uuid': str(self.fab_uuid),
+            'mgr_uuid'   : str(self.mgr_uuid),
+            f'{item}'    : js,
+        }
+        if op is not None:
+            data['operation'] = op
+        log.debug(f'send_sfm: url={url}, data={data}') # Revisit: temp debug
+        set_trace() # Revisit: temp debug
+        try:
+            resp = requests.post(url, json=data)
+        except Exception as err:
+            resp = None
+            log.debug(f'send_sfm(): {err}')
+
+        is_success = resp is not None and resp.status_code < 300
+        # Revisit: finish this
+
+
+class FM():
+    def __init__(self, info: ServiceInfo):
+        self.is_subscribed = False
+        self.info = info
+        self.addresses = info.parsed_scoped_addresses()
+        if info.properties:
+            self.fab_uuid = UUID(bytes=info.properties[b'fab_uuid'])
+            self.mgr_uuid = UUID(bytes=info.properties[b'mgr_uuid'])
+            self.pfm = bool(int(info.properties[b'pfm']))
+        self.bridges = []
+
+    @property
+    def port(self):
+        return self.info.port
+
+    @property
+    def name(self):
+        return self.info.name
+
+    def __hash__(self): # Revisit: do we need this?
+        return hash(self.name)

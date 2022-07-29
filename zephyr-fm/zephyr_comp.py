@@ -67,6 +67,11 @@ def get_fru_uuid(comp_path):
     with fru_uuid.open(mode='r') as f:
         return UUID(f.read().rstrip())
 
+def get_mgr_uuid(comp_path):
+    mgr_uuid = comp_path / 'mgr_uuid'
+    with mgr_uuid.open(mode='r') as f:
+        return UUID(f.read().rstrip())
+
 def get_serial(comp_path):
     serial = comp_path / 'serial'
     with serial.open(mode='r') as f:
@@ -92,7 +97,7 @@ class Component():
 
     def __init__(self, cclass, fab, map, path, mgr_uuid, verbosity=0, gcid=None,
                  local_br=False, dr=None, tmp_gcid=None, br_gcid=None,
-                 netlink=None, uuid=None):
+                 netlink=None, uuid=None, nonce=None):
         self.cclass = cclass
         self.fab = fab
         self.map = map
@@ -108,7 +113,7 @@ class Component():
         self.nl = netlink
         self.interfaces = []
         self.uuid = uuid4() if uuid is None else uuid
-        self.nonce = fab.generate_nonce()
+        self.nonce = fab.generate_nonce() if nonce is None else nonce
         self.cuuid = None
         self.serial = None
         self.cuuid_serial = None
@@ -326,6 +331,11 @@ class Component():
         self.rsp_pg_table_dir = None
         self.rsp_pte_table_dir = None
 
+    def check_usable(self, prefix='control'):
+        self.update_cstate(prefix=prefix)
+        return (self.cstate == CState.CUp or self.cstate == CState.CLP or
+                self.cstate == CState.CDLP)
+
     # Returns True if component is usable - is C-Up/C-LP/C-DLP, not C-Down
     def comp_init(self, pfm, prefix='control', ingress_iface=None, route=None):
         args = zephyr_conf.args
@@ -384,7 +394,7 @@ class Component():
                 except IndexError:
                     pass
             # end for
-            if self.cstate is CState.CCFG:
+            if pfm and self.cstate is CState.CCFG:
                 # set CV/CID0/SID0 - first Gen-Z control write if !local_br
                 # Revisit: support subnets and multiple CIDs
                 core.CID0 = self.gcid.cid
@@ -401,70 +411,72 @@ class Component():
                                            byteorder='little')
                 self.control_write(core, genz.CoreStructure.MGRUUIDl, sz=16)
             # setup SSDT and RIT entries for route back to FM
-            if ingress_iface is not None:
+            if pfm and ingress_iface is not None:
                 self.ssdt_size(prefix=prefix)
                 # use route elem to correctly set SSDT HC & MHC
                 elem = route[0][0]
                 elem.set_ssdt(pfm, update_rt_num=True)
                 self.rit_write(ingress_iface, 1 << ingress_iface.num)
-            # initialize RSP-VCAT
-            # Revisit: multiple Action columns
-            for vc in range(0, self.rsp_vcat_size(prefix=prefix)[0]):
-                # Revisit: vc policies
-                self.rsp_vcat_write(vc, 0x1)
-            # set LLReqDeadline, NLLReqDeadline
-            # Revisit: only for requesters
-            # set DeadlineTick
-            # Revisit: compute values depending on topology, as described
-            # in Core spec section 15.2, Deadline Semantics
-            # Revisit: if no Component Peer Attr struct, LL/NLL must be same
-            core.LLReqDeadline = 586
-            core.NLLReqDeadline = 976
-            if self.cstate is not CState.CUp:
-                # DeadlineTick can only be modified in non-C-Up
-                # Revisit: current HW only directly supports power-of-2 values
-                core.DeadlineTick = 1024  # 1.024us
-            self.control_write(core, genz.CoreStructure.LLReqDeadline, sz=4)
-            # set DRReqDeadline
-            # Revisit: compute values depending on topology
-            core.DRReqDeadline = 1023
-            self.control_write(core, genz.CoreStructure.SID0, sz=4)
-            # set LLRspDeadline, NLLRspDeadline, RspDeadline
-            # Revisit: compute values depending on topology, as described
-            # in Core spec section 15.2, Deadline Semantics
-            # Revisit: only for responders
-            # Revisit: if no Component Peer Attr struct, LL/NLL must be same
-            core.LLRspDeadline = 587
-            core.NLLRspDeadline = 977
-            core.RspDeadline = 782 # responder packet execution time
-            self.control_write(core, genz.CoreStructure.LLRspDeadline, sz=4)
-            # almost done with DR - read back the first thing we wrote
-            # (CV/CID0), and if it's still set correctly assume that CCTO
-            # did not expire; also check that it's not all-ones
-            try:
-                self.control_read(core, genz.CoreStructure.CV,
-                                  sz=8, check=True)
-            except ValueError:
-                log.warning(f'{self}: CV/CID0 returned all-ones data')
-                self.usable = False
-                return False
-            # Revisit: retry if CCTO expired?
-            if core.CV == 0 and core.CID0 == 0:
-                log.warning(f'{self}: CV/CID0 is 0 - CCTO expired')
-                self.usable = False
-                return False
-            # we have set up just enough for "normal" responses to work -
-            # tell the kernel about the new/changed component and stop DR
-            try:
-                if self.cstate is CState.CCFG:
-                    self.add_fab_comp()
-                    self.tmp_gcid = None
-                    self.dr = None
-                    prefix = 'control'
-            except Exception as e:
-                log.error('add_fab_comp failed with exception {}'.format(e))
-                self.usable = False
-                return self.usable
+            if pfm:
+                # initialize RSP-VCAT
+                # Revisit: multiple Action columns
+                for vc in range(0, self.rsp_vcat_size(prefix=prefix)[0]):
+                    # Revisit: vc policies
+                    self.rsp_vcat_write(vc, 0x1)
+                # set LLReqDeadline, NLLReqDeadline
+                # Revisit: only for requesters
+                # set DeadlineTick
+                # Revisit: compute values depending on topology, as described
+                # in Core spec section 15.2, Deadline Semantics
+                # Revisit: if no Component Peer Attr struct, LL/NLL must be same
+                core.LLReqDeadline = 586
+                core.NLLReqDeadline = 976
+                if self.cstate is not CState.CUp:
+                    # DeadlineTick can only be modified in non-C-Up
+                    # Revisit: current HW only directly supports power-of-2 values
+                    core.DeadlineTick = 1024  # 1.024us
+                self.control_write(core, genz.CoreStructure.LLReqDeadline, sz=4)
+                # set DRReqDeadline
+                # Revisit: compute values depending on topology
+                core.DRReqDeadline = 1023
+                self.control_write(core, genz.CoreStructure.SID0, sz=4)
+                # set LLRspDeadline, NLLRspDeadline, RspDeadline
+                # Revisit: compute values depending on topology, as described
+                # in Core spec section 15.2, Deadline Semantics
+                # Revisit: only for responders
+                # Revisit: if no Component Peer Attr struct, LL/NLL must be same
+                core.LLRspDeadline = 587
+                core.NLLRspDeadline = 977
+                core.RspDeadline = 782 # responder packet execution time
+                self.control_write(core, genz.CoreStructure.LLRspDeadline, sz=4)
+                # almost done with DR - read back the first thing we wrote
+                # (CV/CID0), and if it's still set correctly assume that CCTO
+                # did not expire; also check that it's not all-ones
+                try:
+                    self.control_read(core, genz.CoreStructure.CV,
+                                      sz=8, check=True)
+                except ValueError:
+                    log.warning(f'{self}: CV/CID0 returned all-ones data')
+                    self.usable = False
+                    return False
+                # Revisit: retry if CCTO expired?
+                if core.CV == 0 and core.CID0 == 0:
+                    log.warning(f'{self}: CV/CID0 is 0 - CCTO expired')
+                    self.usable = False
+                    return False
+                # we have set up just enough for "normal" responses to work -
+                # tell the kernel about the new/changed component and stop DR
+                try:
+                    if self.cstate is CState.CCFG:
+                        self.add_fab_comp()
+                        self.tmp_gcid = None
+                        self.dr = None
+                        prefix = 'control'
+                except Exception as e:
+                    log.error('add_fab_comp failed with exception {}'.format(e))
+                    self.usable = False
+                    return self.usable
+            # end if pfm
         # end with
         cuuid = get_cuuid(self.path)
         serial = get_serial(self.path)
@@ -473,6 +485,8 @@ class Component():
         self.cuuid_serial = str(cuuid) + ':' + serial
         self.fru_uuid = get_fru_uuid(self.path)
         self.fab.add_comp(self)
+        if not pfm:
+            return self.check_usable()
         # re-open core file at (potential) new location set by add_fab_comp()
         core_file = self.path / prefix / 'core@0x0/core'
         with core_file.open(mode='rb+') as f:
@@ -1486,6 +1500,42 @@ class Component():
             iface.peer_c_reset()
             iface.update_peer_info()
         return iface.peer_cstate
+
+    def enable_sfm(self, sfm, prefix='control'):
+        '''Enable @sfm as Secondary Fabric Manager of this component and
+        setup bidirectional routing.
+        '''
+        core_file = self.path / prefix / 'core@0x0/core'
+        with core_file.open(mode='rb+') as f:
+            genz = zephyr_conf.genz
+            core = self.core
+            core.set_fd(f)
+            # set SFMSID/SFMCID
+            # Revisit: subnets
+            core.SFMCID = sfm.gcid.cid
+            self.control_write(core, genz.CoreStructure.SFMCID, sz=4, off=4)
+            # set SFMCIDValid
+            cap2ctl = genz.CAP2Control(core.CAP2Control, core)
+            cap2ctl.field.SFMCIDValid = 1
+            core.CAP2Control = cap2ctl.val
+            self.control_write(core, genz.CoreStructure.CAP2Control, sz=8)
+            # set SecondaryFabMgrRole, HostMgrMGRUUIDEnb (only on SFM component)
+            if self is sfm:
+                cap1ctl = genz.CAP1Control(core.CAP1Control, core)
+                cap1ctl.SecondaryFabMgrRole = 1
+                cap1ctl.HostMgrMGRUUIDEnb = HostMgrUUID.Core
+                core.CAP1Control = cap1ctl.val
+                self.control_write(core, genz.CoreStructure.CAP1Control, sz=8)
+        # end with
+        routes = self.fab.setup_bidirectional_routing(sfm, self)
+        return routes # Revisit
+
+    def lookup_iface(self, iface_str: str) -> Interface:
+        gcid_str, iface_num_str = iface_str.split('.')
+        gcid = GCID(str=gcid_str)
+        # Revisit: compare gcid to self.gcid
+        iface_num = int(iface_num_str)
+        return self.interfaces[iface_num]
 
     def __repr__(self):
         return '{}({})'.format(self.__class__.__name__, self.gcid)

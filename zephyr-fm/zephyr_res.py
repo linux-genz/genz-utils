@@ -54,7 +54,8 @@ class Resource():
 
 
 class ResourceList():
-    def __init__(self, fab, resources: List[Resource], res_dict: dict):
+    def __init__(self, fab, resources: List[Resource], res_dict: dict,
+                 readOnly=False):
         self.fab = fab
         self.consumers = set()     # set of Components
         self.resources = resources # list of Resources
@@ -78,13 +79,13 @@ class ResourceList():
         self.res_dict['fru_uuid']  = str(self.producer.fru_uuid)
         self.res_dict['mgr_uuid']  = str(self.producer.mgr_uuid)
         self.res_dict['resources'] = [ res.to_json() for res in self.resources ]
-        self.add_consumers(res_dict['consumers'])
+        self.add_consumers(res_dict['consumers'], readOnly=readOnly)
 
     def append(self, res):
         self.resources.append(res)
         self.res_dict['resources'].append(res.to_json())
 
-    def add_consumers(self, consumers):
+    def add_consumers(self, consumers, readOnly=False):
         for cons in consumers:
             try:
                 cons_comp = self.fab.cuuid_serial[cons]
@@ -95,8 +96,9 @@ class ResourceList():
             if cons_comp not in self.consumers:
                 self.res_dict['consumers'].append(cons_comp.cuuid_serial)
                 self.consumers.add(cons_comp)
-                routes = self.fab.setup_bidirectional_routing(
-                    cons_comp, self.producer)
+                if not readOnly:
+                    routes = self.fab.setup_bidirectional_routing(
+                        cons_comp, self.producer)
                 # Revisit: save routes for later teardown requests?
         # end for cons
 
