@@ -2702,7 +2702,7 @@ class InterfaceTemplate(ControlStructure):
             if peer_gcid:
                 r += f' Peer {peer_gcid}.{peer_iface} ({cstate})'
             elif istatus.IState != IState.IDown:
-                r += f' Peer GCID invalid ({cstate})'
+                r += f' Peer GCID Not Set ({cstate})'
         return r
 
 # factory class to dynamically build InterfaceStructure
