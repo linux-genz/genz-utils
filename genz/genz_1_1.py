@@ -33,6 +33,9 @@ cols, lines = shutil.get_terminal_size()
 reqPgPteUUID = UUID(hex='d2b57c49a98c42e68118f75aadbeb69c')
 rspPgPteUUID = UUID(hex='acb0e6c1053d4afcb29de003bc234e13')
 
+MaxPktPayload = 256
+MaxMsgSize = (1 << 11) * MaxPktPayload  # 512KiB
+
 # Revisit: this should be auto-generated from the v1.1.xml file
 
 cclass_name = [ 'reserved',    'memory_p2p64', 'memory',      'int_switch',
@@ -1699,8 +1702,8 @@ class ControlOpcodes(Opcodes):
               'Read'                                : 0x1b,
               'CtlCTXIDNIRRelease'                  : 0x1c,
               'CtlNIRRelease'                       : 0x1d,
-              'UnreliableCtlWriteMSG'               : 0x1e,
-              'CtlWriteMSG'                         : 0x1f,
+              'UnrelWriteMSG'                       : 0x1e,
+              'WriteMSG'                            : 0x1f,
     }
 
     _inverted_map = {v : k for k, v in _map.items()}
@@ -1781,15 +1784,15 @@ class Adv2Opcodes(Opcodes):
 class MulticastOpcodes(Opcodes):
     _map = {  'VendorDefinedResponse1'              : 0x02,
               'VendorDefinedResponse2'              : 0x03,
-              'UnreliableEncapRequest'              : 0x04,
+              'UnrelEncapRequest'                   : 0x04,
               'Write'                               : 0x05,
               'ReliableEncapRequest'                : 0x06,
-              'UnreliableWrite'                     : 0x08,
+              'UnrelWrite'                          : 0x08,
               'VendorDefined1'                      : 0x1a,
               'VendorDefined2'                      : 0x1b,
               'VendorDefined3'                      : 0x1c,
               'VendorDefined4'                      : 0x1d,
-              'UnreliableWriteMSG'                  : 0x1e,
+              'UnrelWriteMSG'                       : 0x1e,
               'WriteMSG'                            : 0x1f,
               }
 
@@ -1797,24 +1800,25 @@ class MulticastOpcodes(Opcodes):
     _list = sorted(_map.items(), key=lambda x: x[1])
 
 class SODOpcodes(Opcodes):
-    _map = {  'SODACK'                              : 0x00,
-              'SODReadResponse'                     : 0x01,
-              'SODEncapResponse'                    : 0x02,
-              'SODWrite'                            : 0x04,
-              'SODSync'                             : 0x05,
-              'SODWritePersistent'                  : 0x06,
-              'SODInterrupt'                        : 0x08,
-              'SODEnqueue'                          : 0x09,
-              'SODDequeue'                          : 0x0a,
-              'SODNIRR'                             : 0x0b,
-              'SODRead'                             : 0x1b,
-              'SODEncapRequest'                     : 0x1c,
+    _map = {  'ACK'                                 : 0x00,
+              'ReadResponse'                        : 0x01,
+              'EncapResponse'                       : 0x02,
+              'Write'                               : 0x04,
+              'Sync'                                : 0x05,
+              'WritePersistent'                     : 0x06,
+              'Interrupt'                           : 0x08,
+              'Enqueue'                             : 0x09,
+              'Dequeue'                             : 0x0a,
+              'NIRR'                                : 0x0b,
+              'Read'                                : 0x1b,
+              'EncapRequest'                        : 0x1c,
+              'WriteMSG'                            : 0x1f,
               }
 
     _inverted_map = {v : k for k, v in _map.items()}
     _list = sorted(_map.items(), key=lambda x: x[1])
 
-class CTXIDOpcodes(Opcodes):
+class CtxIdOpcodes(Opcodes):
     _map = {  'TranslationRsp'                      : 0x01,
               'TranslationInvalidateRsp'            : 0x02,
               'CollectiveRsp'                       : 0x03,
@@ -1829,7 +1833,7 @@ class CTXIDOpcodes(Opcodes):
               'Enqueue'                             : 0x0c,
               'Dequeue'                             : 0x0d,
               'CTXIDNIRRelease'                     : 0x1d,
-              'UnreliableWriteMSG'                  : 0x1e,
+              'UnrelWriteMSG'                       : 0x1e,
               'WriteMSG'                            : 0x1f,
               }
 
@@ -1841,7 +1845,7 @@ class DROpcodes(Opcodes):
               'ReadResponse'                        : 0x01,
               'Write'                               : 0x04,
               'Read'                                : 0x1b,
-              'UnreliableCtlWriteMSG'               : 0x1e,
+              'UnrelWriteMSG'                       : 0x1e,
     }
 
     _inverted_map = {v : k for k, v in _map.items()}
@@ -3850,6 +3854,12 @@ class Packet(LittleEndianStructure):
                 return self.uuid(uuid_tuple)
         return None
 
+    def multicast(self):
+        return False
+
+    def reliable(self):
+        return True
+
 class ExplicitHdr(Packet):
     ecrc = crcmod.mkCrcFun(0xade27a<<1|1, initCrc=0, xorOut=0xffffff, rev=True)
 
@@ -4697,3 +4707,351 @@ class ControlUnsolicitedEventPkt(ExplicitHdr):
 
 class ControlStandaloneAckPkt(Core64StandaloneAckPkt):
     pass
+
+class WriteMsgMixin():
+    '''Mix-in defining additional methods for multi-pkt messages
+    '''
+    isWriteMSG = True
+
+    @property
+    def payload_len(self):
+        return self.pay_len * 4 - self.PadCNT
+
+    def single(self):  # msg is single-pkt
+        return self.MSGSZ == 1
+
+    def msgsz_woff(self):
+        msgsz = MaxMsgSize if self.MSGSZ == 0 else (self.MSGSZ * MaxPktPayload)
+        woff = self.WOFF * MaxPktPayload
+        return (msgsz, woff) # msgsz & woff in bytes
+
+    def last(self, msgsz=None, woff=None):  # pkt is the last one in the msg
+        if msgsz is None or woff is None:
+            msgsz, woff = self.msgsz_woff()
+        # msgsz & woff in bytes (not MaxPktPayload units)
+        return (woff + MaxPktPayload) == msgsz
+
+    def msg_len(self):
+        msgsz, woff = self.msgsz_woff()
+        last = self.last(msgsz, woff)
+        # only the last (or only) pkt has actual msg len; others only have a
+        # pessimistic max based on msgsz
+        return (woff + self.payload_len) if last else msgsz
+
+
+class CtxIdWriteMSGPkt(ExplicitHdr, WriteMsgMixin):
+    os1_fields = [('RT',                         c_u32,  1),
+                  ('MSGSZ',                      c_u32, 11)]
+    os2_fields = [('RSPCTXID',                   c_u32, 24), # Byte 12
+                  ('REQCTXIDl',                  c_u32,  8),
+                  ('REQCTXIDh',                  c_u32, 16), # Byte 16
+                  ('WOFF',                       c_u32, 11),
+                  ('CH',                         c_u32,  1),
+                  ('NS',                         c_u32,  1),
+                  ('ER',                         c_u32,  1),
+                  ('PadCNT',                     c_u32,  2),
+                  ('MSGID',                      c_u32, 32)] # Byte 20
+    os2b_fields = [('RCVTag0',                   c_u32, 32), # Byte 24
+                  ('RCVTag1',                    c_u32, 32),
+                  ('RCVTag2',                    c_u32, 32)]
+    # Revisit: EV & AV bits
+    os3_fields = [('R0',                         c_u32,  5), # Byte YY
+                  ('CA',                         c_u32,  1),
+                  ('FPS',                        c_u32,  2),
+                  ('ECRC',                       c_u32, 24)]
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        fields = ExplicitHdr.hd_fields + CtxIdWriteMSGPkt.os1_fields
+        hdr_len = 7 # Revisit: constant 7
+        if exp_pkt.NH:
+            hdr_len += 4
+        if exp_pkt.GC:
+            fields.extend(ExplicitHdr.ms_fields)
+            hdr_len += 1
+        fields.extend(CtxIdWriteMSGPkt.os2_fields)
+        if exp_pkt.LP: # Revisit: hack - LP is same bit pos as RT
+            fields.extend(CtxIdWriteMSGPkt.os2b_fields)
+            hdr_len += 3
+        pay_len = exp_pkt.LEN - hdr_len
+        fields.append(('Payload', c_u32 * pay_len))
+        if exp_pkt.NH:
+            fields.extend(ExplicitHdr.nh_fields)
+        fields.extend(CtxIdWriteMSGPkt.os3_fields)
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pktClass = globals()[className + 'Pkt']
+        pkt_type = type(className, (pktClass,),
+                        {'_fields_': fields,
+                         'data': exp_pkt.data,
+                         'verbosity': exp_pkt.verbosity,
+                         'pay_len': pay_len})
+        pkt = pkt_type.from_buffer(exp_pkt.data)
+        return pkt
+
+    @property
+    def REQCTXID(self):
+        return self.REQCTXIDh << 8 | self.REQCTXIDl
+
+    @property
+    def RCVTag(self):
+        return self.RCVTag2 << 64 | self.RCVTag1 << 32 | self.RCVTag0
+
+    def __str__(self):
+        r = super().__str__()
+        # Revisit: fix csv columns
+        r += (',,,,{}' if self.csv else ', PadCNT: {:3d}').format(self.PadCNT)
+        r += (',,,{},{},{},{},{},{}' if self.csv else
+              ', RT: {}, MSGSZ: {:03x}, RSPCTXID: {:06x}, REQCTXID: {:06x}, WOFF: {:03x}, CH: {}, NS: {}, ER: {}, MSGID: {:08x}').format(
+                  self.RT, self.MSGSZ, self.RSPCTXID, self.REQCTXID, self.WOFF, self.CH, self.NS, self.ER, self.MSGID)
+        if self.RT:
+            r += (',{}' if self.csv else ', RCVTag: {:024x}').format(self.RCVTag)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R0: {:02x}'.format(self.R0)
+        r += (',{},{},,,,,{}' if self.csv else ', CA: {0}, FPS: {1}, ECRC:{3}{2:06x}').format(self.CA, self.FPS, self.ECRC, self.ecrc_sep)
+        r += self.expected_ecrc_str
+        if self.verbosity:
+            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
+            for i in reversed(range(self.pay_len)):
+                r += ' {:08x}'.format(self.Payload[i])
+        return r
+
+class CtxIdUnrelWriteMSGPkt(CtxIdWriteMSGPkt):
+    def reliable(self):
+        return False
+
+
+class ControlWriteMSGPkt(ExplicitHdr, WriteMsgMixin):
+    os1_fields = [('IV',                         c_u32,  1),
+                  ('MSGSZ',                      c_u32, 11)]
+    os2_fields = [('RSPCTXID',                   c_u32, 24), # Byte 12
+                  ('REQCTXIDl',                  c_u32,  8),
+                  ('REQCTXIDh',                  c_u32, 16), # Byte 16
+                  ('WOFF',                       c_u32, 11),
+                  ('CH',                         c_u32,  1),
+                  ('DR',                         c_u32,  1),
+                  ('SDR',                        c_u32,  1),
+                  ('PadCNT',                     c_u32,  2),
+                  ('MSGID',                      c_u32, 32), # Byte 20
+                  ('DRIface',                    c_u32, 12), # Byte 24
+                  ('InstanceID',                 c_u32, 20)]
+    os3_fields = [('R0',                         c_u32,  6), # Byte YY
+                  ('FPS',                        c_u32,  2),
+                  ('ECRC',                       c_u32, 24)]
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        fields = ExplicitHdr.hd_fields + ControlWriteMSGPkt.os1_fields
+        hdr_len = 8 # Revisit: constant 8
+        if exp_pkt.NH:
+            hdr_len += 4
+        if exp_pkt.GC:
+            fields.extend(ExplicitHdr.ms_fields)
+            hdr_len += 1
+        fields.extend(ControlWriteMSGPkt.os2_fields)
+        pay_len = exp_pkt.LEN - hdr_len
+        fields.append(('Payload', c_u32 * pay_len))
+        if exp_pkt.NH:
+            fields.extend(ExplicitHdr.nh_fields)
+        fields.extend(ControlWriteMSGPkt.os3_fields)
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pktClass = globals()[className + 'Pkt']
+        pkt_type = type(className, (pktClass,),
+                        {'_fields_': fields,
+                         'data': exp_pkt.data,
+                         'verbosity': exp_pkt.verbosity,
+                         'pay_len': pay_len})
+        pkt = pkt_type.from_buffer(exp_pkt.data)
+        return pkt
+
+    @property
+    def REQCTXID(self):
+        return self.REQCTXIDh << 8 | self.REQCTXIDl
+
+    def __str__(self):
+        r = super().__str__()
+        # Revisit: fix csv columns
+        r += (',,,,{}' if self.csv else ', PadCNT: {:3d}').format(self.PadCNT)
+        r += (',,,{},{},{},{},{},{},{},{},{},{},{}' if self.csv else
+              ', IV: {}, MSGSZ: {:03x}, RSPCTXID: {:06x}, REQCTXID: {:06x}, WOFF: {:03x}, CH: {}, DR: {}, SDR: {}, MSGID: {:08x}, DRIface: {}, InstanceID: {}').format(
+                  self.IV, self.MSGSZ, self.RSPCTXID, self.REQCTXID, self.WOFF, self.CH, self.DR, self.SDR, self.MSGID, self.DRIface, self.InstanceID)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R0: {:02x}'.format(self.R0)
+        r += (',,{},,,,,{}' if self.csv else ', FPS: {0}, ECRC:{2}{1:06x}').format(self.FPS, self.ECRC, self.ecrc_sep)
+        r += self.expected_ecrc_str
+        if self.verbosity:
+            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
+            for i in reversed(range(self.pay_len)):
+                r += ' {:08x}'.format(self.Payload[i])
+        return r
+
+class ControlUnrelWriteMSGPkt(ControlWriteMSGPkt):
+    def reliable(self):
+        return False
+
+
+class DRUnrelWriteMSGPkt(ControlUnrelWriteMSGPkt):
+    pass
+
+class MulticastHdr(ExplicitHdr):
+    hd_fields = [('MGIDl',                      c_u32,  5), # Byte 0
+                 ('LENl',                       c_u32,  3),
+                 ('MGIDm',                      c_u32,  4),
+                 ('LENh',                       c_u32,  4),
+                 ('MGIDh',                      c_u32,  3),
+                 ('VC',                         c_u32,  5),
+                 ('OpCodel',                    c_u32,  2),
+                 ('PCRC',                       c_u32,  6),
+                 ('OpCodeh',                    c_u32,  3), # Byte 4
+                 ('OCL',                        c_u32,  5),
+                 ('Tag',                        c_u32, 12),
+                 ('SCID',                       c_u32, 12),
+                 ('AKey',                       c_u32,  6), # Byte 8
+                 ('Deadline',                   c_u32, 10),
+                 ('ECN',                        c_u32,  1),
+                 ('GC',                         c_u32,  1),
+                 ('NH',                         c_u32,  1),
+                 ('PM',                         c_u32,  1)]
+    # OS1 is in each individual packet format
+    ms_fields = [('GMCP',                       c_u32, 16),
+                 ('SSID',                       c_u32, 16)]
+
+    def multicast(self):
+        return True
+
+    @property
+    def MGID(self):
+        return self.MGIDh << 9 | self.MGIDm << 5 | self.MGIDl
+
+    @property
+    def GMGID(self):
+        return self.MGID if not self.GC else (self.GMCP << 12) | self.MGID
+
+    @property
+    def uniqueness(self):
+        if self.isRequest:
+            return (self.SGCID << 40) | (self.GMGID << 12) | self.Tag
+        else: # isResponse - swap SGCID/GMGID so it matches request
+            return (self.GMGID << 40) | (self.SGCID << 12) | self.Tag
+
+    def to_json(self):
+        jd = { 'name': type(self).__name__,
+               'OCL': self.OCL,
+               'OpCode': self.OpCode,
+               'LEN': self.LEN,
+               'VC': self.VC,
+               'PCRC': self.PCRC,
+               'MGID': self.MGID,
+               'SCID': self.SCID,
+               'ECRC': self.ECRC,
+               'AKey': self.AKey,
+               'Deadline': self.Deadline,
+               'ECN': self.ECN,
+               'GC': self.GC,
+               'NH': self.NH,
+               'PM': self.PM,
+               # Revisit: finish this
+              }
+        noTag = getattr(self, 'noTag', False)
+        if not noTag:
+            jd['Tag'] = self.Tag
+        return jd
+
+
+    def __str__(self):
+        noTag = getattr(self, 'noTag', False)
+        r = ('{}' if self.csv else '{:>23s}').format(type(self).__name__)
+        if self.csv or type(self).__name__[0:8] != 'Explicit':
+            r += (',{},{}' if self.csv else '[{:02x}:{:02x}]').format(self.OCL, self.OpCode)
+        else:
+            r += ' OpClass: {}({:02x}), OpCode: {}({:02x})'.format(
+                self.oclName, self.OCL, self.opcName, self.OpCode)
+        r += (',{}' if self.csv else ', Length: {:2d}').format(self.LEN)
+        if self.GC:
+            # Revisit: CSV format
+            try: # Revisit: workaround for Unknown packets
+                r += ', SGCID: {:04x}:{:03x}, GMGID: {:04x}:{:03x}'.format(
+                    self.SSID, self.SCID, self.GMCP, self.MGID)
+            except AttributeError:
+                r += ', SGCID: ????:{:03x}, GMGID: ????:{:03x}'.format(
+                    self.SCID, self.DCID)
+        else:
+            r += (',{},{}' if self.csv else ', SCID: {:03x}, MGID: {:03x}').format(self.SCID, self.MGID)
+        r += (',{}' if self.csv else ', R0:  {:03x}' if noTag else ', Tag: {:03x}').format(
+            self.Tag)
+        r += (',{},{}' if self.csv else
+              ', VC: {0}, PCRC:{2}{1:02x}').format(
+            self.VC, self.PCRC, self.pcrc_sep)
+        r += self.expected_pcrc_str
+        r += (',{},{},{},{},{},{}' if self.csv else
+              ', AKey: {:02x}, Deadline: {:4d}, ECN: {}, GC: {}, NH: {}, PM: {}').format(
+            self.AKey, self.Deadline, self.ECN, self.GC, self.NH, self.PM)
+        return r
+
+
+class MulticastUnrelWriteMSGPkt(MulticastHdr, WriteMsgMixin):
+    os1_fields = [('RT',                         c_u32,  1),
+                  ('MSGSZ',                      c_u32, 11)]
+    os2_fields = [('R0',                         c_u32, 16), # Byte 12
+                  ('WOFF',                       c_u32, 11),
+                  ('CH',                         c_u32,  1),
+                  ('NS',                         c_u32,  1),
+                  ('R1',                         c_u32,  1),
+                  ('PadCNT',                     c_u32,  2),
+                  ('MSGID',                      c_u32, 32)] # Byte 16
+    os2b_fields = [('RCVTag0',                   c_u32, 32), # Byte 20
+                  ('RCVTag1',                    c_u32, 32),
+                  ('RCVTag2',                    c_u32, 32)]
+    os3_fields = [('R2',                         c_u32,  8), # Byte YY
+                  ('ECRC',                       c_u32, 24)]
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        fields = MulticastHdr.hd_fields + MulticastUnrelWriteMSGPkt.os1_fields
+        hdr_len = 6 # Revisit: constant 6
+        if exp_pkt.NH:
+            hdr_len += 4
+        if exp_pkt.GC:
+            fields.extend(ExplicitHdr.ms_fields)
+            hdr_len += 1
+        fields.extend(MulticastUnrelWriteMSGPkt.os2_fields)
+        if exp_pkt.LP: # Revisit: hack - LP is same bit pos as RT
+            fields.extend(MulticastUnrelWriteMSGPkt.os2b_fields)
+            hdr_len += 3
+        pay_len = exp_pkt.LEN - hdr_len
+        fields.append(('Payload', c_u32 * pay_len))
+        if exp_pkt.NH:
+            fields.extend(ExplicitHdr.nh_fields)
+        fields.extend(MulticastUnrelWriteMSGPkt.os3_fields)
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type = type(className, (MulticastUnrelWriteMSGPkt,),
+                        {'_fields_': fields,
+                         'data': exp_pkt.data,
+                         'verbosity': exp_pkt.verbosity,
+                         'pay_len': pay_len})
+        pkt = pkt_type.from_buffer(exp_pkt.data)
+        return pkt
+
+    @property
+    def RCVTag(self):
+        return self.RCVTag2 << 64 | self.RCVTag1 << 32 | self.RCVTag0
+
+    def reliable(self):
+        return False
+
+    def __str__(self):
+        r = super().__str__()
+        # Revisit: fix csv columns
+        r += (',,,,{}' if self.csv else ', PadCNT: {:3d}').format(self.PadCNT)
+        r += (',,,{},{},{},{},{},{}' if self.csv else
+              ', RT: {}, MSGSZ: {:03x}, WOFF: {:03x}, CH: {}, NS: {}, MSGID: {:08x}').format(
+                  self.RT, self.MSGSZ, self.WOFF, self.CH, self.NS, self.MSGID)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R0: {:04x}, R1: {}'.format(self.R0, self.R1)
+        if self.RT:
+            r += (',{}' if self.csv else ', RCVTag: {:024x}').format(self.RCVTag)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R2: {:02x}'.format(self.R2)
+        r += (',{},{},,,,,{}' if self.csv else ', ECRC:{1}{0:06x}').format(self.ECRC, self.ecrc_sep)
+        r += self.expected_ecrc_str
+        if self.verbosity:
+            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
+            for i in reversed(range(self.pay_len)):
+                r += ' {:08x}'.format(self.Payload[i])
+        return r
