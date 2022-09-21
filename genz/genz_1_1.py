@@ -42,6 +42,81 @@ cclass_name = [ 'reserved',    'memory_p2p64', 'memory',      'int_switch',
                 'block',       'block',        'tr',          'multi_class',
                 'bridge',      'bridge',       'compliance',  'lph' ]
 
+class Reason(IntEnum):
+    NoError              = 0x00
+    NE                   = 0x00
+    UnexpectedPkt        = 0x01
+    UE                   = 0x01
+    UnsupportedReq       = 0x02
+    UR                   = 0x02
+    MalformedPkt         = 0x03
+    MP                   = 0x03
+    PktExeNonFatal       = 0x04
+    EXEnf                = 0x04
+    PktExeFatal          = 0x05
+    EXEfatal             = 0x05
+    InvAccKey            = 0x06
+    AEakey               = 0x06
+    InvAccPerm           = 0x07
+    AEperm               = 0x07
+    CompContain          = 0x08
+    PktExeAbort          = 0x09
+    EXEabort             = 0x09
+    RespNotReady0        = 0x0a
+    RNR0                 = 0x0a
+    RespNotReady1        = 0x0b
+    RNR1                 = 0x0b
+    DataCorrWarn         = 0x0c
+    DCE                  = 0x0c
+    DataUncorrErr        = 0x0d
+    DUC                  = 0x0d
+    PoisonDataDet        = 0x0e
+    PDdet                = 0x0e
+    PoisonDataFail       = 0x0f
+    PDfail               = 0x0f
+    InProgressSE         = 0x10
+    SE                   = 0x10
+    FatalMediaContain    = 0x11
+    EmergPwrReduct       = 0x12
+    InsufficientSpace    = 0x13
+    AbortTransition      = 0x14
+    UnsupServAddrRes     = 0x15
+    USAR                 = 0x15
+    InsufficientRespRes  = 0x16
+    IRR                  = 0x16
+    ExclusiveGranted     = 0x17
+    UnableGrantExclShare = 0x18
+    WakeFailure          = 0x19
+    SODTransErr          = 0x1a
+    InvalidCapabilities  = 0x1b
+    AEcap                = 0x1b
+    PrimBackupOp         = 0x1c
+    CompPwrOffTrans      = 0x1d
+    NoErrorWriteMSG      = 0x1e
+    NEwritemsg           = 0x1e
+    MediaEndurance       = 0x1f
+    NoErrorHomeAgent     = 0x20
+    NEha                 = 0x20
+    PersFlushUpdateFail  = 0x21
+    MaxReqPktRetrans     = 0x22
+    T10DIPI              = 0x23
+    BufferAEADFail       = 0x24
+    SecSessionFail       = 0x25
+    SecurityErr          = 0x26
+    SECE                 = 0x26
+    NoErrorEnqueue       = 0x27
+    NEenq                = 0x27
+    SecEncryptKeyFail    = 0x28
+    NoErrorWriteMSGCompl = 0x29
+    NEwritemsgcompl      = 0x29
+    RespAccReq           = 0x2a
+    RAR                  = 0x2a
+
+    def __repr__(self):
+        return '<{}.{}: {:#x}>'.format(
+            self.__class__.__name__, self._name_, self._value_)
+
+
 class CStatus(SpecialField, Union):
     class CStatusFields(Structure):
         _fields_ = [('CState',              c_u64,  3),
