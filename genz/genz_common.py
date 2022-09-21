@@ -20,6 +20,7 @@
 # SOFTWARE.
 
 from ctypes import *
+import atomics
 import uuid
 from enum import Enum, IntEnum, auto
 
@@ -310,3 +311,30 @@ class Opcodes(SpecialField):
                     name, self._subfield_name[subField],
                     highBit, lowBit)
         return r
+
+
+class RefCount():
+    def __init__(self, sz: tuple = (1, 1)):
+        self._array = [[atomics.atomic(width=4, atype=atomics.UINT)
+                        for col in range(sz[1])] for row in range(sz[0])]
+
+    def inc(self, row=0, col=0) -> bool:
+        '''
+        Increment the refcount. Returns True if the refcount was 0 (now 1).
+        '''
+        return (self._array[row][col].fetch_inc() == 0)
+
+    def dec(self, row=0, col=0):
+        '''
+        Decrement the refcount. Returns True if the refcount was 1 (now 0).
+        '''
+        return (self._array[row][col].fetch_dec() == 1)
+
+    def value(self, row=0, col=0):
+        '''
+        Return the refcount.
+        '''
+        return self._array[row][col].load()
+
+    def __getitem__(self, row):
+        return self._array[row]
