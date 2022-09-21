@@ -80,7 +80,7 @@ class PacketSorter():
             return (req.cycle + 1) if req is not None else pkt.cycle
 
 
-def parse_pkt_data(matches, sorter):
+def parse_pkt_data(genz, args, matches, sorter):
     cycle = int(matches[0].group('time'), base=0)
     time = cycle * 2.5e-9
     user = int(matches[0].group('user'), base=0)
@@ -103,7 +103,7 @@ def parse_pkt_data(matches, sorter):
 def packet_reqrsp_sort(pkt):
     return pkt.sorter.req_rsp_sort(pkt)
 
-def process_text(fname):
+def process_text(genz, args, fname):
     with open(fname) as f:
         pkts = []
         pkt_sorter = PacketSorter()
@@ -120,7 +120,7 @@ def process_text(fname):
                 if m_last is not None:
                     in_pkt = False
                     pkt_matches.append(m_last)
-                    pkt = parse_pkt_data(pkt_matches, pkt_sorter)
+                    pkt = parse_pkt_data(genz, args, pkt_matches, pkt_sorter)
                     pkts.append(pkt)
                     pkt_matches = []
                 else:
@@ -138,14 +138,12 @@ def process_text(fname):
                     pkt_matches.append(m_first)
                     in_pkt = True if m_first.group('last') is None else False
                     if not in_pkt:
-                        pkt = parse_pkt_data(pkt_matches, pkt_sorter)
+                        pkt = parse_pkt_data(genz, args, pkt_matches, pkt_sorter)
                         pkts.append(pkt)
                         pkt_matches = []
             # end if in_pkt
         # end for line
 
-        if args.csv:
-            print('Time,Delta,Intf,OpcName,OCL,OpCode,LEN,SCID,DCID,Tag,VC,PCRC,AKey,Deadline,ECN,GC,NH,PM,LP,TA,RK,DR,DRIface,RDSize,PadCNT,Addr,MGRUUID,TC,NS,UN,PU,RC,MS,PD,FPS,RRSPReason,RNR_QD,RS,Reason,ECRC')
         if args.time_sort:
             pkts.sort(key=lambda p: p.time)
         elif args.reqrsp_sort:
@@ -158,15 +156,7 @@ def process_text(fname):
                 (pkt.time - prev_req.time) if is_req and prev_req is not None
                 else (pkt.time - prev_pkt.time))
             first = False
-            if args.csv:
-                print('{:.6f},{:.6f},{:x},{}'.format(
-                    pkt.time*1e6, delta*1e6, pkt.user & 0xfff, pkt))
-            elif args.time_delta:
-                print('Time: {:14.6f}uS, Delta: {:14.6f}uS, Intf: {:x}, {}'.format(
-                    pkt.time*1e6, delta*1e6, pkt.user & 0xfff, pkt))
-            else:
-                print('Time: {:14.6f}uS, Intf: {:x}, {}'.format(
-                    pkt.time*1e6, pkt.user & 0xfff, pkt))
+            yield (pkt, delta)
             prev_pkt = pkt
             prev_req = pkt if is_req else prev_req
 
@@ -174,7 +164,6 @@ def process_text(fname):
 def main():
     global args
     global cols
-    global genz
     parser = argparse.ArgumentParser()
     #parser.add_argument('file', help='the file containing binary packet data')
     parser.add_argument('-C', '--csv', action='store_true',
@@ -199,7 +188,20 @@ def main():
         print('Gen-Z version = {}'.format(args.genz_version))
     genz = import_module('genz.genz_{}'.format(args.genz_version.replace('.', '_')))
     if args.text:
-        process_text(args.text)
+        if args.csv:
+            print('Time,Delta,Intf,OpcName,OCL,OpCode,LEN,SCID,DCID,Tag,VC,PCRC,AKey,Deadline,ECN,GC,NH,PM,LP,TA,RK,DR,DRIface,RDSize,PadCNT,Addr,MGRUUID,TC,NS,UN,PU,RC,MS,PD,FPS,RRSPReason,RNR_QD,RS,Reason,ECRC')
+        for pkt, delta in process_text(genz, args, args.text):
+            if args.csv:
+                print('{:.6f},{:.6f},{:x},{}'.format(
+                    pkt.time*1e6, delta*1e6, pkt.user & 0xfff, pkt))
+            elif args.time_delta:
+                print('Time: {:14.6f}uS, Delta: {:14.6f}uS, Intf: {:x}, {}'.format(
+                    pkt.time*1e6, delta*1e6, pkt.user & 0xfff, pkt))
+            else:
+                print('Time: {:14.6f}uS, Intf: {:x}, {}'.format(
+                    pkt.time*1e6, pkt.user & 0xfff, pkt))
+        # end for
+    # end if args.text
 
 if __name__ == '__main__':
     try:
