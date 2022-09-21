@@ -136,20 +136,15 @@ def subscribe_sfm():
         status = 'error'
         code = 400
     else:
-        if callback_endpoints in Journal.mainapp.sfm_callbacks.values():
-            status = f'Endpoints "{callback_endpoints}" already in the SFM list'
-            code = 403
-        else:
-            status = f'SFM callback endpoints "{callback_endpoints}" added'
+        status = f'SFM callback endpoints "{callback_endpoints}" added'
 
-            # save callback endpoints and enable SFM
-            fab = Journal.mainapp.conf.fab
-            for br in bridges:
-                Journal.mainapp.sfm_callbacks[br] = callback_endpoints
-                resp = enable_sfm(fab, br)
-                log.debug(f'enable_sfm resp={resp}')
-            # end for br
-        # end if
+        # save callback endpoints and enable SFM
+        fab = Journal.mainapp.conf.fab
+        for br in bridges:
+            Journal.mainapp.sfm_callbacks[br] = callback_endpoints
+            resp = enable_sfm(fab, br)
+            log.debug(f'enable_sfm resp={resp}')
+        # end for br
 
     log.info(f'subscribe/sfm: {status}')
     response['status'] = status

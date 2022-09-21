@@ -23,7 +23,7 @@
 
 import ctypes
 import time
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
+from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount, MAX_HC
 from pdb import set_trace
 import zephyr_conf
 from zephyr_conf import log
@@ -544,17 +544,16 @@ class Interface():
         # Revisit: what about changes to other fields, like VCA & EI?
         curV = self.lprt[cid][rt].V
         if valid:
-            # Revisit: enum
-            cur_min = min(self.lprt[cid], key=lambda x: x.HC if x.V else 63)
-            cur_min = cur_min.HC if cur_min.V else 63
+            cur_min = min(self.lprt[cid], key=lambda x: x.HC if x.V else MAX_HC)
+            cur_min = cur_min.HC if cur_min.V else MAX_HC
             new_min = min(cur_min, hc)
         else:
             cur_min = self.lprt[cid][0].MHC
             new_min = min((self.lprt[cid][i] for i in range(len(self.lprt[cid]))
-                          if i != rt), key=lambda x: x.HC if x.V else 63)
-            new_min = new_min.HC if new_min.V else 63
+                          if i != rt), key=lambda x: x.HC if x.V else MAX_HC)
+            new_min = new_min.HC if new_min.V else MAX_HC
         wr0 = new_min != cur_min and rt != 0
-        wrN = not valid or new_min < cur_min or valid != curV
+        wrN = new_min < cur_min
         return (new_min, wr0, wrN)
 
     def lprt_read(self):
@@ -572,6 +571,7 @@ class Interface():
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
             self.route_info = [[RouteInfo() for j in range(self.lprt.cols)]
                                for i in range(self.lprt.rows)]
+            self.lprt_refcount = RefCount((self.lprt.rows, self.lprt.cols))
         # end with
 
     def lprt_write(self, cid, ei, rt=0, valid=1, mhc=None, hc=None, vca=None,
@@ -589,6 +589,7 @@ class Interface():
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
                 self.route_info = [[RouteInfo() for j in range(self.lprt.cols)]
                                    for i in range(self.lprt.rows)]
+                self.lprt_refcount = RefCount((self.lprt.rows, self.lprt.cols))
             else:
                 self.lprt.set_fd(f)
             sz = ctypes.sizeof(self.lprt.element)
@@ -699,6 +700,18 @@ class Interface():
                           'tx_LWR': self.phy_tx_lwr,
                           'rx_LWR': self.phy_rx_lwr }
                 }
+
+    def __eq__(self, other):
+        if isinstance(other, Interface):
+            return self.comp == other.comp and self.num == other.num
+        return NotImplemented
+
+    def __lt__(self, other):
+        if isinstance(other, Interface):
+            if self.comp != other.comp:
+                return NotImplemented
+            return self.num < other.num
+        return NotImplemented
 
     def __hash__(self):
         return hash(str(self.comp.uuid) + '.{}'.format(self.num))

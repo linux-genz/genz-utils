@@ -32,6 +32,7 @@ c_u64 = c_ulonglong
 genzUUID = uuid.UUID('4813ea5f-074e-4be2-a355-a354145c9927')
 
 DR_IFACE_NONE = 0xffff
+MAX_HC = 63
 
 class CState(IntEnum):
     CDown = 0

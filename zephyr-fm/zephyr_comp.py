@@ -22,7 +22,7 @@
 # SOFTWARE.
 
 import ctypes
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, CReset, HostMgrUUID, genzUUID
+from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, CReset, HostMgrUUID, genzUUID, RefCount, MAX_HC
 import os
 import re
 import time
@@ -400,8 +400,8 @@ class Component():
                 core.CID0 = self.gcid.cid
                 core.CV = 1
                 self.control_write(core, genz.CoreStructure.CV, sz=8)
-            # Revisit: MGR-UUID capture does not work on previous mamba
-            if 0:
+            # Revisit: MGR-UUID capture does not work on some components
+            if pfm and args.write_mgruuid:
                 # For non-local-bridge components in C-CFG, MGR-UUID will have
                 # been captured on CV/CID0/SID0 write, so skip this
                 # set MGR-UUID
@@ -415,7 +415,7 @@ class Component():
                 self.ssdt_size(prefix=prefix)
                 # use route elem to correctly set SSDT HC & MHC
                 elem = route[0][0]
-                elem.set_ssdt(pfm, update_rt_num=True)
+                elem.set_ssdt(pfm, updateRtNum=True)
                 self.rit_write(ingress_iface, 1 << ingress_iface.num)
             if pfm:
                 # initialize RSP-VCAT
@@ -666,17 +666,25 @@ class Component():
                                                      path=opcode_set_table_file,
                                                      verbosity=self.verbosity)
             log.debug('{}: {}'.format(self.gcid, opcode_set_table))
-            # Enable all Supported OpCodes for Core64/Control/DR OpClasses
+            # Enable all Supported OpCodes for
+            # Core64/Control/DR/Atomic1/LDM1/Advanced1 OpClasses
             opcode_set_table.EnabledCore64OpCodeSet = (
                 opcode_set_table.SupportedCore64OpCodeSet)
             opcode_set_table.EnabledControlOpCodeSet = (
                 opcode_set_table.SupportedControlOpCodeSet)
             opcode_set_table.EnabledDROpCodeSet = (
                 opcode_set_table.SupportedDROpCodeSet)
+            opcode_set_table.EnabledAtomic1OpCodeSet = (
+                opcode_set_table.SupportedAtomic1OpCodeSet)
+            opcode_set_table.EnabledLDM1OpCodeSet = (
+                opcode_set_table.SupportedLDM1OpCodeSet)
+            opcode_set_table.EnabledAdvanced1OpCodeSet = (
+                opcode_set_table.SupportedAdvanced1OpCodeSet)
             # Revisit: add support for other OpClasses
             # Revisit: orthus tries to use >16-byte writes and fails
             #self.control_write(opcode_set_table, genz.OpCodeSetTable.SetID,
             #                   sz=opcode_set_table.Size, off=0)
+            opcode_set_class = opcode_set_table.__class__
             self.control_write(opcode_set_table,
                                genz.OpCodeSetTable.EnabledCore64OpCodeSet,
                                sz=8, off=0)
@@ -684,7 +692,16 @@ class Component():
                                genz.OpCodeSetTable.EnabledControlOpCodeSet,
                                sz=8, off=0)
             self.control_write(opcode_set_table,
-                               genz.OpCodeSetTable.EnabledDROpCodeSet,
+                               opcode_set_class.EnabledDROpCodeSet,
+                               sz=8, off=0)
+            self.control_write(opcode_set_table,
+                               genz.OpCodeSetTable.EnabledAtomic1OpCodeSet,
+                               sz=8, off=0)
+            self.control_write(opcode_set_table,
+                               genz.OpCodeSetTable.EnabledLDM1OpCodeSet,
+                               sz=8, off=0)
+            self.control_write(opcode_set_table,
+                               genz.OpCodeSetTable.EnabledAdvanced1OpCodeSet,
                                sz=8, off=0)
         # end with
 
@@ -1101,10 +1118,13 @@ class Component():
         if self._ssdt_sz is not None:
             return self._ssdt_sz
         comp_dest = self.comp_dest_read(prefix=prefix, haveCore=haveCore)
-        rows = comp_dest.SSDTSize
-        cols = comp_dest.MaxRoutes
-        self._ssdt_sz = (rows, cols)
-        log.debug('{}: ssdt_sz={}'.format(self.gcid, self._ssdt_sz))
+        if comp_dest.SSDTPTR == 0:
+            self._ssdt_sz = (0, 0)
+        else:
+            rows = comp_dest.SSDTSize
+            cols = comp_dest.MaxRoutes
+            self._ssdt_sz = (rows, cols)
+        log.debug(f'{self.gcid}: ssdt_sz={self._ssdt_sz}')
         return self._ssdt_sz
 
     def compute_mhc(self, cid, rt, hc, valid):
@@ -1113,17 +1133,16 @@ class Component():
         # Revisit: what about changes to other fields, like VCA & EI?
         curV = self.ssdt[cid][rt].V
         if valid:
-            # Revisit: enum
-            cur_min = min(self.ssdt[cid], key=lambda x: x.HC if x.V else 63)
-            cur_min = cur_min.HC if cur_min.V else 63
+            cur_min = min(self.ssdt[cid], key=lambda x: x.HC if x.V else MAX_HC)
+            cur_min = cur_min.HC if cur_min.V else MAX_HC
             new_min = min(cur_min, hc)
         else:
             cur_min = self.ssdt[cid][0].MHC
             new_min = min((self.ssdt[cid][i] for i in range(len(self.ssdt[cid]))
-                          if i != rt), key=lambda x: x.HC if x.V else 63)
-            new_min = new_min.HC if new_min.V else 63
+                          if i != rt), key=lambda x: x.HC if x.V else MAX_HC)
+            new_min = new_min.HC if new_min.V else MAX_HC
         wr0 = new_min != cur_min and rt != 0
-        wrN = not valid or new_min < cur_min or valid != curV
+        wrN = new_min < cur_min
         return (new_min, wr0, wrN)
 
     def ssdt_read(self):
@@ -1136,6 +1155,7 @@ class Component():
             self.ssdt = self.map.fileToStruct('ssdt', data, path=ssdt_file,
                                     core=self.core, parent=self.comp_dest,
                                     fd=f.fileno(), verbosity=self.verbosity)
+            self.ssdt_refcount = RefCount((self.ssdt.rows, self.ssdt.cols))
         return self.ssdt
 
     def ssdt_write(self, cid, ei, rt=0, valid=1, mhc=None, hc=None, vca=None,
@@ -1150,6 +1170,7 @@ class Component():
                 self.ssdt = self.map.fileToStruct('ssdt', data, path=ssdt_file,
                                     core=self.core, parent=self.comp_dest,
                                     fd=f.fileno(), verbosity=self.verbosity)
+                self.ssdt_refcount = RefCount((self.ssdt.rows, self.ssdt.cols))
             else:
                 self.ssdt.set_fd(f)
             sz = ctypes.sizeof(self.ssdt.element)
@@ -1529,6 +1550,53 @@ class Component():
         # end with
         routes = self.fab.setup_bidirectional_routing(sfm, self)
         return routes # Revisit
+
+    def promote_sfm_to_pfm(self, sfm, pfm, prefix='control'):
+        '''Promote @sfm to Primary Fabric Manager of this component and
+        invalidate the previous SFM GCID (since it is now PFM).
+        '''
+        core_file = self.path / prefix / 'core@0x0/core'
+        with core_file.open(mode='rb+') as f:
+            genz = zephyr_conf.genz
+            core = self.core
+            core.set_fd(f)
+            cap1ctl = genz.CAP1Control(core.CAP1Control, core)
+            cap2ctl = genz.CAP2Control(core.CAP2Control, core)
+            # Set Fabric Manager Transition bit (only on PFM/SFM)
+            if self is pfm or self is sfm:
+                cap1ctl.FabricMgrTransition = 1
+                core.CAP1Control = cap1ctl.val
+                self.control_write(core, genz.CoreStructure.CAP1Control, sz=8)
+            # clear PrimaryFabMgrRole, HostMgrMGRUUIDEnb (only on PFM component)
+            if self is pfm:
+                cap1ctl.PrimaryFabMgrRole = 0
+                cap1ctl.HostMgrMGRUUIDEnb = HostMgrUUID.Zero
+                core.CAP1Control = cap1ctl.val
+                self.control_write(core, genz.CoreStructure.CAP1Control, sz=8)
+            # set SFM as new PFMSID/PFMCID (must be after PrimaryFabMgrRole = 0)
+            # Revisit: subnets
+            core.PFMCID = sfm.gcid.cid
+            self.control_write(core, genz.CoreStructure.PMCID, sz=8)
+            # set PrimaryFabMgrRole/clear SecondaryFabMgrRole (only on SFM)
+            if self is sfm:
+                cap1ctl.PrimaryFabMgrRole = 1
+                cap1ctl.SecondaryFabMgrRole = 0
+                core.CAP1Control = cap1ctl.val
+                self.control_write(core, genz.CoreStructure.CAP1Control, sz=8)
+            # clear SFMCIDValid/SFMSIDValid
+            cap2ctl.field.SFMCIDValid = 0
+            cap2ctl.field.SFMSIDValid = 0
+            core.CAP2Control = cap2ctl.val
+            self.control_write(core, genz.CoreStructure.CAP2Control, sz=8)
+            # Clear Fabric Manager Transition bit
+            if self is pfm or self is sfm:
+                cap1ctl.FabricMgrTransition = 0
+                core.CAP1Control = cap1ctl.val
+                self.control_write(core, genz.CoreStructure.CAP1Control, sz=8)
+        # end with
+        # Revisit: remove PFM routes (when route refcounts are available)
+        #routes = self.fab.setup_bidirectional_routing(sfm, self)
+        #return routes # Revisit
 
     def lookup_iface(self, iface_str: str) -> Interface:
         gcid_str, iface_num_str = iface_str.split('.')

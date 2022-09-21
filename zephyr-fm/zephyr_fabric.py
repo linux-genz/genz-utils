@@ -24,17 +24,23 @@
 import ctypes
 import json
 from typing import List, Tuple, Iterator
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
+from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount
+import itertools
 import random
 import posixpath
 import requests
+import sched
+import socket
+import time
 from pathlib import Path
 from pdb import set_trace
 import networkx as nx
 from uuid import UUID, uuid4
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from base64 import b64encode, b64decode
+from heapq import nlargest
 from zeroconf import Zeroconf, ServiceInfo, ServiceBrowser
+from threading import Thread
 import zephyr_conf
 from zephyr_conf import log, INVALID_GCID
 from zephyr_iface import Interface
@@ -94,11 +100,13 @@ class Fabric(nx.MultiGraph):
         self.aesgcm = AESGCM(b64decode(conf.data['aesgcm_key']))
         self.pfm = None
         self.sfm = None
+        self.pfm_fm = None
         self.fms = {}
+        self.promote_sfm_refcount = RefCount()
         mgr_uuids = [] if self.mgr_uuid is None else [self.mgr_uuid]
-        super().__init__(fab_uuid=self.fab_uuid, mgr_uuids=mgr_uuids)
-        log.info('fabric: {}, num={}, fab_uuid={}, mgr_uuid={}'.format(
-            path, self.fabnum, self.fab_uuid, self.mgr_uuid))
+        ns = time.time_ns()
+        super().__init__(fab_uuid=self.fab_uuid, mgr_uuids=mgr_uuids, timestamp=ns)
+        log.info(f'fabric: {path}, num={self.fabnum}, fab_uuid={self.fab_uuid}, mgr_uuid={self.mgr_uuid}, timestamp={ns}')
 
     def assign_gcid(self, comp, ssdt_sz=4096, proposed_gcid=None):
         # Revisit: subnets
@@ -191,6 +199,7 @@ class Fabric(nx.MultiGraph):
         return str(cuuid) + ':' + serial
 
     def fab_init(self):
+        zephyr_conf.is_sfm = False
         for br_path in self.br_paths():
             cuuid_serial = self.get_cuuid_serial(br_path)
             cur_gcid = get_gcid(br_path)
@@ -226,6 +235,7 @@ class Fabric(nx.MultiGraph):
         # end for br_path
 
     def sfm_init(self):
+        zephyr_conf.is_sfm = True
         for br_path in self.br_paths():
             cuuid_serial = self.get_cuuid_serial(br_path)
             cur_gcid = get_gcid(br_path)
@@ -324,12 +334,15 @@ class Fabric(nx.MultiGraph):
     def find_routes(self, fr: Component, to: Component,
                     cutoff_factor: float = 3.0,
                     min_paths: int = 2, routes: List[Route] = None,
+                    cur_routes: List[Route] = None,
                     max_routes: int = None) -> Iterator[Route]:
-        if routes is not None:
+        if routes is not None: # explicit routes param ignores max_routes
             for rt in routes:
-                yield rt
+                if rt not in cur_routes:
+                    yield rt
             return
 
+        min_paths = min_paths if max_routes is None else min(min_paths, max_routes)
         paths = self.all_shortest_paths(fr, to, cutoff_factor=cutoff_factor,
                                         min_paths=min_paths,
                                         max_paths=max_routes)
@@ -338,7 +351,7 @@ class Fabric(nx.MultiGraph):
             if max_routes is not None and cnt >= max_routes:
                 return
             rt = Route(path)
-            if self.route_entries_avail(rt):
+            if rt not in cur_routes and self.route_entries_avail(rt):
                 self.route_info_update(rt, True)
                 cnt += 1
                 yield rt
@@ -346,41 +359,57 @@ class Fabric(nx.MultiGraph):
             for mg_rt in rt.multigraph_routes():
                 if max_routes is not None and cnt >= max_routes:
                     return
-                if self.route_entries_avail(mg_rt):
+                if mg_rt not in cur_routes and self.route_entries_avail(mg_rt):
                     self.route_info_update(mg_rt, True)
                     cnt += 1
                     yield mg_rt
             # end for mg_rt
         # end for path
 
-    def write_route(self, route: Route, write_ssdt=True, enable=True):
+    def write_route(self, route: Route, write_ssdt=True, enable=True, refcountOnly=False):
         # When enabling a route, write entries in reverse order so
         # that live updates to routing never enable a route entry
         # before its "downstream" entries. When disabling a route,
         # start at the front, for the same reason.
-        rt_iter = reversed(route) if enable else iter(route)
+        rt_iter = reversed(route) if (enable and not refcountOnly) else iter(route)
         for rt in rt_iter:
             if rt.ingress_iface is not None:
                 # switch: add to's GCID to rt's LPRT
-                rt.set_lprt(route.to, valid=enable)
+                rt.set_lprt(route.to, valid=enable, refcountOnly=refcountOnly,
+                            updateRtNum=refcountOnly)
             elif write_ssdt:
                 # add to's GCID to rt's SSDT
-                rt.set_ssdt(route.to, valid=enable)
+                rt.set_ssdt(route.to, valid=enable, refcountOnly=refcountOnly,
+                            updateRtNum=refcountOnly)
 
-    def setup_routing(self, fr: Component, to: Component,
-                      write_ssdt=True, routes=None) -> List[Route]:
+    def write_routes(self, rts: Routes, write_ssdt=True, enable=True, refcountOnly=False):
+        for rt in rts:
+            log.info('writing PFM route from {} to {} via {}'.format(rt.fr, rt.to, rt))
+            self.write_route(rt, write_ssdt, enable, refcountOnly=refcountOnly)
+        # end for
+
+    def setup_routing(self, fr: Component, to: Component, write_ssdt=True,
+                      routes=None, send=True, overrideMaxRoutes=False) -> List[Route]:
         cur_rts = self.get_routes(fr, to)
         new_rts = []
-        for route in self.find_routes(fr, to, routes=routes,
-                                      max_routes=zephyr_conf.args.max_routes):
-            if route in cur_rts:
-                log.debug('skipping existing route {}'.format(route))
-            else:
-                log.info('adding route from {} to {} via {}'.format(
-                    fr, to, route))
-                self.write_route(route, write_ssdt)
-                self.routes.add(fr, to, route)
-                new_rts.append(route)
+        max_routes = None if overrideMaxRoutes else zephyr_conf.args.max_routes
+        for route in self.find_routes(fr, to, routes=routes, max_routes=max_routes,
+                                      cur_routes=cur_rts):
+            route.refcount.inc()
+            log.info(f'adding route from {fr} to {to} via {route}, refcount={route.refcount.value()}')
+            self.write_route(route, write_ssdt, refcountOnly=(not send))
+            self.routes.add(fr, to, route)
+            new_rts.append(route)
+        # end for
+        merged = sorted(set(itertools.chain.from_iterable((cur_rts, new_rts))))
+        n = len(merged)
+        if max_routes is not None and n > max_routes:
+            log.debug(f'too many routes ({n}) from {fr} to {to}')
+            excess_rts = nlargest(n - max_routes, merged)
+            self.teardown_routing(fr, to, excess_rts, send=send)
+        if send and len(new_rts) > 0:
+            self.send_sfm('sfm_routes', 'routes',
+                          Routes(fab_uuid=self.fab_uuid, routes=new_rts).to_json(), op='add')
         return new_rts
 
     def setup_bidirectional_routing(self, fr: Component, to: Component,
@@ -396,24 +425,31 @@ class Fabric(nx.MultiGraph):
         return (to_routes, fr_routes)
 
     def teardown_routing(self, fr: Component, to: Component,
-                         routes: List[Route]) -> None:
+                         routes: List[Route], send=True) -> None:
         # Revisit: when tearing down HW routes from "fr" to "to",
         # Revisit: some of the components may not be reachable from PFM
         cur_rts = self.get_routes(fr, to)
         for route in routes:
             if route not in cur_rts:
-                log.debug('skipping missing route {}'.format(route))
+                log.debug(f'skipping missing route {route}')
             else:
-                log.info('removing route from {} to {} via {}'.format(
-                    fr, to, route))
-                self.write_route(route, enable=False)
+                last = route.refcount.dec()
+                if not last:
+                    log.debug(f'decremented route {route} refcount, refcount={route.refcount.value()}')
+                    continue
+                log.info(f'removing route from {fr} to {to} via {route}')
+                self.write_route(route, enable=False, refcountOnly=(not send))
                 self.routes.remove(fr, to, route)
         # end for
+        if send and len(routes) > 0:
+            self.send_sfm('sfm_routes', 'routes',
+                          Routes(fab_uuid=self.fab_uuid, routes=routes).to_json(), op='remove')
 
     def recompute_routes(self, iface1, iface2):
         # Revisit: this is O(n**2) during crawl-out, worse later
         # Revisit: can we make use of iface1/2 to do better?
         for fr, to in self.routes.fr_to.keys():
+            log.debug(f'recompute routes: {fr}, {to}')
             self.setup_routing(fr, to)
 
     def has_link(self, fr_iface: Interface, to_iface: Interface) -> bool:
@@ -501,6 +537,9 @@ class Fabric(nx.MultiGraph):
         return ret
 
     def handle_uep(self, body):
+        if zephyr_conf.is_sfm: # a UEP delivered to SFM means PFM delivery failed
+            self.promote_sfm_to_pfm()
+
         mgr_uuid = UUID(body.get('GENZ_A_UEP_MGR_UUID'))
         # Revisit: check mgr_uuid against self.mgr_uuid
         br_gcid = GCID(val=body.get('GENZ_A_UEP_BRIDGE_GCID'))
@@ -529,9 +568,9 @@ class Fabric(nx.MultiGraph):
         return self.dispatch(rec['EventName'], br, sender, iface, rec)
 
     def to_json(self):
+        self.graph['timestamp'] = time.time_ns()
         nl = nx.node_link_data(self)
-        js = json.dumps(nl, indent=2) # Revisit: indent
-        return js
+        return nl
 
     def get_routes(self, fr: Component, to: Component):
         try:
@@ -539,7 +578,7 @@ class Fabric(nx.MultiGraph):
         except KeyError:
             return []
 
-    def add_routes(self, body):
+    def add_routes(self, body, send=True):
         fab_uuid = UUID(body['fab_uuid'])
         if fab_uuid != self.fab_uuid:
             return { 'failed': [ 'fab_uuid mismatch' ] }
@@ -550,19 +589,22 @@ class Fabric(nx.MultiGraph):
         for key, rts in routes.items():
             fr, to = key
             for rt in rts.get_routes(fr, to):
-                if rt in self.get_routes(fr, to):
-                    log.info('not adding existing route {}'.format(rt))
+                existing = self.get_routes(fr, to)
+                if rt in existing:
+                    index = existing.index(rt)
+                    existing[index].refcount.inc()
+                    log.info(f'incremented refcount on existing route {existing[index]}, refcount={existing[index].refcount.value()}')
                 elif self.route_entries_avail(rt):
                     self.route_info_update(rt, True)
-                    self.setup_routing(fr, to, routes=[rt])
+                    self.setup_routing(fr, to, routes=[rt], send=send, overrideMaxRoutes=True)
                 else:
-                    log.warning('insufficient route entries to add {}'.format(rt))
+                    log.warning(f'insufficient route entries to add {rt}')
             # end for rt
         # end for key
         # Revisit: return correct success/failed dict
         return { 'success': [] }
 
-    def remove_routes(self, body):
+    def remove_routes(self, body, send=True):
         fab_uuid = UUID(body['fab_uuid'])
         if fab_uuid != self.fab_uuid:
             return { 'failed': [ 'fab_uuid mismatch' ] }
@@ -577,7 +619,7 @@ class Fabric(nx.MultiGraph):
                     log.info('cannot remove non-existent route {}'.format(rt))
                 elif self.route_entries_avail(rt):
                     self.route_info_update(rt, False)
-                    self.teardown_routing(fr, to, [rt])
+                    self.teardown_routing(fr, to, [rt], send=send)
                 else:
                     log.warning('missing route entries removing {}'.format(rt))
             # end for rt
@@ -614,20 +656,25 @@ class Fabric(nx.MultiGraph):
         self.add_mgr_uuids(mgr_uuids)
         self.add_comps_from_topo(topo, pfm, sfm)
         self.add_links_from_topo(topo)
-        self.get_fm_routes(fm)
+        self.get_fm_endpoints(fm)
+        routes = self.get_fm_routes(fm)
+        self.write_routes(routes, refcountOnly=True)
         self.get_fm_resources(fm)
+        self.pfm_fm = fm
+        # start heartbeat thread
+        self.heartbeat = RepeatedTimer(zephyr_conf.args.sfm_heartbeat, self.check_pfm, fm)
+        self.heartbeat.start()
 
     def remove_service(self, zeroconf: Zeroconf, type: str, name: str) -> None:
         log.debug(f'Service {name} of type {type} Removed')
-        info = zeroconf.get_service_info(type, name)
-        log.debug(f'Info from zeroconf.get_service_info: {info}')
-        set_trace() # Revisit
         try:
             fm = self.fms[name]
         except KeyError:
             log.error(f'attempt to remove unknown FM {name}')
             return
         del self.fms[name]
+        if fm == self.pfm_fm:
+            self.promote_sfm_to_pfm()
         # Revisit: finish this
 
     def update_service(self, zeroconf: Zeroconf, type: str, name: str) -> None:
@@ -635,7 +682,6 @@ class Fabric(nx.MultiGraph):
         info = zeroconf.get_service_info(type, name)
         log.debug(f'Info from zeroconf.get_service_info: {info}')
         unknown = False
-        set_trace() # Revisit
         try:
             fm = self.fms[name]
         except KeyError:
@@ -755,6 +801,8 @@ class Fabric(nx.MultiGraph):
                                  gcid=gcid, uuid=uuid, br_gcid=self.sfm.gcid,
                                  verbosity=self.verbosity)
                 gcid = self.assign_gcid(comp, proposed_gcid=gcid)
+                if path.exists():
+                    comp.remove_fab_comp()
                 comp.add_fab_comp(setup=True)
             # Revisit: instead, call rsp_page_grid_init(readOnly=True)
             comp.rsp_page_grid_ps = ps
@@ -782,9 +830,12 @@ class Fabric(nx.MultiGraph):
         # end for
 
     def add_mgr_uuids(self, mgr_uuids):
-        for m in mgr_uuids:
+        for idx, m in enumerate(mgr_uuids):
             mgr_uuid = UUID(m)
             self.graph['mgr_uuids'].append(mgr_uuid)
+            if idx == 0:
+                self.mgr_uuid = mgr_uuid
+                self.conf.set_fab(self)
 
     def get_fm_routes(self, fm: 'FM'):
         url, _ = self.endpoints_url(fm, fm_endpoint='fabric/routes')
@@ -813,6 +864,19 @@ class Fabric(nx.MultiGraph):
         res_data = data.get('fab_resources', None)
         self.conf.fab_resources(res_data)
 
+    def get_fm_endpoints(self, fm: 'FM') -> None:
+        url, _ = self.endpoints_url(fm, fm_endpoint='fabric/endpoints')
+        r = requests.get(url=url) # Revisit: timeout
+        data = r.json()
+        fab_uuid = data.get('fab_uuid', None)
+        if fab_uuid is not None:
+            fab_uuid = UUID(fab_uuid)
+        if fab_uuid is None or fab_uuid != self.fab_uuid:
+            log.warning(f'get_fm_endpoints: wrong FM fab_uuid {fab_uuid}')
+            return None
+        ep_data = data.get('endpoints', {})
+        self.mainapp.llamas_callbacks = ep_data
+
     def send_sfm(self, callback: str, item: str, js, op=None):
         if self.sfm is None: # no SFM
             return
@@ -820,12 +884,12 @@ class Fabric(nx.MultiGraph):
         data = {
             'fabric_uuid': str(self.fab_uuid),
             'mgr_uuid'   : str(self.mgr_uuid),
+            'timestamp'  : time.time_ns(),
             f'{item}'    : js,
         }
         if op is not None:
             data['operation'] = op
         log.debug(f'send_sfm: url={url}, data={data}') # Revisit: temp debug
-        set_trace() # Revisit: temp debug
         try:
             resp = requests.post(url, json=data)
         except Exception as err:
@@ -834,6 +898,96 @@ class Fabric(nx.MultiGraph):
 
         is_success = resp is not None and resp.status_code < 300
         # Revisit: finish this
+
+    def zeroconf_update(self):
+        mainapp = self.mainapp
+        prev_info = mainapp.zeroconfInfo
+        props = prev_info.properties
+        props['pfm'] = 1
+        # Revisit: refactor - duplicates zeroconf_register
+        new_info = ServiceInfo(
+            '_genz-fm._tcp.local.',
+            f'zephyr{self.fabnum}.{mainapp.hostname}._genz-fm._tcp.local.',
+            addresses=[socket.inet_aton(mainapp.ip)],
+            port=mainapp.port,
+            properties=props,
+            server=f'{mainapp.hostname}.local.'
+        )
+        mainapp.zeroconf.update_service(new_info)
+        mainapp.zeroconfInfo = new_info
+
+    def promote_sfm_to_pfm(self):
+        first = self.promote_sfm_refcount.inc()
+        log.debug(f'promote_sfm_to_pfm: first={first}')
+        if not first:
+            return
+        log.warning('promoting SFM to PFM')
+        zephyr_conf.is_sfm = False
+        # cancel heartbeat
+        self.heartbeat.stop()
+        # install SFM as PFM in every component, remove SFM
+        # from every component, remove PFM routes
+        for comp in self.components.values():
+            comp.promote_sfm_to_pfm(self.sfm, self.pfm)
+        # update zeroconf
+        self.zeroconf_update()
+        # Revisit: ask llamas on former-PFM to remove all fabric components?
+        self.pfm, self.sfm = self.sfm, None
+        self.pfm_fm = None
+
+    def check_pfm(self, fm: 'FM'):
+        url, _ = self.endpoints_url(fm, fm_endpoint='fabric/topology')
+        log.debug(f'check_pfm: checking {url} at {time.monotonic()}')
+        # just get the HEAD - no data needed
+        try:
+            # Revisit: use requests.Session & HTTPAdapter to retry before giving up
+            r = requests.head(url=url, timeout=1) # Revisit: timeout hardcoded
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+            self.promote_sfm_to_pfm()
+
+
+class RepeatedTimer(sched.scheduler):
+    def __init__(self, interval, function, *args, **kwargs):
+        super().__init__() # defaults to time.monotonic/time.sleep
+        self._event     = None
+        self._thread    = None
+        self.interval   = interval
+        self.function   = function
+        self.args       = args
+        self.kwargs     = kwargs
+        self.is_running = False
+
+    def _thread_run(self):
+        log.debug(f'RepeatedTimer started @ {time.monotonic()}')
+        while self.is_running:
+            if self._event is None:
+                # self.function will be called after delay of self.interval
+                self._event = self.enter(self.interval, 1, self.function,
+                                         argument=self.args, kwargs=self.kwargs)
+            else:
+                # guarantee no drift by using enterabs with previous event time + interval
+                self._event = self.enterabs(self._event.time + self.interval, 1,
+                                            self.function,
+                                            argument=self.args, kwargs=self.kwargs)
+            self.run()  # wait for _event
+        # end while
+
+    def start(self, interval=None):
+        if interval is not None: # override the interval from __init__ if desired
+            self.interval = interval
+        if self._thread is None:
+            self._thread = Thread(target=self._thread_run, daemon=True)
+        if not self.is_running: # if already started, do nothing
+            self.is_running = True
+            self._thread.start()
+
+    def stop(self):
+        self.is_running = False # current thread will exit while loop
+        self._thread = None     # next start() will create new thread
+        try:
+            self.cancel(self._event)
+        except ValueError:      # if _event is not valid
+            pass
 
 
 class FM():

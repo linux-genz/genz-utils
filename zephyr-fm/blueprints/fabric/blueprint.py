@@ -5,6 +5,7 @@ import logging
 import socket
 import jsonschema
 import json
+import time
 from pdb import set_trace
 
 import flask_fat
@@ -14,7 +15,7 @@ log = logging.getLogger('zephyr')
 
 """ ----------------------- ROUTES --------------------- """
 
-@Journal.BP.route('/%s/topology' % (Journal.name), methods=['GET'])
+@Journal.BP.route(f'/{Journal.name}/topology', methods=['GET'])
 def topology():
     """
         Accepts GET request and returns a json body describing the fabric
@@ -26,6 +27,7 @@ def topology():
         'graph'      : {
            'fab_uuid' : 'string',
            'mgr_uuids': [ 'string' ],
+           'timestamp': int,  # from time.time_ns()
         },
         'nodes': [
           {
@@ -55,10 +57,10 @@ def topology():
     mainapp = Journal.mainapp
     fab = mainapp.conf.fab
 
-    return flask.make_response(fab.to_json(), 200)
+    return flask.make_response(flask.jsonify(fab.to_json()), 200)
 
 
-@Journal.BP.route('/%s/resources' % (Journal.name), methods=['GET'])
+@Journal.BP.route(f'/{Journal.name}/resources', methods=['GET'])
 def resources():
     """
         Accepts GET request and returns a json body describing the fabric
@@ -74,10 +76,10 @@ def resources():
     mainapp = Journal.mainapp
     fab = mainapp.conf.fab
 
-    return flask.make_response(fab.resources.to_json(), 200)
+    return flask.make_response(flask.jsonify(fab.resources.to_json()), 200)
 
 
-@Journal.BP.route('/%s/routes' % (Journal.name), methods=['GET'])
+@Journal.BP.route(f'/{Journal.name}/routes', methods=['GET'])
 def routes():
     """
         Accepts GET request and returns a json body describing the fabric
@@ -105,10 +107,47 @@ def routes():
     mainapp = Journal.mainapp
     fab = mainapp.conf.fab
 
-    return flask.make_response(fab.routes.to_json(), 200)
+    return flask.make_response(flask.jsonify(fab.routes.to_json()), 200)
 
 
-@Journal.BP.route('/%s/uep' % (Journal.name), methods=['POST'])
+@Journal.BP.route(f'/{Journal.name}/endpoints', methods=['GET'])
+def endpoints():
+    """
+        Accepts GET request and returns a json body describing the registered
+    fabric endpoints (and the fabric_uuid).
+    Returned body model:
+    {
+        'fab_uuid' : 'string',
+        'timestamp': 'int', # from time.time_ns()
+    # Revisit: fix this
+        'endpoints': {
+          {
+            'id'           : 'string',
+            'instance_uuid': 'string',
+            'cclass'       : 'number',
+            'mgr_uuid'     : 'string',
+            'gcids'        : [ 'string' ],
+            'fru_uuid'     : 'string',
+            'max_data'     : 'number',
+            'max_iface'    : 'number',
+          }
+        }
+    }
+
+    """
+    global Journal
+    mainapp = Journal.mainapp
+    fab = mainapp.conf.fab
+    desc = {
+        'fab_uuid': str(fab.fab_uuid),
+        'timestamp': time.time_ns(),
+        'endpoints': mainapp.llamas_callbacks
+    }
+
+    return flask.make_response(flask.jsonify(desc), 200)
+
+
+@Journal.BP.route(f'/{Journal.name}/uep', methods=['POST'])
 def uep():
     """
         Accepts POST request with a json body describing the UEP and the
@@ -156,8 +195,18 @@ def uep():
 @Journal.BP.route('/%s/routes/add' % (Journal.name), methods=['POST'])
 def routes_add():
     """
-        Accepts POST request with a json body describing the UEP and the
-    component that received it.
+        Accepts POST request with a json body describing the routes to add.
+    Body model:
+    {
+        'fab_uuid'    : 'string',
+        'routes'      : {
+              'From(SID:CID)->To(SID:CID)': [
+                  'SID:CID.Iface->SID:CID.Iface',
+                  ...
+              ],
+              ...
+        }
+    }
     """
     global Journal
     mainapp = Journal.mainapp
@@ -176,8 +225,8 @@ def routes_add():
 @Journal.BP.route('/%s/routes/remove' % (Journal.name), methods=['POST'])
 def routes_remove():
     """
-        Accepts POST request with a json body describing the UEP and the
-    component that received it.
+        Accepts POST request with a json body describing the routes to remove.
+    Body model: See routes_add()
     """
     global Journal
     mainapp = Journal.mainapp
@@ -185,9 +234,106 @@ def routes_remove():
     body = flask.request.get_json()
 
     if body is None:
-        msg = { 'error ' : ''}
+        msg = { 'error ' : 'body is None'}
         return flask.make_response(flask.jsonify(msg), 400)
 
     # Revisit: validate json against schema
     resp = fab.remove_routes(body)
     return flask.make_response(flask.jsonify(resp), 200)
+
+
+@Journal.BP.route(f'/{Journal.name}/routes/sfm_routes', methods=['POST'])
+def sfm_routes():
+    """
+        Accepts POST request with a json body detailing the route changes
+    that the PFM wants to alert the SFM about.
+    POST body model:
+    {
+        'fabric_uuid' : 'string',
+        'mgr_uuid'    : 'string',
+        'operation'   : 'string',  # 'add' or 'remove'
+        'routes': {
+          # See routes_add()
+        }
+    }
+    """
+    global Journal
+    mainapp = Journal.mainapp
+    body = flask.request.get_json()
+    fab = mainapp.conf.fab
+
+    if body is None:
+        msg = { 'error ' : 'body is None'}
+        return flask.make_response(flask.jsonify(msg), 400)
+
+    # Revisit: validate json against schema
+    routes = body.get('routes', None)
+    fabric_uuid = body.get('fabric_uuid', None)
+    # Revisit: check mgr_uuid
+    op = body.get('operation', None)
+
+    # Check that the fabric_uuid matches ours
+    if fabric_uuid != str(fab.fab_uuid):
+        msg = { 'error' : f'Incorrect fabric_uuid: {fabric_uuid}.' }
+        return flask.make_response(flask.jsonify(msg), 404)
+
+    # Check for a valid operation
+    if not op in [ 'add', 'remove' ]:
+        msg = { 'error' : f'Unknown operation: {op}.' }
+        return flask.make_response(flask.jsonify(msg), 404)
+    set_trace() # Revisit: temp debug
+    if op == 'add':
+        response = fab.add_routes(routes, send=False)
+    else: # op == 'remove'
+        response = fab.remove_routes(routes, send=False)
+
+    response['success'].append(f'{op}')
+    return flask.make_response(flask.jsonify(response), 200)
+
+@Journal.BP.route(f'/{Journal.name}/sfm_endpoints', methods=['POST'])
+def sfm_endpoints():
+    """
+        Accepts POST request with a json body detailing the endpoint changes
+    that the PFM wants to alert the SFM about.
+    POST body model:
+    {
+        'fabric_uuid' : 'string',
+        'mgr_uuid'    : 'string',
+        'operation'   : 'string',  # 'add' or 'remove'
+        'endpoints': {
+          # Revisit: finish this
+        }
+    }
+    """
+    global Journal
+    mainapp = Journal.mainapp
+    body = flask.request.get_json()
+    fab = mainapp.conf.fab
+
+    if body is None:
+        msg = { 'error ' : 'body is None'}
+        return flask.make_response(flask.jsonify(msg), 400)
+
+    # Revisit: validate json against schema
+    routes = body.get('routes', None)
+    fabric_uuid = body.get('fabric_uuid', None)
+    # Revisit: check mgr_uuid
+    op = body.get('operation', None)
+
+    # Check that the fabric_uuid matches ours
+    if fabric_uuid != str(fab.fab_uuid):
+        msg = { 'error' : f'Incorrect fabric_uuid: {fabric_uuid}.' }
+        return flask.make_response(flask.jsonify(msg), 404)
+
+    # Check for a valid operation
+    if not op in [ 'add', 'remove' ]:
+        msg = { 'error' : f'Unknown operation: {op}.' }
+        return flask.make_response(flask.jsonify(msg), 404)
+    set_trace() # Revisit: temp debug
+    if op == 'add':
+        response = fab.add_routes(routes, send=False)
+    else: # op == 'remove'
+        response = fab.remove_routes(routes, send=False)
+
+    response['success'].append(f'{op}')
+    return flask.make_response(flask.jsonify(response), 200)

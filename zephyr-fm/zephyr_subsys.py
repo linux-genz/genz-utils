@@ -110,7 +110,7 @@ def cmd_add(url, **args):
 def zeroconf_register(fab, mainapp):
     desc = {'mgr_uuid': fab.mgr_uuid.bytes,
             'fab_uuid': fab.fab_uuid.bytes,
-            'pfm': int(not args.sfm)}
+            'pfm': int(not zephyr_conf.is_sfm)}
     info = ServiceInfo(
         '_genz-fm._tcp.local.',
         f'zephyr{fab.fabnum}.{mainapp.hostname}._genz-fm._tcp.local.',
@@ -151,6 +151,8 @@ def main():
                         help='reclaim C-Up components via reset')
     parser.add_argument('-s', '--sfm', action='store_true',
                         help='run as Secondary Fabric Manager')
+    parser.add_argument('-H', '--sfm-heartbeat', default=5, type=float,
+                        help='SFM heartbeat interval')
     parser.add_argument('-M', '--max-routes', action='store', default=None, type=int,
                         help='limit number of routes between components')
     parser.add_argument('-R', '--random-cids', action='store_true',
@@ -168,6 +170,8 @@ def main():
                         type=float, help='Control DRTO')
     parser.add_argument('--no-nonce', action='store_true',
                         help='do no nonce exchanges')
+    parser.add_argument('--write-mgruuid', action='store_true',
+                        help='Write MGR-UUID workaround for broken capture')
     ip_group = parser.add_mutually_exclusive_group()
     ip_group.add_argument('--ip6', action='store_true',
                           help='listen on IPv4 and IPv6')
@@ -187,7 +191,11 @@ def main():
         data = conf.read_conf_file()
         fab_uuid = UUID(data['fabric_uuid'])
         if args.reclaim:
-            mgr_uuid = UUID(data['mgr_uuid'])
+            try:
+                mgr_uuid = UUID(data['mgr_uuid'])
+            except (KeyError, ValueError):
+                log.error('Missing/invalid conf file mgr_uuid with --reclaim')
+                return
     except FileNotFoundError:
         # create new skeleton file
         data = {}
@@ -201,7 +209,7 @@ def main():
         # Revisit: use pub/priv keys to establish a session key
         data['aesgcm_key'] = b64encode(key).decode('ascii')
         conf.write_conf_file(data)
-    log.debug('conf={}'.format(conf))
+    log.debug(f'conf={conf}')
     fabrics = {}
     if args.keyboard > 3:
         set_trace()
@@ -223,7 +231,7 @@ def main():
                      accept_cids=args.accept_cids, fab_uuid=fab_uuid,
                      conf=conf, mgr_uuid=mgr_uuid, verbosity=args.verbosity)
         fabrics[fab_path] = fab
-        conf.set_fab(fab)
+        conf.set_fab(fab, writeConf=(not args.sfm))
         if args.keyboard > 1:
             set_trace()
         if args.sfm:
@@ -246,10 +254,10 @@ def main():
     if args.keyboard > 3:
         set_trace()
 
-    zeroconf = zeroconf_register(fab, mainapp)
-    if args.sfm:
+    mainapp.zeroconf = zeroconf_register(fab, mainapp)
+    if zephyr_conf.is_sfm:
         log.info('running as secondary fabric manager')
-        mainapp.zeroconfBrowser = fab.zeroconf_browser(zeroconf)
+        mainapp.zeroconfBrowser = fab.zeroconf_browser(mainapp.zeroconf)
 
     if args.keyboard > 3:
         set_trace()
@@ -260,8 +268,8 @@ def main():
         pass
     finally:
         log.info('zeroconf unregister service')
-        zeroconf.unregister_service(mainapp.zeroconfInfo)
-        zeroconf.close()
+        mainapp.zeroconf.unregister_service(mainapp.zeroconfInfo)
+        mainapp.zeroconf.close()
         log.info('terminate UEP process')
         uep_proc.terminate()
         uep_proc.join()

@@ -59,10 +59,11 @@ class Conf():
         self.file = file
         self.fab = None  # set by set_fab()
 
-    def set_fab(self, fab):
+    def set_fab(self, fab, writeConf=True):
         self.fab = fab
-        self.data['mgr_uuid'] = str(fab.mgr_uuid)
-        self.write_conf_file(self.data)
+        if writeConf:
+            self.data['mgr_uuid'] = str(fab.mgr_uuid)
+            self.write_conf_file(self.data)
 
     def read_conf_file(self):
         with open(self.file, 'r') as f:
@@ -125,6 +126,8 @@ class Conf():
         log.info('finished adding resources from {}'.format(self.file))
 
     def fab_resources(self, fab_res) -> None:
+        '''Called by SFM with resources fetched from PFM
+        '''
         if fab_res is None:
             log.error('PFM fab resources is None')
             return
@@ -133,7 +136,7 @@ class Conf():
             return
         log.info('adding resources from PFM')
         for fres in fab_res:
-            self.add_resource(fres, op='add')
+            self.add_resource(fres, op='add', send=False)
         log.info('finished adding resources from PFM')
 
     def remove_resource(self, conf_rm, send=True, op=None) -> dict:

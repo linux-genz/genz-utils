@@ -25,10 +25,11 @@ import ctypes
 import json
 import re
 from typing import List, Tuple
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
+from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount
 from pdb import set_trace
 from itertools import product
 import bisect
+import time
 from zephyr_conf import log
 from zephyr_iface import Interface
 from zephyr_comp import Component
@@ -95,40 +96,65 @@ class RouteElement():
             self.rt_num = free
         return True
 
-    def set_ssdt(self, to: Component, valid=1, update_rt_num=False):
-        if update_rt_num:
-            self.route_entries_avail(self.comp, to)
-        mhc, wr0, wrN = self.comp.compute_mhc(to.gcid.cid, self.rt_num,
-                                              self.hc, valid)
+    def set_ssdt(self, to: Component, valid=1, updateRtNum=False,
+                 refcountOnly=False):
+        comp = self.comp
+        if comp.ssdt is None:
+            return
+        if updateRtNum:
+            self.route_entries_avail(comp, to)
+        wrR = (comp.ssdt_refcount.inc(to.gcid.cid, self.rt_num) if valid
+               else comp.ssdt_refcount.dec(to.gcid.cid, self.rt_num))
+        if refcountOnly:
+            return
+        mhc, wr0, wrN = comp.compute_mhc(to.gcid.cid, self.rt_num,
+                                         self.hc, valid)
         # Revisit: vca
-        if wrN:
-            self.comp.ssdt_write(to.gcid.cid, self.egress_iface.num,
+        if wrN or wrR:
+            comp.ssdt_write(to.gcid.cid, self.egress_iface.num,
+                            rt=self.rt_num, valid=valid, mhc=mhc, hc=self.hc)
+        # Revisit: ok to do 2 independent writes? Which order?
+        if wr0:
+            comp.ssdt_write(to.gcid.cid, 0, mhc=mhc, mhcOnly=True)
+
+    def set_lprt(self, to: Component, valid=1, updateRtNum=False,
+                 refcountOnly=False):
+        iface = self.ingress_iface
+        if updateRtNum:
+            self.route_entries_avail(self.comp, to)
+        wrR = (iface.lprt_refcount.inc(to.gcid.cid, self.rt_num) if valid
+               else iface.lprt_refcount.dec(to.gcid.cid, self.rt_num))
+        if refcountOnly:
+            return
+        mhc, wr0, wrN = iface.compute_mhc(to.gcid.cid, self.rt_num,
+                                          self.hc, valid)
+        # Revisit: vca
+        if wrN or wrR:
+            iface.lprt_write(to.gcid.cid, self.egress_iface.num,
                              rt=self.rt_num, valid=valid, mhc=mhc, hc=self.hc)
         # Revisit: ok to do 2 independent writes? Which order?
         if wr0:
-            self.comp.ssdt_write(to.gcid.cid, 0, mhc=mhc, mhcOnly=True)
-
-    def set_lprt(self, to: Component, valid=1):
-        mhc, wr0, wrN = self.ingress_iface.compute_mhc(to.gcid.cid, self.rt_num,
-                                                       self.hc, valid)
-        # Revisit: vca
-        if wrN:
-            self.ingress_iface.lprt_write(to.gcid.cid, self.egress_iface.num,
-                                      rt=self.rt_num, valid=valid, mhc=mhc,
-                                      hc=self.hc)
-        # Revisit: ok to do 2 independent writes? Which order?
-        if wr0:
-            self.ingress_iface.lprt_write(to.gcid.cid, 0, mhc=mhc, mhcOnly=True)
+            iface.lprt_write(to.gcid.cid, 0, mhc=mhc, mhcOnly=True)
 
     def to_json(self):
         return str(self)
 
     def __eq__(self, other):
+        if not isinstance(other, RouteElement):
+            return NotImplemented
         return (self.comp == other.comp and
                 self.ingress_iface == other.ingress_iface and
                 self.egress_iface == other.egress_iface and
                 self.to_iface == other.to_iface and
                 self.dr == other.dr)
+
+    def __lt__(self, other):
+        if not isinstance(other, RouteElement):
+            return NotImplemented
+        return (self != other and
+                (self.gcid < other.gcid or
+                 self.egress_iface < other.egress_iface or
+                 self.dr < other.dr))
 
     def __str__(self):
         # Revisit: handle self.dr and vca
@@ -161,6 +187,7 @@ class Route():
         self._path = path
         self._elems = [] if elems is None else elems
         self.ifaces = set()
+        self.refcount = RefCount()
         ingress_iface = None
         if elems is None:
             hc = path_len - 2
@@ -244,7 +271,7 @@ class Route():
         return rts
 
     def to_json(self):
-        return self._elems
+        return [e.to_json() for e in self._elems]
 
     def __getitem__(self, key):
         return self._elems[key]
@@ -259,11 +286,20 @@ class Route():
         return hash(repr(self))
 
     def __eq__(self, other): # all elements in list must match
+        if not isinstance(other, Route):
+            return NotImplemented
         return self._elems == other._elems
 
-    def __lt__(self, other): # only compare route length (hop count)
+    def __lt__(self, other): # first compare route length (hop count)
         # Revisit: consider bandwidth & latency
-        return len(self) < len(other)
+        if not isinstance(other, Route):
+            return NotImplemented
+        self_len = len(self)
+        other_len = len(other)
+        if self_len != other_len:
+            return self_len < other_len
+        # if lengths are the same, order by comparing all route elements
+        return self._elems < other._elems
 
     def __repr__(self):
         return '(' + ','.join('{}'.format(e) for e in self._elems) + ')'
@@ -386,14 +422,19 @@ class Routes():
     def to_json(self):
         routes_dict = {}
         for k, v in self.fr_to.items():
-            routes_dict[str(k[0]) + '->' + str(k[1])] = v
+            routes_dict[str(k[0]) + '->' + str(k[1])] = [r.to_json() for r in v]
         top_dict = { 'fab_uuid': str(self.fab_uuid),
+                     'timestamp': time.time_ns(),
                      'routes': routes_dict
                     }
-        js = json.dumps(top_dict, indent=2) # Revisit: indent
-        return js
+        return top_dict
 
     def __str__(self):
         r = 'fab_uuid: {}, '.format(self.fab_uuid)
         r += 'routes: {}'.format(self.fr_to)
         return '{' + r + '}'
+
+    def __iter__(self):
+        for rts in self.fr_to.values():
+            for rt in rts:
+                yield rt

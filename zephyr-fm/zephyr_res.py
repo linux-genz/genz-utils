@@ -23,6 +23,7 @@
 
 import ctypes
 import json
+import time
 from uuid import UUID, uuid4
 from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
 from pdb import set_trace
@@ -162,7 +163,7 @@ class Resources():
 
     def to_json(self):
         res_dict = { 'fab_uuid': str(self.fab.fab_uuid),
-                 'fab_resources': [ res.to_json() for prod in self.by_producer.values() for res in prod ]
+                     'timestamp': time.time_ns(),
+                     'fab_resources': [ res.to_json() for prod in self.by_producer.values() for res in prod ]
                     }
-        js = json.dumps(res_dict, indent=2) # Revisit: indent
-        return js
+        return res_dict
