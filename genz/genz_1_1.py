@@ -1852,7 +1852,7 @@ class ControlStructureMap(LittleEndianStructure):
                 'component_sw_management'     : 'ComponentSWManagementStructure',
                 'unknown'                     : 'UnknownStructure',
                 # Revisit: add more tables
-                'opcode_set_table'            : 'OpCodeSetTable',
+                'opcode_set_table'            : 'OpCodeSetTableFactory',
                 'opcode_set_uuid'             : 'OpCodeSetUUIDTable',
                 'req_vcat'                    : 'RequesterVCATTable',
                 'rsp_vcat'                    : 'ResponderVCATTable',
@@ -2385,66 +2385,114 @@ class OpCodeSetStructure(ControlStructure):
 
     _special_dict = {'CAP1': OpCodeSetCAP1, 'CAP1Control': OpCodeSetCAP1Control}
 
-class OpCodeSetTable(ControlTable):
-    _fields_ = [('SetID',                          c_u64,  3),
-                ('R0',                             c_u64, 13),
+# base class from which to dynamically build OpCodeSetTable
+class OpCodeSetTableTemplate(ControlTable):
+    _fields  = [('SetID',                          c_u64,  3), #0x0
+                ('R0',                             c_u64,  5),
+                ('Version',                        c_u64,  8),
                 ('Control1',                       c_u64, 16),
                 ('NextOpcodeSetPtr',               c_u64, 32),
-                ('R1',                             c_u64, 64),
-                ('SupportedCore64OpCodeSet',       c_u64, 64),
-                ('EnabledCore64OpCodeSet',         c_u64, 64),
-                ('SupportedControlOpCodeSet',      c_u64, 64),
-                ('EnabledControlOpCodeSet',        c_u64, 64),
-                ('SupportedP2P64OpCodeSet',        c_u64, 64),
-                ('EnabledP2P64OpCodeSet',          c_u64, 64),
-                ('SupportedAtomic1OpCodeSet',      c_u64, 64),
-                ('EnabledAtomic1OpCodeSet',        c_u64, 64),
-                ('SupportedLDM1OpCodeSet',         c_u64, 64),
-                ('EnabledLDM1OpCodeSet',           c_u64, 64),
-                ('SupportedAdvanced1OpCodeSet',    c_u64, 64),
-                ('EnabledAdvanced1OpCodeSet',      c_u64, 64),
-                # Revisit: Advanced2 (0x5) is missing in Core spec
-                ('SupportedOpClass0x6OpCodeSet',   c_u64, 64),
+                ('R1',                             c_u64, 64), #0x8
+                ('SupportedCore64OpCodeSet',       c_u64, 64), #0x10
+                ('EnabledCore64OpCodeSet',         c_u64, 64), #0x18
+                ('SupportedControlOpCodeSet',      c_u64, 64), #0x20
+                ('EnabledControlOpCodeSet',        c_u64, 64), #0x28
+                ('SupportedP2P64OpCodeSet',        c_u64, 64), #0x30
+                ('EnabledP2P64OpCodeSet',          c_u64, 64), #0x38
+                ('SupportedAtomic1OpCodeSet',      c_u64, 64), #0x40
+                ('EnabledAtomic1OpCodeSet',        c_u64, 64), #0x48
+                ('SupportedLDM1OpCodeSet',         c_u64, 64), #0x50
+                ('EnabledLDM1OpCodeSet',           c_u64, 64), #0x58
+                ('SupportedAdvanced1OpCodeSet',    c_u64, 64), #0x60
+                ('EnabledAdvanced1OpCodeSet',      c_u64, 64), #0x68
+                ]
+    _v0_fields = [
+                ('SupportedOpClass0x6OpCodeSet',   c_u64, 64), #0x70
                 ('EnabledOpClass0x6OpCodeSet',     c_u64, 64),
-                ('SupportedOpClass0x7OpCodeSet',   c_u64, 64),
+                ('SupportedOpClass0x7OpCodeSet',   c_u64, 64), #0x80
                 ('EnabledOpClass0x7OpCodeSet',     c_u64, 64),
-                ('SupportedOpClass0x8OpCodeSet',   c_u64, 64),
+                ('SupportedOpClass0x8OpCodeSet',   c_u64, 64), #0x90
                 ('EnabledOpClass0x8OpCodeSet',     c_u64, 64),
-                ('SupportedOpClass0x9OpCodeSet',   c_u64, 64),
+                ('SupportedOpClass0x9OpCodeSet',   c_u64, 64), #0xA0
                 ('EnabledOpClass0x9OpCodeSet',     c_u64, 64),
-                ('SupportedOpClass0xaOpCodeSet',   c_u64, 64),
+                ('SupportedOpClass0xaOpCodeSet',   c_u64, 64), #0xB0
                 ('EnabledOpClass0xaOpCodeSet',     c_u64, 64),
-                ('SupportedOpClass0xbOpCodeSet',   c_u64, 64),
+                ('SupportedOpClass0xbOpCodeSet',   c_u64, 64), #0xC0
                 ('EnabledOpClass0xbOpCodeSet',     c_u64, 64),
-                ('SupportedOpClass0xcOpCodeSet',   c_u64, 64),
+                ('SupportedOpClass0xcOpCodeSet',   c_u64, 64), #0xD0
                 ('EnabledOpClass0xcOpCodeSet',     c_u64, 64),
-                ('SupportedOpClass0xdOpCodeSet',   c_u64, 64),
+                ('SupportedOpClass0xdOpCodeSet',   c_u64, 64), #0xE0
                 ('EnabledOpClass0xdOpCodeSet',     c_u64, 64),
-                ('SupportedOpClass0xeOpCodeSet',   c_u64, 64),
+                ('SupportedOpClass0xeOpCodeSet',   c_u64, 64), #0xF0
                 ('EnabledOpClass0xeOpCodeSet',     c_u64, 64),
-                ('SupportedOpClass0xfOpCodeSet',   c_u64, 64),
+                ('SupportedOpClass0xfOpCodeSet',   c_u64, 64), #0x100
                 ('EnabledOpClass0xfOpCodeSet',     c_u64, 64),
-                ('SupportedOpClass0x10OpCodeSet',  c_u64, 64),
+                ('SupportedOpClass0x10OpCodeSet',  c_u64, 64), #0x110
                 ('EnabledOpClass0x10OpCodeSet',    c_u64, 64),
-                ('SupportedOpClass0x11OpCodeSet',  c_u64, 64),
+                ('SupportedOpClass0x11OpCodeSet',  c_u64, 64), #0x120
                 ('EnabledOpClass0x11OpCodeSet',    c_u64, 64),
-                ('SupportedOpClass0x12OpCodeSet',  c_u64, 64),
+                ('SupportedOpClass0x12OpCodeSet',  c_u64, 64), #0x130
                 ('EnabledOpClass0x12OpCodeSet',    c_u64, 64),
-                ('SupportedOpClass0x13OpCodeSet',  c_u64, 64),
+                ('SupportedOpClass0x13OpCodeSet',  c_u64, 64), #0x140
                 ('EnabledOpClass0x13OpCodeSet',    c_u64, 64),
-                ('SupportedDROpCodeSet',           c_u64, 64),
+                ('SupportedDROpCodeSet',           c_u64, 64), #0x150
                 ('EnabledDROpCodeSet',             c_u64, 64),
-                ('SupportedCtxIdOpCodeSet',        c_u64, 64),
+                ('SupportedCtxIdOpCodeSet',        c_u64, 64), #0x160
                 ('EnabledCtxIdOpCodeSet',          c_u64, 64),
-                ('SupportedMulticastOpCodeSet',    c_u64, 64),
+                ('SupportedMulticastOpCodeSet',    c_u64, 64), #0x170
                 ('EnabledMulticastOpCodeSet',      c_u64, 64),
-                ('SupportedSODOpCodeSet',          c_u64, 64),
+                ('SupportedSODOpCodeSet',          c_u64, 64), #0x180
                 ('EnabledSODOpCodeSet',            c_u64, 64),
-                ('SupportedMultiOpReqSubOpSet',    c_u64, 64),
+                ('SupportedMultiOpReqSubOpSet',    c_u64, 64), #0x190
                 ('EnabledMultiOpReqSubOpSet',      c_u64, 64),
-                ('SupportedReadMultiOpSet',        c_u64, 32),
+                ('SupportedReadMultiOpSet',        c_u64, 32), #0x1A0
                 ('EnabledReadMultiOpSet',          c_u64, 32),
-                ('R2',                             c_u64, 64),
+                ('R2',                             c_u64, 64), #0x1A8
+                ]
+    _v1_fields = [
+                ('SupportedAdvanced2OpCodeSet',    c_u64, 64), #0x70
+                ('EnabledAdvanced2OpCodeSet',      c_u64, 64),
+                ('SupportedOpClass0x6OpCodeSet',   c_u64, 64), #0x80
+                ('EnabledOpClass0x6OpCodeSet',     c_u64, 64),
+                ('SupportedOpClass0x7OpCodeSet',   c_u64, 64), #0x90
+                ('EnabledOpClass0x7OpCodeSet',     c_u64, 64),
+                ('SupportedOpClass0x8OpCodeSet',   c_u64, 64), #0xA0
+                ('EnabledOpClass0x8OpCodeSet',     c_u64, 64),
+                ('SupportedOpClass0x9OpCodeSet',   c_u64, 64), #0xB0
+                ('EnabledOpClass0x9OpCodeSet',     c_u64, 64),
+                ('SupportedOpClass0xaOpCodeSet',   c_u64, 64), #0xC0
+                ('EnabledOpClass0xaOpCodeSet',     c_u64, 64),
+                ('SupportedOpClass0xbOpCodeSet',   c_u64, 64), #0xD0
+                ('EnabledOpClass0xbOpCodeSet',     c_u64, 64),
+                ('SupportedOpClass0xcOpCodeSet',   c_u64, 64), #0xE0
+                ('EnabledOpClass0xcOpCodeSet',     c_u64, 64),
+                ('SupportedOpClass0xdOpCodeSet',   c_u64, 64), #0xF0
+                ('EnabledOpClass0xdOpCodeSet',     c_u64, 64),
+                ('SupportedOpClass0xeOpCodeSet',   c_u64, 64), #0x100
+                ('EnabledOpClass0xeOpCodeSet',     c_u64, 64),
+                ('SupportedOpClass0xfOpCodeSet',   c_u64, 64), #0x110
+                ('EnabledOpClass0xfOpCodeSet',     c_u64, 64),
+                ('SupportedOpClass0x10OpCodeSet',  c_u64, 64), #0x120
+                ('EnabledOpClass0x10OpCodeSet',    c_u64, 64),
+                ('SupportedOpClass0x11OpCodeSet',  c_u64, 64), #0x130
+                ('EnabledOpClass0x11OpCodeSet',    c_u64, 64),
+                ('SupportedOpClass0x12OpCodeSet',  c_u64, 64), #0x140
+                ('EnabledOpClass0x12OpCodeSet',    c_u64, 64),
+                ('SupportedOpClass0x13OpCodeSet',  c_u64, 64), #0x150
+                ('EnabledOpClass0x13OpCodeSet',    c_u64, 64),
+                ('SupportedDROpCodeSet',           c_u64, 64), #0x160
+                ('EnabledDROpCodeSet',             c_u64, 64),
+                ('SupportedCtxIdOpCodeSet',        c_u64, 64), #0x170
+                ('EnabledCtxIdOpCodeSet',          c_u64, 64),
+                ('SupportedMulticastOpCodeSet',    c_u64, 64), #0x180
+                ('EnabledMulticastOpCodeSet',      c_u64, 64),
+                ('SupportedSODOpCodeSet',          c_u64, 64), #0x190
+                ('EnabledSODOpCodeSet',            c_u64, 64),
+                ('SupportedMultiOpReqSubOpSet',    c_u64, 64), #0x1A0
+                ('EnabledMultiOpReqSubOpSet',      c_u64, 64),
+                ('SupportedReadMultiOpSet',        c_u64, 32), #0x1B0
+                ('EnabledReadMultiOpSet',          c_u64, 32),
+                ('R2',                             c_u64, 64), #0x1B8
                 ]
 
     _ptr_fields = ['NextOpcodeSetPtr']
@@ -2462,16 +2510,35 @@ class OpCodeSetTable(ControlTable):
                       'EnabledLDM1OpCodeSet'          : LDM1Opcodes,
                       'SupportedAdvanced1OpCodeSet'   : Adv1Opcodes,
                       'EnabledAdvanced1OpCodeSet'     : Adv1Opcodes,
+                      'SupportedAdvanced2OpCodeSet'   : Adv2Opcodes,
+                      'EnabledAdvanced2OpCodeSet'     : Adv2Opcodes,
                       'SupportedDROpCodeSet'          : DROpcodes,
                       'EnabledDROpCodeSet'            : DROpcodes,
-                      'SupportedCtxIdOpCodeSet'       : CTXIDOpcodes,
-                      'EnabledCtxIdOpCodeSet'         : CTXIDOpcodes,
+                      'SupportedCtxIdOpCodeSet'       : CtxIdOpcodes,
+                      'EnabledCtxIdOpCodeSet'         : CtxIdOpcodes,
                       'SupportedMulticastOpCodeSet'   : MulticastOpcodes,
                       'EnabledMulticastOpCodeSet'     : MulticastOpcodes,
                       'SupportedSODOpCodeSet'         : SODOpcodes,
                       'EnabledSODOpCodeSet'           : SODOpcodes,
-                      # Revisit: jmh - finish this
-    }
+                      # Revisit: jmh - finish this - MultiOp
+                      }
+
+# factory class to dynamically build OpCodeSetTable
+class OpCodeSetTableFactory(ControlTable):
+    def from_buffer(data, offset=0):
+        sz = len(data)
+        opcode_set = OpCodeSetTable.from_buffer(data, offset)
+        if opcode_set.Version > 0: # Revisit: not right for v2+
+            fields = OpCodeSetTableTemplate._fields + OpCodeSetTableTemplate._v1_fields
+        else:
+            fields = OpCodeSetTableTemplate._fields + OpCodeSetTableTemplate._v0_fields
+        OpCodeSet = type('OpCodeSetTable',
+                         (OpCodeSetTableTemplate,), {'_fields_': fields,
+                                                     'Size': sz})
+        return OpCodeSet.from_buffer(data, offset)
+
+class OpCodeSetTable(ControlTable):
+    _fields_ = OpCodeSetTableTemplate._fields
 
 class OpCodeSetUUIDTable(ControlTable):
     _fields_ = [('SupportedP2PVdefSet',            c_u64, 64),
