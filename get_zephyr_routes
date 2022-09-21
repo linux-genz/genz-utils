@@ -6,4 +6,4 @@ port=${3:-2021}
 zephyr="http://${host}:${port}"
 echo "curl -s -o ${file} ${zephyr}/fabric/routes"
 curl -s -o ${file} ${zephyr}/fabric/routes
-cat $file
+jq < $file
