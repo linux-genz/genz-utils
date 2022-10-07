@@ -119,6 +119,36 @@ class Reason(IntEnum):
         return '<{}.{}: {:#x}>'.format(
             self.__class__.__name__, self._name_, self._value_)
 
+class QD():
+    # Revisit: _map[7] should be "> 87.5%"
+    _map = [ 0.0, 12.5, 25.0, 50.0, 62.5, 75.0, 87.5, 100.0 ]
+
+    def __init__(self, percent=None, val=0):
+        self.update(percent, val)
+
+    def decode(self, val=None) -> float:
+        if val is None:
+            val = self.val
+        return self._map[val]
+
+    def encode(self, percent=None) -> int:
+        if percent is None:
+            percent = self.percent
+        for i, num in enumerate(self._map):
+            if percent <= num:
+                return i
+        raise ValueError('percent must be 0.0 - 100.0')
+
+    def update(self, percent=None, val=0):
+        if percent is not None:
+            self.percent = percent
+            self.val = self.encode(percent)
+        else: # use val
+            self.val = val
+            self.percent = self.decode(val)
+
+    def __repr__(self):
+        return f'QD({self.percent}%)'
 
 class CStatus(SpecialField, Union):
     class CStatusFields(Structure):
