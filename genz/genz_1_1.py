@@ -2607,10 +2607,15 @@ class OpCodeSetTableFactory(ControlTable):
     def from_buffer(data, offset=0):
         sz = len(data)
         opcode_set = OpCodeSetTable.from_buffer(data, offset)
-        if opcode_set.Version > 0: # Revisit: not right for v2+
-            fields = OpCodeSetTableTemplate._fields + OpCodeSetTableTemplate._v1_fields
-        else:
+        if opcode_set.Version == 0:
             fields = OpCodeSetTableTemplate._fields + OpCodeSetTableTemplate._v0_fields
+        elif opcode_set.Version == 1:
+            fields = OpCodeSetTableTemplate._fields + OpCodeSetTableTemplate._v1_fields
+        else: # unknown version - guess format based on sz
+            if sz == 432:
+                fields = OpCodeSetTableTemplate._fields + OpCodeSetTableTemplate._v0_fields
+            else:
+                fields = OpCodeSetTableTemplate._fields + OpCodeSetTableTemplate._v1_fields
         OpCodeSet = type('OpCodeSetTable',
                          (OpCodeSetTableTemplate,), {'_fields_': fields,
                                                      'Size': sz})
