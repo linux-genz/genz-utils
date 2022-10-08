@@ -45,6 +45,64 @@ cclass_name = [ 'reserved',    'memory_p2p64', 'memory',      'int_switch',
                 'block',       'block',        'tr',          'multi_class',
                 'bridge',      'bridge',       'compliance',  'lph' ]
 
+eventName = { 0x00: 'RecovProtocolErr',
+              0x01: 'UnrecovProtocolErr',
+              0x02: 'PossibleMaliciousPkt',
+              0x03: 'IfaceErr',
+              0x04: 'CompContainment',
+              0x07: 'FullIfaceReset',
+              0x08: 'WarmIfaceReset',
+              0x09: 'NewPeerComp',
+              0x0a: 'UnableToCommunicate',
+              0x0b: 'ExcessiveRNRNAK',
+              0x0c: 'BufferOverflow',
+              0x0d: 'FatalMediaContainment',
+              0x0e: 'PrimaryMediaLog',
+              0x0f: 'SecondaryMediaLog',
+              0x10: 'InvalidCompImage',
+              0x11: 'CompThermShutdown',
+              0x12: 'PeerCompC-DLP/C-LPExit',
+              0x13: 'PowerFault',
+              0x14: 'AuxPower',
+              0x15: 'CompFWErr',
+              0x16: 'CompLowPower',
+              0x17: 'PeerCompC-DLP/C-LPEntry',
+              0x18: 'EmergencyPowerReduction',
+              0x19: 'CompPowerOffTransition',
+              0x1a: 'CompPowerRestoration',
+              0x1b: 'IfacePerfDegradation',
+              0x1d: 'MediaMaintRequired',
+              0x1e: 'MediaMaintOverride',
+              0x1f: 'ExceededTransientErrThresh',
+              0x20: 'VdefC-Event',
+              0x21: 'VdefI-Event',
+              0x22: 'NonFatalInternalCompErr',
+              0x23: 'FatalInternalCompErr',
+              0x24: 'CompThermPerfThrottle',
+              0x25: 'CompThermThrottleRestore',
+              0x26: 'PrimaryMediaMaint',
+              0x27: 'SecondaryMediaMaint',
+              0x28: 'Mechanical',
+              0x29: 'ExcessiveE2ERetry',
+              0x2a: 'BISTFailure',
+              0x2b: 'P2PNonTransient',
+              0xf0: 'VdefC-Error0',
+              0xf1: 'VdefC-Error1',
+              0xf2: 'VdefC-Error2',
+              0xf3: 'VdefC-Error3',
+              0xf4: 'Vdef0',
+              0xf5: 'Vdef1',
+              0xf6: 'Vdef2',
+              0xf7: 'Vdef3',
+              0xf8: 'Vdef4',
+              0xf9: 'Vdef5',
+              0xfa: 'Vdef6',
+              0xfb: 'Vdef7',
+              0xfc: 'Vdef8',
+              0xfd: 'Vdef9',
+              0xfe: 'VdefA',
+              0xff: 'VdefB' }
+
 class Reason(IntEnum):
     NoError              = 0x00
     NE                   = 0x00
@@ -2018,13 +2076,9 @@ class ControlStructureMap(LittleEndianStructure):
 class ControlStructure(ControlStructureMap):
     fullEntryWrite = False
 
-    def __init__(self):
-        super().__init__()
-        bitOffset = 0
-        for field in self._fields_:
-            width = field[2]
-            byteOffset, highBit, lowBit, hexWidth = self.bitField(width, bitOffset)
-            field.byteOffset = byteOffset
+    def __init__(self, verbosity=0, **kwargs):
+        self.verbosity = verbosity
+        super().__init__(**kwargs)
 
     def all_ones_type_vers_size(self):
         return self.Type == 0xfff and self.Vers == 0xf and self.Size == 0xffff
@@ -3830,6 +3884,11 @@ class UEPEventRecord(ControlTable):
                 ('R4',                             c_u32, 16),
                 ]
 
+    def __init__(self, verbosity=0, **kwargs):
+        if 'EventName' in kwargs:
+            del kwargs['EventName']
+        super().__init__(verbosity=verbosity, **kwargs)
+
     def dataToRec(data, verbosity=0, csv=False):
         rec = UEPEventRecord.from_buffer(data)
         rec.data = data
@@ -3837,6 +3896,23 @@ class UEPEventRecord(ControlTable):
         rec.csv = csv
         return rec
 
+    def to_json(self):
+        d = {}
+        for field in self._fields_:
+            name = field[0]
+            # Revisit: skip Reserved fields
+            d[name] = getattr(self, name)
+        d['EventName'] = self.EventName
+        return d
+
+    @property
+    def EventName(self):
+        return (eventName[self.Event] if self.Event
+                in eventName else 'Reserved')
+
+    @property
+    def Size(self):
+        return 20
 
 class Packet(LittleEndianStructure):
     _ocl = OpClasses()
@@ -4613,65 +4689,6 @@ class ControlUnsolicitedEventPkt(ExplicitHdr):
     os3_fields = [('R3',                         c_u32,  8), # Byte 24
                   ('ECRC',                       c_u32, 24)]
 
-    eventName = { 0x00: 'RecovProtocolErr',
-                  0x01: 'UnrecovProtocolErr',
-                  0x02: 'PossibleMaliciousPkt',
-                  0x03: 'IfaceErr',
-                  0x04: 'CompContainment',
-                  0x07: 'FullIfaceReset',
-                  0x08: 'WarmIfaceReset',
-                  0x09: 'NewPeerComp',
-                  0x0a: 'UnableToCommunicate',
-                  0x0b: 'ExcessiveRNRNAK',
-                  0x0c: 'BufferOverflow',
-                  0x0d: 'FatalMediaContainment',
-                  0x0e: 'PrimaryMediaLog',
-                  0x0f: 'SecondaryMediaLog',
-                  0x10: 'InvalidCompImage',
-                  0x11: 'CompThermShutdown',
-                  0x12: 'PeerCompC-DLP/C-LPExit',
-                  0x13: 'PowerFault',
-                  0x14: 'AuxPower',
-                  0x15: 'CompFWErr',
-                  0x16: 'CompLowPower',
-                  0x17: 'PeerCompC-DLP/C-LPEntry',
-                  0x18: 'EmergencyPowerReduction',
-                  0x19: 'CompPowerOffTransition',
-                  0x1a: 'CompPowerRestoration',
-                  0x1b: 'IfacePerfDegradation',
-                  0x1d: 'MediaMaintRequired',
-                  0x1e: 'MediaMaintOverride',
-                  0x1f: 'ExceededTransientErrThresh',
-                  0x20: 'VdefC-Event',
-                  0x21: 'VdefI-Event',
-                  0x22: 'NonFatalInternalCompErr',
-                  0x23: 'FatalInternalCompErr',
-                  0x24: 'CompThermPerfThrottle',
-                  0x25: 'CompThermThrottleRestore',
-                  0x26: 'PrimaryMediaMaint',
-                  0x27: 'SecondaryMediaMaint',
-                  0x28: 'Mechanical',
-                  0x29: 'ExcessiveE2ERetry',
-                  0x2a: 'BISTFailure',
-                  0x2b: 'P2PNonTransient',
-                  0xf0: 'VdefC-Error0',
-                  0xf1: 'VdefC-Error1',
-                  0xf2: 'VdefC-Error2',
-                  0xf3: 'VdefC-Error3',
-                  0xf4: 'Vdef0',
-                  0xf5: 'Vdef1',
-                  0xf6: 'Vdef2',
-                  0xf7: 'Vdef3',
-                  0xf8: 'Vdef4',
-                  0xf9: 'Vdef5',
-                  0xfa: 'Vdef6',
-                  0xfb: 'Vdef7',
-                  0xfc: 'Vdef8',
-                  0xfd: 'Vdef9',
-                  0xfe: 'VdefA',
-                  0xff: 'VdefB',
-                }
-
     def dataToPktInit(exp_pkt, data, verbosity):
         fields = ExplicitHdr.hd_fields + ControlUnsolicitedEventPkt.os1_fields
         if exp_pkt.GC:
@@ -4696,8 +4713,8 @@ class ControlUnsolicitedEventPkt(ExplicitHdr):
     def to_json(self):
         jds = super().to_json()
         jd = { 'Event': self.Event,
-               'EventName': (self.eventName[self.Event] if self.Event
-                             in self.eventName else 'Reserved'),
+               'EventName': (eventName[self.Event] if self.Event
+                             in eventName else 'Reserved'),
                'CV': self.CV,
                'SV': self.SV,
                'IV': self.IV,
@@ -4713,7 +4730,7 @@ class ControlUnsolicitedEventPkt(ExplicitHdr):
     def __str__(self):
         r = super().__str__()
         try:
-            evName = self.eventName[self.Event]
+            evName = eventName[self.Event]
         except KeyError:
             evName = 'Reserved'
         # Revisit: fix csv columns
