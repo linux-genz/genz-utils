@@ -103,6 +103,9 @@ eventName = { 0x00: 'RecovProtocolErr',
               0xfe: 'VdefA',
               0xff: 'VdefB' }
 
+def ceil_div(num: int, denom: int) -> int:
+    return -(-num // denom)
+
 class Reason(IntEnum):
     NoError              = 0x00
     NE                   = 0x00
@@ -3917,13 +3920,11 @@ class UEPEventRecord(ControlTable):
 class Packet(LittleEndianStructure):
     _ocl = OpClasses()
 
-    def __init__(self):
-        super().__init__()
-        bitOffset = 0
-        for field in self._fields_:
-            width = field[2]
-            byteOffset, highBit, lowBit, hexWidth = self.bitField(width, bitOffset)
-            field.byteOffset = byteOffset
+    def __init__(self, verbosity=0, csv=False, data=None, **kwargs):
+        self.data = data
+        self.verbosity = verbosity
+        self.csv = csv
+        super().__init__(**kwargs)
 
     def bitField(self, width, bitOffset):
         byteOffset = bitOffset // 32 * 8
@@ -3971,6 +3972,40 @@ class Packet(LittleEndianStructure):
     def reliable(self):
         return True
 
+    @staticmethod
+    def className(ocl, opcode):
+        return Packet._ocl.name(ocl) + Packet._ocl.opClass(ocl).name(opcode)
+
+    @staticmethod
+    def pay_len_and_pad_cnt(payloadLen):
+        payLen4 = ceil_div(payloadLen, 4)
+        padLen = payLen4 * 4 - payloadLen
+        return (payLen4, padLen)
+
+    def set_payload(self, payload, payLen = None):
+        if payLen is None:
+            payLen = len(payload)
+        payLen4, padCnt = Packet.pay_len_and_pad_cnt(payLen)
+        # Revisit: check payLen4 against self.pay_len
+        pptr = (c_u8 * payLen).from_buffer(payload)
+        memmove(self.Payload, pptr, payLen)
+        self.PadCNT = padCnt
+
+    def __len__(self):
+        return self.LEN * 4
+
+def PacketFactory(oclName: str, opcName: str, payLen: int = 0,
+                  GC: bool = False, NH: bool = False, RK: bool = False,
+                  RT: bool = False, verbosity = 0, csv = False, **kwargs):
+    ocl = Packet._ocl.ocl(oclName)
+    opclass = Packet._ocl.opClass(ocl)
+    opcode = opclass.opCode(opcName)
+    pkt = globals()[oclName + opcName + 'Pkt'](ocl, opcode, payLen,
+                                               verbosity=verbosity,
+                                               GC=GC, NH=NH, RK=RK, RT=RT,
+                                               **kwargs)
+    return pkt
+
 class ExplicitHdr(Packet):
     ecrc = crcmod.mkCrcFun(0xade27a<<1|1, initCrc=0, xorOut=0xffffff, rev=True)
 
@@ -4009,6 +4044,13 @@ class ExplicitHdr(Packet):
                  ('NextHdr2',                   c_u32, 32),
                  ('NextHdr3',                   c_u32, 32)]
 
+    def __init__(self, ocl, opcode, pktLen4,
+                 verbosity=0, csv=False, data=None, **kwargs):
+        super().__init__(verbosity=verbosity, csv=csv, data=data, **kwargs)
+        self.OCL = ocl
+        self.OpCode = opcode
+        self.LEN = pktLen4
+
     def dataToPktInit(self, data, verbosity, csv):
         try:
             oclName = self.oclName
@@ -4026,13 +4068,35 @@ class ExplicitHdr(Packet):
     def DCID(self):
         return self.DCIDh << 9 | self.DCIDm << 5 | self.DCIDl
 
+    @DCID.setter
+    def DCID(self, val: int) -> None:
+        if val < 0 or val > 4095:
+            raise(ValueError)
+        self.DCIDh = (val >> 9) & 0x7
+        self.DCIDm = (val >> 5) & 0xf
+        self.DCIDl = val & 0x1f
+
     @property
     def LEN(self):
         return self.LENh << 3 | self.LENl
 
+    @LEN.setter
+    def LEN(self, val:int) -> None:
+        if val < 4 or val > 126:
+            raise(ValueError)
+        self.LENh = (val >> 3) & 0xf
+        self.LENl = val & 0x7
+
     @property
     def OpCode(self):
         return self.OpCodeh << 2 | self.OpCodel
+
+    @OpCode.setter
+    def OpCode(self, val:int) -> None:
+        if val < 0 or val > 31:
+            raise(ValueError)
+        self.OpCodeh = (val >> 2) & 0x7
+        self.OpCodel = val & 0x3
 
     @property
     def oclName(self):
@@ -4096,7 +4160,7 @@ class ExplicitHdr(Packet):
         return ''
 
     def compute_ecrc(self) -> int:
-        return ExplicitHdr.ecrc(self.data[0:self.LEN*4-3])
+        return ExplicitHdr.ecrc(bytearray(self)[0:self.LEN*4-3])
 
     def chk_ecrc(self, crc=None) -> int:
         if crc is None:
@@ -4115,6 +4179,10 @@ class ExplicitHdr(Packet):
             if self.chk_ecrc(crc) != 0:
                 return f'[{crc:06x}]'
         return ''
+
+    def set_crcs(self):
+        self.PCRC = self.compute_pcrc()
+        self.ECRC = self.compute_ecrc()
 
     @property
     def uniqueness(self):
@@ -4206,7 +4274,19 @@ class ExplicitPkt(ExplicitHdr):
 class ExplicitReqPkt(ExplicitReqHdr):
     _fields_ = ExplicitHdr.hd_fields + ExplicitReqHdr.rq_fields
 
-class Core64ReadPkt(ExplicitReqHdr):
+class Core64ReadWriteMixin():
+    '''Mix-in defining additional methods for Core64 Read/Write
+    '''
+    @property
+    def Addr(self):
+        return self.Addrh << 32 | self.Addrl
+
+    @Addr.setter
+    def Addr(self, val):
+        self.Addrl = val & 0xffffffff
+        self.Addrh = (val >> 32) & 0xffffffff
+
+class Core64ReadBase(ExplicitReqHdr, Core64ReadWriteMixin):
     os1_fields = [('RDSize',                     c_u32,  9)]
     os2_fields = [('Addrh',                      c_u32, 32), # Byte 12
                   ('Addrl',                      c_u32, 32)] # Byte 16
@@ -4215,26 +4295,34 @@ class Core64ReadPkt(ExplicitReqHdr):
                   ('FPS',                        c_u32,  2),
                   ('ECRC',                       c_u32, 24)]
 
-    def dataToPktInit(exp_pkt, data, verbosity):
-        fields = ExplicitReqHdr.hd_fields + Core64ReadPkt.os1_fields
-        if exp_pkt.GC:
+    @staticmethod
+    def pkt_type(className: str, payLen: int, GC:bool = False, NH:bool = False,
+                 RK:bool = False, data = None, verbosity = 0):
+        fields = ExplicitReqHdr.hd_fields + Core64ReadBase.os1_fields
+        hdr_len = 6 # Revisit: constant 6
+        if GC:
             fields.extend(ExplicitHdr.ms_fields)
-        if exp_pkt.RK:
+            hdr_len += 1
+        if RK:
             fields.extend(ExplicitHdr.rk_fields)
-        fields.extend(Core64ReadPkt.os2_fields)
-        if exp_pkt.NH:
+            hdr_len += 1
+        fields.extend(Core64ReadBase.os2_fields)
+        if NH:
             fields.extend(ExplicitHdr.nh_fields)
-        fields.extend(Core64ReadPkt.os3_fields)
-        pkt_type = type('Core64Read', (Core64ReadPkt,),
+            hdr_len += 4
+        fields.extend(Core64ReadBase.os3_fields)
+        pkt_type = type(className, (Core64ReadBase,),
                         {'_fields_': fields,
-                         'data': exp_pkt.data,
-                         'verbosity': exp_pkt.verbosity})
+                         'data': data,
+                         'verbosity': verbosity})
+        return (pkt_type, hdr_len) # no payload
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type, hdr_len = Core64ReadBase.pkt_type(className, 0, exp_pkt.GC,
+                        exp_pkt.NH, exp_pkt.RK, data=data, verbosity=verbosity)
         pkt = pkt_type.from_buffer(exp_pkt.data)
         return pkt
-
-    @property
-    def Addr(self):
-        return self.Addrh << 32 | self.Addrl
 
     def __str__(self):
         r = super().__str__()
@@ -4245,7 +4333,17 @@ class Core64ReadPkt(ExplicitReqHdr):
         r += self.expected_ecrc_str
         return r
 
-class Core64ReadResponsePkt(ExplicitHdr):
+class Core64ReadPkt(Core64ReadBase):
+    def __new__(cls, ocl, opcode, payLen, verbosity=0, GC:bool = False,
+                NH:bool = False, RK:bool = False, data = None, **kwargs):
+        className = Packet.className(ocl, opcode)
+        pkt_type, pktLen = Core64ReadBase.pkt_type(className, payLen,
+                                    GC=GC, NH=NH, RK=RK,
+                                    data=data, verbosity=verbosity)
+        return pkt_type(ocl, opcode, pktLen, GC=GC, NH=NH, RK=RK, data=data,
+                        verbosity=verbosity, **kwargs)
+
+class Core64ReadResponseBase(ExplicitHdr):
     os1_fields = [('LP',                         c_u32,  1),
                   ('R0',                         c_u32,  3),
                   ('PadCNT',                     c_u32,  2),
@@ -4254,23 +4352,36 @@ class Core64ReadResponsePkt(ExplicitHdr):
     os3_fields = [('R1',                         c_u32,  8),
                   ('ECRC',                       c_u32, 24)]
 
-    def dataToPktInit(exp_pkt, data, verbosity):
-        fields = ExplicitHdr.hd_fields + Core64ReadResponsePkt.os1_fields
-        if exp_pkt.GC:
+    @staticmethod
+    def pkt_type(className: str, payLen: int, GC:bool = False, NH:bool = False,
+                 RK:bool = False, data = None, verbosity = 0, pktLen:int = None):
+        fields = ExplicitHdr.hd_fields + Core64ReadResponseBase.os1_fields
+        hdr_len = 4 # Revisit: constant 4
+        if NH:
+            hdr_len += 4
+        if GC:
             fields.extend(ExplicitHdr.ms_fields)
+            hdr_len += 1
         # Revisit: LP (LPD) field
         # Revisit: MS (Meta) field
-        pay_len = exp_pkt.LEN - 4  # Revisit: constant 4
+        pay_len = (Packet.pay_len_and_pad_cnt(payLen)[0] if pktLen is None
+                   else (pktLen - hdr_len))
         fields.append(('Payload', c_u32 * pay_len))
-        if exp_pkt.NH:
+        if NH:
             fields.extend(ExplicitHdr.nh_fields)
-        fields.extend(Core64ReadResponsePkt.os3_fields)
-        className = exp_pkt.oclName + exp_pkt.opcName
-        pkt_type = type(className, (Core64ReadResponsePkt,),
+        fields.extend(Core64ReadResponseBase.os3_fields)
+        pkt_type = type(className, (Core64ReadResponseBase,),
                         {'_fields_': fields,
-                         'data': exp_pkt.data,
-                         'verbosity': exp_pkt.verbosity,
+                         'data': data,
+                         'verbosity': verbosity,
                          'pay_len': pay_len})
+        return (pkt_type, hdr_len + pay_len)
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type, hdr_len = Core64ReadResponseBase.pkt_type(className, 0,
+                                    exp_pkt.GC, exp_pkt.NH, pktLen=exp_pkt.LEN,
+                                    data=data, verbosity=verbosity)
         pkt = pkt_type.from_buffer(exp_pkt.data)
         return pkt
 
@@ -4291,7 +4402,16 @@ class Core64ReadResponsePkt(ExplicitHdr):
                 r += ' {:08x}'.format(self.Payload[i])
         return r
 
-class Core64WritePkt(ExplicitReqHdr):
+class Core64ReadResponsePkt(Core64ReadResponseBase):
+    def __new__(cls, ocl, opcode, payLen, verbosity=0, GC:bool = False,
+                NH:bool = False, data = None, **kwargs):
+        className = Packet.className(ocl, opcode)
+        pkt_type, pktLen = Core64ReadResponseBase.pkt_type(className, payLen,
+                                GC=GC, NH=NH, data=data, verbosity=verbosity)
+        return pkt_type(ocl, opcode, pktLen, GC=GC, NH=NH, data=data,
+                        verbosity=verbosity, **kwargs)
+
+class Core64WriteBase(ExplicitReqHdr, Core64ReadWriteMixin):
     os1_fields = [('TC',                         c_u32,  1),
                   ('NS',                         c_u32,  1),
                   ('UN',                         c_u32,  1),
@@ -4306,36 +4426,42 @@ class Core64WritePkt(ExplicitReqHdr):
                   ('FPS',                        c_u32,  2),
                   ('ECRC',                       c_u32, 24)]
 
-    def dataToPktInit(exp_pkt, data, verbosity):
-        fields = ExplicitReqHdr.hd_fields + Core64WritePkt.os1_fields
+    @staticmethod
+    def pkt_type(className: str, payLen: int, GC:bool = False, NH:bool = False,
+                 RK:bool = False, data = None, verbosity = 0, pktLen:int = None):
+        fields = ExplicitReqHdr.hd_fields + Core64WriteBase.os1_fields
         hdr_len = 6 # Revisit: constant 6
-        if exp_pkt.NH:
+        if NH:
             hdr_len += 4
-        if exp_pkt.GC:
+        if GC:
             fields.extend(ExplicitHdr.ms_fields)
             hdr_len += 1
-        if exp_pkt.RK:
+        if RK:
             fields.extend(ExplicitHdr.rk_fields)
             hdr_len += 1
-        fields.extend(Core64WritePkt.os2_fields)
+        fields.extend(Core64WriteBase.os2_fields)
         # Revisit: MS (Meta) field
-        pay_len = exp_pkt.LEN - hdr_len
+        pay_len = (Packet.pay_len_and_pad_cnt(payLen)[0] if pktLen is None
+                   else (pktLen - hdr_len))
         fields.append(('Payload', c_u32 * pay_len))
-        if exp_pkt.NH:
+        if NH:
             fields.extend(ExplicitHdr.nh_fields)
-        fields.extend(Core64WritePkt.os3_fields)
-        className = exp_pkt.oclName + exp_pkt.opcName
-        pkt_type = type(className, (Core64WritePkt,),
+        fields.extend(Core64WriteBase.os3_fields)
+        pkt_type = type(className, (Core64WriteBase,),
                         {'_fields_': fields,
-                         'data': exp_pkt.data,
-                         'verbosity': exp_pkt.verbosity,
+                         'data': data,
+                         'verbosity': verbosity,
                          'pay_len': pay_len})
+        return (pkt_type, hdr_len + pay_len)
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type, hdr_len = Core64WriteBase.pkt_type(className, 0,
+                                    exp_pkt.GC, exp_pkt.NH, exp_pkt.RK,
+                                    pktLen=exp_pkt.LEN,
+                                    data=data, verbosity=verbosity)
         pkt = pkt_type.from_buffer(exp_pkt.data)
         return pkt
-
-    @property
-    def Addr(self):
-        return self.Addrh << 32 | self.Addrl
 
     def __str__(self):
         r = super().__str__()
@@ -4353,7 +4479,17 @@ class Core64WritePkt(ExplicitReqHdr):
                 r += ' {:08x}'.format(self.Payload[i])
         return r
 
-class Core64WritePartialPkt(ExplicitReqHdr):
+class Core64WritePkt(Core64WriteBase):
+    def __new__(cls, ocl, opcode, payLen, verbosity=0, GC:bool = False,
+                NH:bool = False, RK:bool = False, data = None, **kwargs):
+        className = Packet.className(ocl, opcode)
+        pkt_type, pktLen = Core64WriteBase.pkt_type(className, payLen,
+                                    GC=GC, NH=NH, RK=RK,
+                                    data=data, verbosity=verbosity)
+        return pkt_type(ocl, opcode, pktLen, GC=GC, NH=NH, RK=RK, data=data,
+                        verbosity=verbosity, **kwargs)
+
+class Core64WritePartialBase(ExplicitReqHdr, Core64ReadWriteMixin):
     os1_fields = [('TC',                         c_u32,  1),
                   ('NS',                         c_u32,  1),
                   ('UN',                         c_u32,  1),
@@ -4369,40 +4505,52 @@ class Core64WritePartialPkt(ExplicitReqHdr):
                   ('FPS',                        c_u32,  2),
                   ('ECRC',                       c_u32, 24)]
 
-    def dataToPktInit(exp_pkt, data, verbosity):
-        fields = ExplicitReqHdr.hd_fields + Core64WritePartialPkt.os1_fields
+    @staticmethod
+    def pkt_type(className: str, payLen: int, GC:bool = False, NH:bool = False,
+                 RK:bool = False, data = None, verbosity = 0):
+        fields = ExplicitReqHdr.hd_fields + Core64WritePartialBase.os1_fields
         hdr_len = 8 # Revisit: constant 8
-        if exp_pkt.NH:
+        if NH:
             hdr_len += 4
-        if exp_pkt.GC:
+        if GC:
             fields.extend(ExplicitHdr.ms_fields)
             hdr_len += 1
-        if exp_pkt.RK:
+        if RK:
             fields.extend(ExplicitHdr.rk_fields)
             hdr_len += 1
-        fields.extend(Core64WritePartialPkt.os2_fields)
+        fields.extend(Core64WritePartialBase.os2_fields)
         # Revisit: MS (Meta) field
-        pay_len = exp_pkt.LEN - hdr_len
+        pay_len = (Packet.pay_len_and_pad_cnt(payLen)[0] if pktLen is None
+                   else (pktLen - hdr_len))
+        if pay_len != 16:
+            raise ValueError('WritePartial payload must be 64 bytes')
         fields.append(('Payload', c_u32 * pay_len))
-        if exp_pkt.NH:
+        if NH:
             fields.extend(ExplicitHdr.nh_fields)
-        fields.extend(Core64WritePartialPkt.os3_fields)
-        className = exp_pkt.oclName + exp_pkt.opcName
-        pkt_type = type(className, (Core64WritePartialPkt,),
+        fields.extend(Core64WritePartialBase.os3_fields)
+        pkt_type = type(className, (Core64WritePartialBase,),
                         {'_fields_': fields,
-                         'data': exp_pkt.data,
-                         'verbosity': exp_pkt.verbosity,
+                         'data': data,
+                         'verbosity': verbosity,
                          'pay_len': pay_len})
+        return (pkt_type, hdr_len + pay_len)
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type, hdr_len = Core64WritePartialBase.pkt_type(className, 0,
+                        exp_pkt.GC, exp_pkt.NH, exp_pkt.RK, pktLen=exp_pkt.LEN,
+                        data=data, verbosity=verbosity)
         pkt = pkt_type.from_buffer(exp_pkt.data)
         return pkt
 
     @property
-    def Addr(self):
-        return self.Addrh << 32 | self.Addrl
-
-    @property
     def Mask(self):
         return self.Maskh << 32 | self.Maskl
+
+    @Mask.setter
+    def Mask(self, val):
+        self.Maskl = val & 0xffffffff
+        self.Maskh = (val >> 32) & 0xffffffff
 
     def __str__(self):
         r = super().__str__()
@@ -4420,31 +4568,57 @@ class Core64WritePartialPkt(ExplicitReqHdr):
                 r += ' {:08x}'.format(self.Payload[i])
         return r
 
-class Core64StandaloneAckPkt(ExplicitHdr):
+class Core64WritePartialPkt(Core64WritePartialBase):
+    def __new__(cls, ocl, opcode, payLen, verbosity=0, GC:bool = False,
+                NH:bool = False, RK:bool = False, data = None, **kwargs):
+        className = Packet.className(ocl, opcode)
+        pkt_type, pktLen = Core64WritePartialBase.pkt_type(className, payLen,
+                                    GC=GC, NH=NH, RK=RK,
+                                    data=data, verbosity=verbosity)
+        return pkt_type(ocl, opcode, pktLen, GC=GC, NH=NH, RK=RK, data=data,
+                        verbosity=verbosity, **kwargs)
+
+class Core64StandaloneAckBase(ExplicitHdr):
     os1_fields = [('RNR_QD',                     c_u32,  3),
                   ('RSl',                        c_u32,  3),
                   ('Reason',                     c_u32,  6)]
     os3_fields = [('RSh',                        c_u32,  8), # Byte 12
                   ('ECRC',                       c_u32, 24)]
 
-    def dataToPktInit(exp_pkt, data, verbosity):
-        fields = ExplicitHdr.hd_fields + Core64StandaloneAckPkt.os1_fields
-        if exp_pkt.GC:
+    @staticmethod
+    def pkt_type(className: str, payLen: int, GC:bool = False, NH:bool = False,
+                 RK:bool = False, data = None, verbosity = 0):
+        fields = ExplicitHdr.hd_fields + Core64StandaloneAckBase.os1_fields
+        hdr_len = 4 # Revisit: constant 4
+        if GC:
             fields.extend(ExplicitHdr.ms_fields)
-        if exp_pkt.NH:
+            hdr_len += 1
+        if NH:
             fields.extend(ExplicitHdr.nh_fields)
-        fields.extend(Core64StandaloneAckPkt.os3_fields)
-        className = exp_pkt.oclName + exp_pkt.opcName
-        pkt_type = type(className, (Core64StandaloneAckPkt,),
+            hdr_len += 4
+        fields.extend(Core64StandaloneAckBase.os3_fields)
+        pkt_type = type(className, (Core64StandaloneAckBase,),
                         {'_fields_': fields,
-                         'data': exp_pkt.data,
-                         'verbosity': exp_pkt.verbosity})
+                         'data': data,
+                         'verbosity': verbosity})
+        return (pkt_type, hdr_len) # no payload
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type, hdr_len = Core64StandaloneAckBase.pkt_type(className, 0,
+                                            exp_pkt.GC, exp_pkt.NH,
+                                            data=data, verbosity=verbosity)
         pkt = pkt_type.from_buffer(exp_pkt.data)
         return pkt
 
     @property
     def RS(self):
         return self.RSh << 3 | self.RSl
+
+    @RS.setter
+    def RS(self, val):
+        self.RSl = val & 0x7
+        self.RSh = (val >> 3) & 0xff
 
     def __str__(self):
         r = super().__str__()
@@ -4454,7 +4628,42 @@ class Core64StandaloneAckPkt(ExplicitHdr):
         r += self.expected_ecrc_str
         return r
 
-class ControlReadPkt(ExplicitHdr):
+class Core64StandaloneAckPkt(Core64StandaloneAckBase):
+    def __new__(cls, ocl, opcode, payLen, verbosity=0, GC:bool = False,
+                NH:bool = False, data = None, **kwargs):
+        className = Packet.className(ocl, opcode)
+        pkt_type, pktLen = Core64StandaloneAckBase.pkt_type(className, payLen,
+                                GC=GC, NH=NH, data=data, verbosity=verbosity)
+        return pkt_type(ocl, opcode, pktLen, GC=GC, NH=NH, data=data,
+                        verbosity=verbosity, **kwargs)
+
+class ControlReadWriteMixin():
+    '''Mix-in defining additional methods for Control Read/Write
+    '''
+    @property
+    def Addr(self):
+        return self.Addrh << 32 | self.Addrl
+
+    @Addr.setter
+    def Addr(self, val):
+        self.Addrl = val & 0xffffffff
+        self.Addrh = (val >> 32) & 0xfffff
+
+    @property
+    def MGRUUID(self):
+        return self.uuid(self._uuid_fields[0])
+
+    @MGRUUID.setter
+    def MGRUUID(self, uu: uuid.UUID):
+        uub = uu.bytes
+        uuFld = self._uuid_fields[0]
+        setattr(self, uuFld[0], int.from_bytes(uub[0:4], byteorder='little'))
+        setattr(self, uuFld[1], int.from_bytes(uub[4:8], byteorder='little'))
+        setattr(self, uuFld[2], int.from_bytes(uub[8:12], byteorder='little'))
+        setattr(self, uuFld[3], int.from_bytes(uub[12:16], byteorder='little'))
+
+
+class ControlReadBase(ExplicitHdr, ControlReadWriteMixin):
     os1_fields = [('R0',                         c_u32,  2),
                   ('RK',                         c_u32,  1),
                   ('DR',                         c_u32,  1),
@@ -4472,30 +4681,35 @@ class ControlReadPkt(ExplicitHdr):
 
     _uuid_fields = [('MGRUUID0', 'MGRUUID1', 'MGRUUID2', 'MGRUUID3')]
 
-    def dataToPktInit(exp_pkt, data, verbosity):
-        fields = ExplicitHdr.hd_fields + ControlReadPkt.os1_fields
-        if exp_pkt.GC:
+    @staticmethod
+    def pkt_type(className: str, payLen: int, GC:bool = False, NH:bool = False,
+                 RK:bool = False, data = None, verbosity = 0):
+        fields = ExplicitHdr.hd_fields + ControlReadBase.os1_fields
+        hdr_len = 10 # Revisit: constant 10
+        if GC:
             fields.extend(ExplicitHdr.ms_fields)
-        if exp_pkt.RK:
+            hdr_len += 1
+        if RK:
             fields.extend(ExplicitHdr.rk_fields)
-        fields.extend(ControlReadPkt.os2_fields)
-        if exp_pkt.NH:
+            hdr_len += 1
+        fields.extend(ControlReadBase.os2_fields)
+        if NH:
             fields.extend(ExplicitHdr.nh_fields)
-        fields.extend(ControlReadPkt.os3_fields)
-        pkt_type = type('ControlRead', (ControlReadPkt,),
+            hdr_len += 4
+        fields.extend(ControlReadBase.os3_fields)
+        pkt_type = type(className, (ControlReadBase,),
                         {'_fields_': fields,
-                         'data': exp_pkt.data,
-                         'verbosity': exp_pkt.verbosity})
+                         'data': data,
+                         'verbosity': verbosity})
+        return (pkt_type, hdr_len) # no payload
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type, hdr_len = ControlReadBase.pkt_type(className, 0,
+                                    exp_pkt.GC, exp_pkt.NH, exp_pkt.RK,
+                                    data=data, verbosity=verbosity)
         pkt = pkt_type.from_buffer(exp_pkt.data)
         return pkt
-
-    @property
-    def Addr(self):
-        return self.Addrh << 32 | self.Addrl
-
-    @property
-    def MGRUUID(self):
-        return self.uuid(self._uuid_fields[0])
 
     def __str__(self):
         r = super().__str__()
@@ -4518,10 +4732,23 @@ class ControlReadPkt(ExplicitHdr):
         r += self.expected_ecrc_str
         return r
 
+class ControlReadPkt(ControlReadBase):
+    def __new__(cls, ocl, opcode, payLen, verbosity=0, GC:bool = False,
+                NH:bool = False, RK:bool = False, data = None, **kwargs):
+        className = Packet.className(ocl, opcode)
+        pkt_type, pktLen = ControlReadBase.pkt_type(className, payLen,
+                                    GC=GC, NH=NH, RK=RK,
+                                    data=data, verbosity=verbosity)
+        return pkt_type(ocl, opcode, pktLen, GC=GC, NH=NH, RK=RK, data=data,
+                        verbosity=verbosity, **kwargs)
+
+class ControlReadResponseBase(Core64ReadResponseBase):
+    pass
+
 class ControlReadResponsePkt(Core64ReadResponsePkt):
     pass
 
-class ControlWritePkt(ExplicitHdr):
+class ControlWriteBase(ExplicitHdr, ControlReadWriteMixin):
     os1_fields = [('R0',                         c_u32,  2),
                   ('RK',                         c_u32,  1),
                   ('DR',                         c_u32,  1),
@@ -4540,40 +4767,41 @@ class ControlWritePkt(ExplicitHdr):
 
     _uuid_fields = [('MGRUUID0', 'MGRUUID1', 'MGRUUID2', 'MGRUUID3')]
 
-    def dataToPktInit(exp_pkt, data, verbosity):
-        fields = ExplicitHdr.hd_fields + ControlWritePkt.os1_fields
+    @staticmethod
+    def pkt_type(className: str, payLen: int, GC:bool = False, NH:bool = False,
+                 RK:bool = False, data = None, verbosity = 0, pktLen:int = None):
+        fields = ExplicitHdr.hd_fields + ControlWriteBase.os1_fields
         hdr_len = 10 # Revisit: constant 10
-        if exp_pkt.NH:
+        if NH:
             hdr_len += 4
-        if exp_pkt.GC:
+        if GC:
             fields.extend(ExplicitHdr.ms_fields)
             hdr_len += 1
-        if exp_pkt.RK:
+        if RK:
             fields.extend(ExplicitHdr.rk_fields)
             hdr_len += 1
-        fields.extend(ControlWritePkt.os2_fields)
-        pay_len = exp_pkt.LEN - hdr_len
+        fields.extend(ControlWriteBase.os2_fields)
+        pay_len = (Packet.pay_len_and_pad_cnt(payLen)[0] if pktLen is None
+                   else (pktLen - hdr_len))
         fields.append(('Payload', c_u32 * pay_len))
-        fields.extend(ControlWritePkt.os2b_fields)
-        if exp_pkt.NH:
+        fields.extend(ControlWriteBase.os2b_fields)
+        if NH:
             fields.extend(ExplicitHdr.nh_fields)
-        fields.extend(ControlWritePkt.os3_fields)
-        className = exp_pkt.oclName + exp_pkt.opcName
-        pkt_type = type(className, (ControlWritePkt,),
+        fields.extend(ControlWriteBase.os3_fields)
+        pkt_type = type(className, (ControlWriteBase,),
                         {'_fields_': fields,
-                         'data': exp_pkt.data,
-                         'verbosity': exp_pkt.verbosity,
+                         'data': data,
+                         'verbosity': verbosity,
                          'pay_len': pay_len})
+        return (pkt_type, hdr_len + pay_len)
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type, hdr_len = ControlWriteBase.pkt_type(className, 0,
+                        exp_pkt.GC, exp_pkt.NH, exp_pkt.RK, pktLen=exp_pkt.LEN,
+                        data=data, verbosity=verbosity)
         pkt = pkt_type.from_buffer(exp_pkt.data)
         return pkt
-
-    @property
-    def Addr(self):
-        return self.Addrh << 32 | self.Addrl
-
-    @property
-    def MGRUUID(self):
-        return self.uuid(self._uuid_fields[0])
 
     def __str__(self):
         r = super().__str__()
@@ -4602,7 +4830,17 @@ class ControlWritePkt(ExplicitHdr):
                 r += ' {:08x}'.format(self.Payload[i])
         return r
 
-class ControlWritePartialPkt(ExplicitHdr):
+class ControlWritePkt(ControlWriteBase):
+    def __new__(cls, ocl, opcode, payLen, verbosity=0, GC:bool = False,
+                NH:bool = False, RK:bool = False, data = None, **kwargs):
+        className = Packet.className(ocl, opcode)
+        pkt_type, pktLen = ControlWriteBase.pkt_type(className, payLen,
+                                    GC=GC, NH=NH, RK=RK,
+                                    data=data, verbosity=verbosity)
+        return pkt_type(ocl, opcode, pktLen, GC=GC, NH=NH, RK=RK, data=data,
+                        verbosity=verbosity, **kwargs)
+
+class ControlWritePartialBase(ExplicitHdr, ControlReadWriteMixin):
     os1_fields = [('R0',                         c_u32,  2),
                   ('RK',                         c_u32,  1),
                   ('DR',                         c_u32,  1),
@@ -4622,44 +4860,51 @@ class ControlWritePartialPkt(ExplicitHdr):
 
     _uuid_fields = [('MGRUUID0', 'MGRUUID1', 'MGRUUID2', 'MGRUUID3')]
 
-    def dataToPktInit(exp_pkt, data, verbosity):
-        fields = ExplicitHdr.hd_fields + ControlWritePartialPkt.os1_fields
+    @staticmethod
+    def pkt_type(className: str, payLen: int, GC:bool = False, NH:bool = False,
+                 RK:bool = False, data = None, verbosity = 0, pktLen:int = None):
+        fields = ExplicitHdr.hd_fields + ControlWritePartialBase.os1_fields
         hdr_len = 12 # Revisit: constant 12
-        if exp_pkt.NH:
+        if NH:
             hdr_len += 4
-        if exp_pkt.GC:
+        if GC:
             fields.extend(ExplicitHdr.ms_fields)
             hdr_len += 1
-        if exp_pkt.RK:
+        if RK:
             fields.extend(ExplicitHdr.rk_fields)
             hdr_len += 1
-        fields.extend(ControlWritePartialPkt.os2_fields)
-        pay_len = exp_pkt.LEN - hdr_len
+        fields.extend(ControlWritePartialBase.os2_fields)
+        pay_len = (Packet.pay_len_and_pad_cnt(payLen)[0] if pktLen is None
+                   else (pktLen - hdr_len))
         fields.append(('Payload', c_u32 * pay_len))
-        fields.extend(ControlWritePartialPkt.os2b_fields)
-        if exp_pkt.NH:
+        fields.extend(ControlWritePartialBase.os2b_fields)
+        if NH:
             fields.extend(ExplicitHdr.nh_fields)
-        fields.extend(ControlWritePartialPkt.os3_fields)
+        fields.extend(ControlWritePartialBase.os3_fields)
         className = exp_pkt.oclName + exp_pkt.opcName
-        pkt_type = type(className, (ControlWritePartialPkt,),
+        pkt_type = type(className, (ControlWritePartialBase,),
                         {'_fields_': fields,
-                         'data': exp_pkt.data,
-                         'verbosity': exp_pkt.verbosity,
+                         'data': data,
+                         'verbosity': verbosity,
                          'pay_len': pay_len})
+        return (pkt_type, hdr_len + pay_len)
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type, hdr_len = ControlWritePartialBase.pkt_type(className, 0,
+                        exp_pkt.GC, exp_pkt.NH, exp_pkt.RK, pktLen=exp_pkt.LEN,
+                        data=data, verbosity=verbosity)
         pkt = pkt_type.from_buffer(exp_pkt.data)
         return pkt
-
-    @property
-    def Addr(self):
-        return self.Addrh << 32 | self.Addrl
 
     @property
     def Mask(self):
         return self.Maskh << 32 | self.Maskl
 
-    @property
-    def MGRUUID(self):
-        return self.uuid(self._uuid_fields[0])
+    @Mask.setter
+    def Mask(self, val):
+        self.Maskl = val & 0xffffffff
+        self.Maskh = (val >> 32) & 0xffffffff
 
     def __str__(self):
         r = super().__str__()
@@ -4684,7 +4929,17 @@ class ControlWritePartialPkt(ExplicitHdr):
                 r += ' {:08x}'.format(self.Payload[i])
         return r
 
-class ControlUnsolicitedEventPkt(ExplicitHdr):
+class ControlWritePartialPkt(ControlWritePartialBase):
+    def __new__(cls, ocl, opcode, payLen, verbosity=0, GC:bool = False,
+                NH:bool = False, RK:bool = False, data = None, **kwargs):
+        className = Packet.className(ocl, opcode)
+        pkt_type, pktLen = ControlWritePartialBase.pkt_type(className, payLen,
+                                    GC=GC, NH=NH, RK=RK,
+                                    data=data, verbosity=verbosity)
+        return pkt_type(ocl, opcode, pktLen, GC=GC, NH=NH, RK=RK, data=data,
+                        verbosity=verbosity, **kwargs)
+
+class ControlUnsolicitedEventBase(ExplicitHdr):
     # Revisit: ExplicitHdr has Tag, while UEP has R0
     os1_fields = [('CV',                         c_u32,  1),
                   ('SV',                         c_u32,  1),
@@ -4701,19 +4956,30 @@ class ControlUnsolicitedEventPkt(ExplicitHdr):
     os3_fields = [('R3',                         c_u32,  8), # Byte 24
                   ('ECRC',                       c_u32, 24)]
 
-    def dataToPktInit(exp_pkt, data, verbosity):
-        fields = ExplicitHdr.hd_fields + ControlUnsolicitedEventPkt.os1_fields
-        if exp_pkt.GC:
+    @staticmethod
+    def pkt_type(className: str, payLen: int, GC:bool = False, NH:bool = False,
+                 RK:bool = False, data = None, verbosity = 0, pktLen:int = None):
+        fields = ExplicitHdr.hd_fields + ControlUnsolicitedEventBase.os1_fields
+        hdr_len = 7 # Revisit: constant 7
+        if GC:
             fields.extend(ExplicitHdr.ms_fields)
-        fields.extend(ControlUnsolicitedEventPkt.os2_fields)
-        if exp_pkt.NH:
+            hdr_len += 1
+        fields.extend(ControlUnsolicitedEventBase.os2_fields)
+        if NH:
             fields.extend(ExplicitHdr.nh_fields)
-        fields.extend(ControlUnsolicitedEventPkt.os3_fields)
-        className = exp_pkt.oclName + exp_pkt.opcName
-        pkt_type = type(className, (ControlUnsolicitedEventPkt,),
+            hdr_len += 4
+        fields.extend(ControlUnsolicitedEventBase.os3_fields)
+        pkt_type = type(className, (ControlUnsolicitedEventBase,),
                         {'_fields_': fields,
-                         'data': exp_pkt.data,
-                         'verbosity': exp_pkt.verbosity})
+                         'data': data,
+                         'verbosity': verbosity})
+        return (pkt_type, hdr_len) # no payload
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type, hdr_len = Core64ReadResponseBase.pkt_type(className, 0,
+                                    exp_pkt.GC, exp_pkt.NH, pktLen=exp_pkt.LEN,
+                                    data=data, verbosity=verbosity)
         pkt = pkt_type.from_buffer(exp_pkt.data)
         pkt.noTag = True
         return pkt
@@ -4721,6 +4987,11 @@ class ControlUnsolicitedEventPkt(ExplicitHdr):
     @property
     def RCSID(self):
         return self.RCSIDh << 8 | self.RCSIDl
+
+    @RCSID.setter
+    def RCSID(self, val):
+        self.RCSIDl = val & 0xff
+        self.RCSIDh = (val >> 8) & 0xff
 
     def to_json(self):
         jds = super().to_json()
@@ -4769,6 +5040,19 @@ class ControlUnsolicitedEventPkt(ExplicitHdr):
         r += self.expected_ecrc_str
         return r
 
+class ControlUnsolicitedEventPkt(ControlUnsolicitedEventBase):
+    def __new__(cls, ocl, opcode, payLen, verbosity=0, GC:bool = False,
+                NH:bool = False, data = None, **kwargs):
+        className = Packet.className(ocl, opcode)
+        pkt_type, pktLen = ControlUnsolicitedEventBase.pkt_type(className, 0,
+                                GC=GC, NH=NH, data=data, verbosity=verbosity)
+        pkt_type.noTag = True
+        return pkt_type(ocl, opcode, pktLen, GC=GC, NH=NH, data=data,
+                        verbosity=verbosity, **kwargs)
+
+class ControlStandaloneAckBase(Core64StandaloneAckBase):
+    pass
+
 class ControlStandaloneAckPkt(Core64StandaloneAckPkt):
     pass
 
@@ -4803,7 +5087,7 @@ class WriteMsgMixin():
         return (woff + self.payload_len) if last else msgsz
 
 
-class CtxIdWriteMSGPkt(ExplicitHdr, WriteMsgMixin):
+class CtxIdWriteMSGBase(ExplicitHdr, WriteMsgMixin):
     os1_fields = [('RT',                         c_u32,  1),
                   ('MSGSZ',                      c_u32, 11)]
     os2_fields = [('RSPCTXID',                   c_u32, 24), # Byte 12
@@ -4824,30 +5108,41 @@ class CtxIdWriteMSGPkt(ExplicitHdr, WriteMsgMixin):
                   ('FPS',                        c_u32,  2),
                   ('ECRC',                       c_u32, 24)]
 
-    def dataToPktInit(exp_pkt, data, verbosity):
-        fields = ExplicitHdr.hd_fields + CtxIdWriteMSGPkt.os1_fields
+    @staticmethod
+    def pkt_type(className: str, payLen: int, GC:bool = False, NH:bool = False,
+                 RT:bool = False, data = None, verbosity = 0, pktLen:int = None):
+        fields = ExplicitHdr.hd_fields + CtxIdWriteMSGBase.os1_fields
         hdr_len = 7 # Revisit: constant 7
-        if exp_pkt.NH:
+        if NH:
             hdr_len += 4
-        if exp_pkt.GC:
+        if GC:
             fields.extend(ExplicitHdr.ms_fields)
             hdr_len += 1
-        fields.extend(CtxIdWriteMSGPkt.os2_fields)
-        if exp_pkt.LP: # Revisit: hack - LP is same bit pos as RT
-            fields.extend(CtxIdWriteMSGPkt.os2b_fields)
+        fields.extend(CtxIdWriteMSGBase.os2_fields)
+        if RT:
+            fields.extend(CtxIdWriteMSGBase.os2b_fields)
             hdr_len += 3
-        pay_len = exp_pkt.LEN - hdr_len
+        pay_len = (Packet.pay_len_and_pad_cnt(payLen)[0] if pktLen is None
+                   else (pktLen - hdr_len))
         fields.append(('Payload', c_u32 * pay_len))
-        if exp_pkt.NH:
+        if NH:
             fields.extend(ExplicitHdr.nh_fields)
-        fields.extend(CtxIdWriteMSGPkt.os3_fields)
-        className = exp_pkt.oclName + exp_pkt.opcName
-        pktClass = globals()[className + 'Pkt']
+        fields.extend(CtxIdWriteMSGBase.os3_fields)
+        pktClass = globals()[className + 'Base']
         pkt_type = type(className, (pktClass,),
                         {'_fields_': fields,
-                         'data': exp_pkt.data,
-                         'verbosity': exp_pkt.verbosity,
+                         'data': data,
+                         'verbosity': verbosity,
                          'pay_len': pay_len})
+        return (pkt_type, hdr_len + pay_len)
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        className = exp_pkt.oclName + exp_pkt.opcName
+        # Revisit: hack - LP is same bit pos as RT
+        pkt_type, hdr_len = CtxIdWriteMSGBase.pkt_type(className, 0,
+                                    exp_pkt.GC, exp_pkt.NH, exp_pkt.LP,
+                                    pktLen=exp_pkt.LEN,
+                                    data=data, verbosity=verbosity)
         pkt = pkt_type.from_buffer(exp_pkt.data)
         return pkt
 
@@ -4855,9 +5150,20 @@ class CtxIdWriteMSGPkt(ExplicitHdr, WriteMsgMixin):
     def REQCTXID(self):
         return self.REQCTXIDh << 8 | self.REQCTXIDl
 
+    @REQCTXID.setter
+    def REQCTXID(self, val):
+        self.REQCTXIDl = val & 0xff
+        self.REQCTXIDh = (val >> 8) & 0xffff
+
     @property
     def RCVTag(self):
         return self.RCVTag2 << 64 | self.RCVTag1 << 32 | self.RCVTag0
+
+    @RCVTag.setter
+    def RCVTag(self, val):
+        self.RCVTag0 = val & 0xffffffff
+        self.RCVTag1 = (val >> 32) & 0xffffffff
+        self.RCVTag2 = (val >> 64) & 0xffffffff
 
     def __str__(self):
         r = super().__str__()
@@ -4878,12 +5184,25 @@ class CtxIdWriteMSGPkt(ExplicitHdr, WriteMsgMixin):
                 r += ' {:08x}'.format(self.Payload[i])
         return r
 
-class CtxIdUnrelWriteMSGPkt(CtxIdWriteMSGPkt):
+class CtxIdWriteMSGPkt(CtxIdWriteMSGBase):
+    def __new__(cls, ocl, opcode, payLen, verbosity=0, GC:bool = False,
+                NH:bool = False, RT:bool = False, data = None, **kwargs):
+        className = Packet.className(ocl, opcode)
+        pkt_type, pktLen = CtxIdWriteMSGBase.pkt_type(className, payLen,
+                                    GC=GC, NH=NH, RT=RT,
+                                    data=data, verbosity=verbosity)
+        return pkt_type(ocl, opcode, pktLen, GC=GC, NH=NH, RT=RT, data=data,
+                        verbosity=verbosity, **kwargs)
+
+class CtxIdUnrelWriteMSGBase(CtxIdWriteMSGBase):
     def reliable(self):
         return False
 
+class CtxIdUnrelWriteMSGPkt(CtxIdWriteMSGPkt):
+    pass
 
-class ControlWriteMSGPkt(ExplicitHdr, WriteMsgMixin):
+
+class ControlWriteMSGBase(ExplicitHdr, WriteMsgMixin):
     os1_fields = [('IV',                         c_u32,  1),
                   ('MSGSZ',                      c_u32, 11)]
     os2_fields = [('RSPCTXID',                   c_u32, 24), # Byte 12
@@ -4901,33 +5220,48 @@ class ControlWriteMSGPkt(ExplicitHdr, WriteMsgMixin):
                   ('FPS',                        c_u32,  2),
                   ('ECRC',                       c_u32, 24)]
 
-    def dataToPktInit(exp_pkt, data, verbosity):
-        fields = ExplicitHdr.hd_fields + ControlWriteMSGPkt.os1_fields
+    @staticmethod
+    def pkt_type(className: str, payLen: int, GC:bool = False, NH:bool = False,
+                 data = None, verbosity = 0, pktLen:int = None):
+        fields = ExplicitHdr.hd_fields + ControlWriteMSGBase.os1_fields
         hdr_len = 8 # Revisit: constant 8
-        if exp_pkt.NH:
+        if NH:
             hdr_len += 4
-        if exp_pkt.GC:
+        if GC:
             fields.extend(ExplicitHdr.ms_fields)
             hdr_len += 1
-        fields.extend(ControlWriteMSGPkt.os2_fields)
-        pay_len = exp_pkt.LEN - hdr_len
+        fields.extend(ControlWriteMSGBase.os2_fields)
+        pay_len = (Packet.pay_len_and_pad_cnt(payLen)[0] if pktLen is None
+                   else (pktLen - hdr_len))
         fields.append(('Payload', c_u32 * pay_len))
-        if exp_pkt.NH:
+        if NH:
             fields.extend(ExplicitHdr.nh_fields)
-        fields.extend(ControlWriteMSGPkt.os3_fields)
-        className = exp_pkt.oclName + exp_pkt.opcName
-        pktClass = globals()[className + 'Pkt']
+        fields.extend(ControlWriteMSGBase.os3_fields)
+        pktClass = globals()[className + 'Base']
         pkt_type = type(className, (pktClass,),
                         {'_fields_': fields,
-                         'data': exp_pkt.data,
-                         'verbosity': exp_pkt.verbosity,
+                         'data': data,
+                         'verbosity': verbosity,
                          'pay_len': pay_len})
+        return (pkt_type, hdr_len + pay_len)
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type, hdr_len = ControlWriteMSGBase.pkt_type(className, 0,
+                                    exp_pkt.GC, exp_pkt.NH,
+                                    pktLen=exp_pkt.LEN,
+                                    data=data, verbosity=verbosity)
         pkt = pkt_type.from_buffer(exp_pkt.data)
         return pkt
 
     @property
     def REQCTXID(self):
         return self.REQCTXIDh << 8 | self.REQCTXIDl
+
+    @REQCTXID.setter
+    def REQCTXID(self, val):
+        self.REQCTXIDl = val & 0xff
+        self.REQCTXIDh = (val >> 8) & 0xffff
 
     def __str__(self):
         r = super().__str__()
@@ -4946,10 +5280,25 @@ class ControlWriteMSGPkt(ExplicitHdr, WriteMsgMixin):
                 r += ' {:08x}'.format(self.Payload[i])
         return r
 
-class ControlUnrelWriteMSGPkt(ControlWriteMSGPkt):
+class ControlWriteMSGPkt(ControlWriteMSGBase):
+    def __new__(cls, ocl, opcode, payLen, verbosity=0, GC:bool = False,
+                NH:bool = False, data = None, **kwargs):
+        className = Packet.className(ocl, opcode)
+        pkt_type, pktLen = ControlWriteMSGBase.pkt_type(className, payLen,
+                                    GC=GC, NH=NH,
+                                    data=data, verbosity=verbosity)
+        return pkt_type(ocl, opcode, pktLen, GC=GC, NH=NH, data=data,
+                        verbosity=verbosity, **kwargs)
+
+class ControlUnrelWriteMSGBase(ControlWriteMSGBase):
     def reliable(self):
         return False
 
+class ControlUnrelWriteMSGPkt(ControlWriteMSGPkt):
+    pass
+
+class DRUnrelWriteMSGBase(ControlUnrelWriteMSGBase):
+    pass
 
 class DRUnrelWriteMSGPkt(ControlUnrelWriteMSGPkt):
     pass
@@ -4983,6 +5332,14 @@ class MulticastHdr(ExplicitHdr):
     @property
     def MGID(self):
         return self.MGIDh << 9 | self.MGIDm << 5 | self.MGIDl
+
+    @MGID.setter
+    def MGID(self, val: int) -> None:
+        if val < 0 or val > 4095:
+            raise(ValueError)
+        self.MGIDh = (val >> 9) & 0x7
+        self.MGIDm = (val >> 5) & 0xf
+        self.MGIDl = val & 0x1f
 
     @property
     def GMGID(self):
@@ -5050,7 +5407,7 @@ class MulticastHdr(ExplicitHdr):
         return r
 
 
-class MulticastUnrelWriteMSGPkt(MulticastHdr, WriteMsgMixin):
+class MulticastUnrelWriteMSGBase(MulticastHdr, WriteMsgMixin):
     os1_fields = [('RT',                         c_u32,  1),
                   ('MSGSZ',                      c_u32, 11)]
     os2_fields = [('R0',                         c_u32, 16), # Byte 12
@@ -5066,35 +5423,52 @@ class MulticastUnrelWriteMSGPkt(MulticastHdr, WriteMsgMixin):
     os3_fields = [('R2',                         c_u32,  8), # Byte YY
                   ('ECRC',                       c_u32, 24)]
 
-    def dataToPktInit(exp_pkt, data, verbosity):
-        fields = MulticastHdr.hd_fields + MulticastUnrelWriteMSGPkt.os1_fields
+    @staticmethod
+    def pkt_type(className: str, payLen: int, GC:bool = False, NH:bool = False,
+                 RT:bool = False, data = None, verbosity = 0, pktLen:int = None):
+        fields = MulticastHdr.hd_fields + MulticastUnrelWriteMSGBase.os1_fields
         hdr_len = 6 # Revisit: constant 6
-        if exp_pkt.NH:
+        if NH:
             hdr_len += 4
-        if exp_pkt.GC:
+        if GC:
             fields.extend(ExplicitHdr.ms_fields)
             hdr_len += 1
-        fields.extend(MulticastUnrelWriteMSGPkt.os2_fields)
-        if exp_pkt.LP: # Revisit: hack - LP is same bit pos as RT
-            fields.extend(MulticastUnrelWriteMSGPkt.os2b_fields)
+        fields.extend(MulticastUnrelWriteMSGBase.os2_fields)
+        if RT:
+            fields.extend(MulticastUnrelWriteMSGBase.os2b_fields)
             hdr_len += 3
-        pay_len = exp_pkt.LEN - hdr_len
+        pay_len = (Packet.pay_len_and_pad_cnt(payLen)[0] if pktLen is None
+                   else (pktLen - hdr_len))
         fields.append(('Payload', c_u32 * pay_len))
-        if exp_pkt.NH:
+        if NH:
             fields.extend(ExplicitHdr.nh_fields)
-        fields.extend(MulticastUnrelWriteMSGPkt.os3_fields)
-        className = exp_pkt.oclName + exp_pkt.opcName
-        pkt_type = type(className, (MulticastUnrelWriteMSGPkt,),
+        fields.extend(MulticastUnrelWriteMSGBase.os3_fields)
+        pkt_type = type(className, (MulticastUnrelWriteMSGBase,),
                         {'_fields_': fields,
-                         'data': exp_pkt.data,
-                         'verbosity': exp_pkt.verbosity,
+                         'data': data,
+                         'verbosity': verbosity,
                          'pay_len': pay_len})
+        return (pkt_type, hdr_len + pay_len)
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        className = exp_pkt.oclName + exp_pkt.opcName
+        # Revisit: hack - LP is same bit pos as RT
+        pkt_type, hdr_len = MulticastUnrelWriteMSGBase.pkt_type(className, 0,
+                                    exp_pkt.GC, exp_pkt.NH, exp_pkt.LP,
+                                    pktLen=exp_pkt.LEN,
+                                    data=data, verbosity=verbosity)
         pkt = pkt_type.from_buffer(exp_pkt.data)
         return pkt
 
     @property
     def RCVTag(self):
         return self.RCVTag2 << 64 | self.RCVTag1 << 32 | self.RCVTag0
+
+    @RCVTag.setter
+    def RCVTag(self, val):
+        self.RCVTag0 = val & 0xffffffff
+        self.RCVTag1 = (val >> 32) & 0xffffffff
+        self.RCVTag2 = (val >> 64) & 0xffffffff
 
     def reliable(self):
         return False
@@ -5119,3 +5493,13 @@ class MulticastUnrelWriteMSGPkt(MulticastHdr, WriteMsgMixin):
             for i in reversed(range(self.pay_len)):
                 r += ' {:08x}'.format(self.Payload[i])
         return r
+
+class MulticastUnrelWriteMSGPkt(MulticastUnrelWriteMSGBase):
+    def __new__(cls, ocl, opcode, payLen, verbosity=0, GC:bool = False,
+                NH:bool = False, RT:bool = False, data = None, **kwargs):
+        className = Packet.className(ocl, opcode)
+        pkt_type, pktLen = MulticastUnrelWriteMSGBase.pkt_type(className, payLen,
+                                    GC=GC, NH=NH, RT=RT,
+                                    data=data, verbosity=verbosity)
+        return pkt_type(ocl, opcode, pktLen, GC=GC, NH=NH, RT=RT, data=data,
+                        verbosity=verbosity, **kwargs)
