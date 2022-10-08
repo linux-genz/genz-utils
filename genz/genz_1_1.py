@@ -4194,6 +4194,10 @@ class ExplicitReqHdr(ExplicitHdr):
     def __str__(self):
         r = super().__str__()
         r += (',{},{},{}' if self.csv else ', LP: {}, TA: {}, RK: {}').format(self.LP, self.TA, self.RK)
+        if self.RK:
+            r += (',{}' if self.csv else ', RKey: {:08x}').format(self.RKey)
+        elif self.csv:
+            r += ','
         return r
 
 class ExplicitPkt(ExplicitHdr):
@@ -4498,6 +4502,10 @@ class ControlReadPkt(ExplicitHdr):
         if self.verbosity > 1 and not self.csv:
             r += ', R0: {}'.format(self.R0)
         r += (',,,{},{}' if self.csv else ', RK: {}, DR: {}').format(self.RK, self.DR)
+        if self.RK:
+            r += (',{}' if self.csv else ', RKey: {:08x}').format(self.RKey)
+        elif self.csv:
+            r += ','
         if self.DR:
             r += (',{}' if self.csv else ', DRIface: {}').format(self.DRIface)
         elif self.csv:
@@ -4572,6 +4580,10 @@ class ControlWritePkt(ExplicitHdr):
         if self.verbosity > 1 and not self.csv:
             r += ', R0: {}'.format(self.R0)
         r += (',,,{},{}' if self.csv else ', RK: {}, DR: {}').format(self.RK, self.DR)
+        if self.RK:
+            r += (',{}' if self.csv else ', RKey: {:08x}').format(self.RKey)
+        elif self.csv:
+            r += ','
         if self.DR:
             r += (',{}' if self.csv else ', DRIface: {}').format(self.DRIface)
         elif self.csv:
