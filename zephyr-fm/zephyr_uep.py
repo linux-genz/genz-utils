@@ -78,9 +78,14 @@ def netlink_reader(*args, **kwargs):
             # convert the "attrs" tuples to a dictionary
             attrs = dict(msg[i]['attrs'])
             mgr_uuid = UUID(bytes=bytes(attrs['GENZ_A_UEP_MGR_UUID']))
+            flags = attrs['GENZ_A_UEP_FLAGS']
+            vers = flags & 0xf
+            if vers != 2:
+                log.warning(f'unexpected UEP info version: {vers} (expected 2)')
+                continue
             attrs['GENZ_A_UEP_MGR_UUID'] = mgr_uuid
-            uep_rec = genz.UEPEventRecord.dataToRec(bytearray(attrs['GENZ_A_UEP_REC']),
-                                            verbosity=verbosity)
+            ba = bytearray(attrs['GENZ_A_UEP_REC'])
+            uep_rec = genz.UEPEventRecord.dataToRec(ba, verbosity=verbosity)
             attrs['GENZ_A_UEP_REC'] = uep_rec
             # We have to convert to json ourselves because if we try to let
             # requests do it, it doesn't get our magic to_json() stuff
