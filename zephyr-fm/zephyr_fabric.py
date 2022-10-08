@@ -543,7 +543,11 @@ class Fabric(nx.MultiGraph):
         mgr_uuid = UUID(body.get('GENZ_A_UEP_MGR_UUID'))
         # Revisit: check mgr_uuid against self.mgr_uuid
         br_gcid = GCID(val=body.get('GENZ_A_UEP_BRIDGE_GCID'))
-        br = self.comp_gcids[br_gcid]
+        try:
+            br = self.comp_gcids[br_gcid]
+        except KeyError:
+            log.warning(f'unknown bridge GCID: {br_gcid}')
+            return None
         flags = body.get('GENZ_A_UEP_FLAGS')
         local = flags & 0x10 # Revisit: enum?
         ts_sec = body.get('GENZ_A_UEP_TS_SEC')
@@ -557,9 +561,18 @@ class Fabric(nx.MultiGraph):
             scid = rec['SCID']
             sender_gcid = GCID(cid=scid, sid=(rec['SSID'] if gc else
                                               br.gcid.sid))
-            sender = self.comp_gcids[sender_gcid]
+            try:
+                sender = self.comp_gcids[sender_gcid]
+            except KeyError:
+                log.warning(f'unknown sender GCID: {sender_gcid}')
+                return None
         if rec['IV']:
-            iface = sender.interfaces[rec['IfaceID']]
+            ifnum = rec['IfaceID']
+            try:
+                iface = sender.interfaces[ifnum]
+            except IndexError:
+                log.warning(f'unknown sender interface: {sender_gcid}.{ifnum}')
+                return None
         else:
             iface = None
         if zephyr_conf.args.keyboard > 2:
