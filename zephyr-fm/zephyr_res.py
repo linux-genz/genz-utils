@@ -26,6 +26,7 @@ import json
 import time
 from uuid import UUID, uuid4
 from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
+from copy import deepcopy
 from pdb import set_trace
 from typing import List
 from zephyr_conf import log
@@ -56,11 +57,12 @@ class Resource():
 
 class ResourceList():
     def __init__(self, fab, resources: List[Resource], res_dict: dict,
-                 readOnly=False):
+                 readOnly=False, ts=None):
         self.fab = fab
         self.consumers = set()     # set of Components
         self.resources = resources # list of Resources
         self.res_dict = {}         # dict for to_json()
+        self.parent = None
         # Revisit: exception handling
         try:
             self.producer = fab.cuuid_serial[res_dict['producer']]
@@ -80,11 +82,24 @@ class ResourceList():
         self.res_dict['fru_uuid']  = str(self.producer.fru_uuid)
         self.res_dict['mgr_uuid']  = str(self.producer.mgr_uuid)
         self.res_dict['resources'] = [ res.to_json() for res in self.resources ]
+        self.update_mod_timestamp(ts=ts)
         self.add_consumers(res_dict['consumers'], readOnly=readOnly)
+
+    def update_mod_timestamp(self, ts=None):
+        if ts is None:
+            ts = time.time_ns()
+        self.res_dict['mod_timestamp'] = ts
+        if self.parent is not None:
+            self.parent.mod_timestamp = max(self.parent.mod_timestamp, ts)
+
+    def set_parent(self, parent, ts=None):
+        self.parent = parent
+        self.update_mod_timestamp(ts=ts)
 
     def append(self, res):
         self.resources.append(res)
         self.res_dict['resources'].append(res.to_json())
+        self.update_mod_timestamp()
 
     def add_consumers(self, consumers, readOnly=False):
         for cons in consumers:
@@ -97,13 +112,14 @@ class ResourceList():
             if cons_comp not in self.consumers:
                 self.res_dict['consumers'].append(cons_comp.cuuid_serial)
                 self.consumers.add(cons_comp)
+                self.update_mod_timestamp()
                 if not readOnly:
                     routes = self.fab.setup_bidirectional_routing(
                         cons_comp, self.producer)
                 # Revisit: save routes for later teardown requests?
         # end for cons
 
-    def remove_consumers(self, res: Resource, consumers):
+    def remove_consumers(self, res: Resource, consumers, ts=None):
         for cons in consumers:
             try:
                 cons_comp = self.fab.cuuid_serial[cons]
@@ -114,6 +130,7 @@ class ResourceList():
             if cons_comp in self.consumers:
                 self.res_dict['consumers'].remove(cons_comp.cuuid_serial)
                 self.consumers.discard(cons_comp)
+                self.update_mod_timestamp(ts=ts)
                 # Revisit: fix this
                 # Routes need reference counting (per resource)
                 #routes = self.fab.setup_bidirectional_routing(
@@ -125,7 +142,8 @@ class ResourceList():
         # end for cons
 
     def to_json(self):
-        return self.res_dict
+        # make deepcopy so later add/remove does not affect it
+        return deepcopy(self.res_dict)
 
     def __iter__(self):
         return iter(self.resources)
@@ -137,12 +155,14 @@ class Resources():
         self.by_producer = {} # key: producer Component, val: ResourceList set
         self.by_consumer = {} # key: consumer Component, val: ResourceList set
         self.by_instance_uuid = {} # key: instance UUID, val: Resource
+        self.mod_timestamp = time.time_ns()
         for res in resources:
             self.add(res)
 
-    def add(self, res: Resource) -> None:
+    def add(self, res: Resource, ts=None) -> None:
         self.by_instance_uuid[res.instance_uuid] = res
         res_list = res.res_list
+        res_list.set_parent(self, ts=ts)
         try:
             self.by_producer[res.producer].add(res_list)
         except KeyError:
@@ -154,16 +174,18 @@ class Resources():
                 self.by_consumer[cons] = set([res_list])
         # end for
 
-    def remove(self, res: Resource) -> None:
+    def remove(self, res: Resource, ts=None) -> None:
         del self.by_instance_uuid[res.instance_uuid]
         res_list = res.res_list
+        res_list.set_parent(self, ts=ts)
         self.by_producer[res.producer].remove(res_list)
         for cons in res.consumers:
             self.by_consumer[cons].remove(res_list)
 
     def to_json(self):
         res_dict = { 'fab_uuid': str(self.fab.fab_uuid),
-                     'timestamp': time.time_ns(),
+                     'cur_timestamp': time.time_ns(),
+                     'mod_timestamp': self.mod_timestamp,
                      'fab_resources': [ res.to_json() for prod in self.by_producer.values() for res in prod ]
                     }
         return res_dict

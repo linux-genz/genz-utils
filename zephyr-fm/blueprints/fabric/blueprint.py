@@ -27,7 +27,8 @@ def topology():
         'graph'      : {
            'fab_uuid' : 'string',
            'mgr_uuids': [ 'string' ],
-           'timestamp': int,  # from time.time_ns()
+           'cur_timestamp': int,  # from time.time_ns()
+           'mod_timestamp': int,  # last modification, from time.time_ns()
         },
         'nodes': [
           {
@@ -39,6 +40,7 @@ def topology():
             'fru_uuid'     : 'string',
             'max_data'     : 'number',
             'max_iface'    : 'number',
+            'mod_timestamp': int,  # last modification, from time.time_ns()
           }
         ],
         'links': [
@@ -48,6 +50,7 @@ def topology():
             'key'          : 'number',
             '<source_instance_uuid>'  : 'string',
             '<target_instance_uuid>'  : 'string',
+            'mod_timestamp': int,  # last modification, from time.time_ns()
           }
         ]
     }
@@ -87,17 +90,15 @@ def routes():
     Returned body model:
     {
         'fab_uuid' : 'string',
-    # Revisit: fix this
+        'cur_timestamp': 'int', # from time.time_ns()
+        'mod_timestamp': 'int', # last modification, from time.time_ns()
         'routes': {
-          {
-            'id'           : 'string',
-            'instance_uuid': 'string',
-            'cclass'       : 'number',
-            'mgr_uuid'     : 'string',
-            'gcids'        : [ 'string' ],
-            'fru_uuid'     : 'string',
-            'max_data'     : 'number',
-            'max_iface'    : 'number',
+          'FromComp(GCID)->ToComp(GCID)': {
+            'mod_timestamp': 'int', # last modification, from time.time_ns()
+            'route_list': [
+              [ 'EgressIface->ToIface',
+              ]
+            ]
           }
         }
     }
@@ -114,11 +115,12 @@ def routes():
 def endpoints():
     """
         Accepts GET request and returns a json body describing the registered
-    fabric endpoints (and the fabric_uuid).
+    fabric endpoints (plus the fabric_uuid and timestamps).
     Returned body model:
     {
-        'fab_uuid' : 'string',
-        'timestamp': 'int', # from time.time_ns()
+        'fab_uuid'     : 'string',
+        'cur_timestamp': 'int', # from time.time_ns()
+        'mod_timestamp': 'int', # last modification, from time.time_ns()
     # Revisit: fix this
         'endpoints': {
           {
@@ -140,8 +142,9 @@ def endpoints():
     fab = mainapp.conf.fab
     desc = {
         'fab_uuid': str(fab.fab_uuid),
-        'timestamp': time.time_ns(),
-        'endpoints': mainapp.llamas_callbacks
+        'cur_timestamp': time.time_ns(),
+        'mod_timestamp': mainapp.callbacks.mod_timestamp,
+        'endpoints': mainapp.callbacks.endpoints
     }
 
     return flask.make_response(flask.jsonify(desc), 200)
@@ -281,7 +284,6 @@ def sfm_routes():
     if not op in [ 'add', 'remove' ]:
         msg = { 'error' : f'Unknown operation: {op}.' }
         return flask.make_response(flask.jsonify(msg), 404)
-    set_trace() # Revisit: temp debug
     if op == 'add':
         response = fab.add_routes(routes, send=False)
     else: # op == 'remove'
@@ -329,7 +331,6 @@ def sfm_endpoints():
     if not op in [ 'add', 'remove' ]:
         msg = { 'error' : f'Unknown operation: {op}.' }
         return flask.make_response(flask.jsonify(msg), 404)
-    set_trace() # Revisit: temp debug
     if op == 'add':
         response = fab.add_routes(routes, send=False)
     else: # op == 'remove'

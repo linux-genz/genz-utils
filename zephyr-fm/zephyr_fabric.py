@@ -105,8 +105,9 @@ class Fabric(nx.MultiGraph):
         self.promote_sfm_refcount = RefCount()
         mgr_uuids = [] if self.mgr_uuid is None else [self.mgr_uuid]
         ns = time.time_ns()
-        super().__init__(fab_uuid=self.fab_uuid, mgr_uuids=mgr_uuids, timestamp=ns)
-        log.info(f'fabric: {path}, num={self.fabnum}, fab_uuid={self.fab_uuid}, mgr_uuid={self.mgr_uuid}, timestamp={ns}')
+        super().__init__(fab_uuid=self.fab_uuid, mgr_uuids=mgr_uuids,
+                         cur_timestamp=ns, mod_timestamp=ns)
+        log.info(f'fabric: {path}, num={self.fabnum}, fab_uuid={self.fab_uuid}, mgr_uuid={self.mgr_uuid}, cur_timestamp={ns}')
 
     def assign_gcid(self, comp, ssdt_sz=4096, proposed_gcid=None):
         # Revisit: subnets
@@ -142,13 +143,21 @@ class Fabric(nx.MultiGraph):
         self.comp_gcids[comp.gcid] = comp
         self.update_comp(comp)
 
-    def update_comp(self, comp):
+    def update_mod_timestamp(self, comp=None, ts=None, forceUpdate=False):
+        if ts is None:
+            ts = time.time_ns()
+        if comp is not None:
+            self.nodes[comp]['mod_timestamp'] = ts
+        self.graph['mod_timestamp'] = max(ts if forceUpdate else
+                                          self.graph['mod_timestamp'], ts)
+
+    def update_comp(self, comp, forceTimestamp=False):
         self.nodes[comp]['fru_uuid'] = comp.fru_uuid
         self.nodes[comp]['max_data'] = comp.max_data
         self.nodes[comp]['max_iface'] = comp.max_iface
         self.nodes[comp]['nonce'] = self.encrypt_nonce(comp.nonce)
         self.nodes[comp]['rsp_page_grid_ps'] = comp.rsp_page_grid_ps
-        comp.update_cstate()
+        comp.update_cstate(forceTimestamp=forceTimestamp)
         self.nodes[comp]['cstate'] = str(comp.cstate) # Revisit: to_json() doesn't work
 
     def set_comp_name(self, comp, name: str):
@@ -282,7 +291,7 @@ class Fabric(nx.MultiGraph):
         self.pfm = pfm
         self.graph['pfm'] = pfm
 
-    def set_sfm(self, sfm):
+    def set_sfm(self, sfm: Component):
         self.sfm = sfm
         self.graph['sfm'] = sfm
 
@@ -581,7 +590,7 @@ class Fabric(nx.MultiGraph):
         return self.dispatch(rec['EventName'], br, sender, iface, rec)
 
     def to_json(self):
-        self.graph['timestamp'] = time.time_ns()
+        self.graph['cur_timestamp'] = time.time_ns()
         nl = nx.node_link_data(self)
         return nl
 
@@ -641,9 +650,11 @@ class Fabric(nx.MultiGraph):
         return { 'success': [] }
 
     def enable_sfm(self, sfm: Component):
+        # Revisit: what to do if there's already a registered SFM?
         for comp in self.components.values():
             comp.enable_sfm(sfm)
         self.set_sfm(sfm)
+        return 'ok'
 
     # zeroconf ServiceBrowser service handlers
     def add_service(self, zeroconf: Zeroconf, type: str, name: str) -> None:
@@ -669,6 +680,7 @@ class Fabric(nx.MultiGraph):
         self.add_mgr_uuids(mgr_uuids)
         self.add_comps_from_topo(topo, pfm, sfm)
         self.add_links_from_topo(topo)
+        self.update_mod_timestamp(ts=topo.graph['mod_timestamp'], forceUpdate=True)
         self.get_fm_endpoints(fm)
         routes = self.get_fm_routes(fm)
         self.write_routes(routes, refcountOnly=True)
@@ -742,7 +754,8 @@ class Fabric(nx.MultiGraph):
         data = {
             'callbacks' : callback_endpoints,
             'alias'     : None,
-            'bridges'   : bridges
+            'bridges'   : bridges,
+            'mgr_type'  : 'sfm'
         }
 
         log.debug(f'subscribe_sfm: url={url}, data={data}') # Revisit: temp debug
@@ -797,6 +810,7 @@ class Fabric(nx.MultiGraph):
             uuid = UUID(attrs['instance_uuid'])
             name = attrs.get('name', None)
             ps = int(attrs['rsp_page_grid_ps'])
+            ts = attrs.get('mod_timestamp', None)
             if update_sfm:
                 # Replace temp LocalBridge from sfm_init() with one having
                 # the correct instance_uuid from PFM
@@ -819,6 +833,7 @@ class Fabric(nx.MultiGraph):
                 comp.add_fab_comp(setup=True)
             # Revisit: instead, call rsp_page_grid_init(readOnly=True)
             comp.rsp_page_grid_ps = ps
+            self.update_mod_timestamp(comp, ts)
             comp.comp_init(None) # None: not PFM
             if cuuid_serial == pfm:
                 self.set_pfm(comp)
@@ -837,8 +852,8 @@ class Fabric(nx.MultiGraph):
             to_uuid = UUID(items[1][0])
             fr_iface = self.components[fr_uuid].lookup_iface(items[0][1]['num'])
             to_iface = self.components[to_uuid].lookup_iface(items[1][1]['num'])
-            fr_iface.iface_state()
-            to_iface.iface_state()
+            fr_iface.iface_state(ts=items[0][1]['mod_timestamp'])
+            to_iface.iface_state(ts=items[1][1]['mod_timestamp'])
             self.add_link(fr_iface, to_iface)
         # end for
 
@@ -875,7 +890,8 @@ class Fabric(nx.MultiGraph):
             log.warning(f'get_fm_resources: wrong FM fab_uuid {fab_uuid}')
             return None
         res_data = data.get('fab_resources', None)
-        self.conf.fab_resources(res_data)
+        ts = data.get('mod_timestamp', None)
+        self.conf.fab_resources(res_data, ts=ts)
 
     def get_fm_endpoints(self, fm: 'FM') -> None:
         url, _ = self.endpoints_url(fm, fm_endpoint='fabric/endpoints')
@@ -887,18 +903,22 @@ class Fabric(nx.MultiGraph):
         if fab_uuid is None or fab_uuid != self.fab_uuid:
             log.warning(f'get_fm_endpoints: wrong FM fab_uuid {fab_uuid}')
             return None
+        now = time.time_ns()
+        cur_ts = data.get('cur_timestamp', now)
+        mod_ts = data.get('mod_timestamp', now)
         ep_data = data.get('endpoints', {})
-        self.mainapp.llamas_callbacks = ep_data
+        self.mainapp.callbacks.set_fm_endpoints(ep_data, cur_ts, mod_ts)
 
     def send_sfm(self, callback: str, item: str, js, op=None):
         if self.sfm is None: # no SFM
             return
-        url = self.mainapp.sfm_callbacks[self.sfm.cuuid_serial][callback]
+        url = self.mainapp.callbacks.get_endpoints(self.sfm.cuuid_serial,
+                                                   'sfm')['callbacks'][callback]
         data = {
-            'fabric_uuid': str(self.fab_uuid),
-            'mgr_uuid'   : str(self.mgr_uuid),
-            'timestamp'  : time.time_ns(),
-            f'{item}'    : js,
+            'fabric_uuid'   : str(self.fab_uuid),
+            'mgr_uuid'      : str(self.mgr_uuid),
+            'cur_timestamp' : time.time_ns(),
+            f'{item}'       : js,
         }
         if op is not None:
             data['operation'] = op

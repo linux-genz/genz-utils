@@ -26,6 +26,7 @@ import argparse
 import ctypes
 import json
 import requests
+import time
 import flask_fat
 from flask_fat import ConfigBuilder
 from uuid import UUID, uuid4
@@ -33,13 +34,13 @@ from pathlib import Path
 from importlib import import_module
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from base64 import b64encode, b64decode
+from collections import defaultdict
 from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
 import zephyr_conf
 from zephyr_conf import log, Conf
 from zephyr_iface import Interface
 from zephyr_comp import Component
 from zephyr_fabric import Fabric
-from zephyr_res import ResourceList
 from zephyr_uep import netlink_reader
 from middleware.netlink_mngr import NetlinkManager
 from typing import List, Tuple
@@ -66,19 +67,60 @@ def uuid_to_json(self):
     return str(self)
 UUID.to_json = uuid_to_json
 
+class Callbacks():
+    def __init__(self, ts=None):
+        self.endpoints = defaultdict(lambda: defaultdict(dict))
+        if ts is None:
+            ts = time.time_ns()
+        self.mod_timestamp = ts
+
+    def set_endpoints(self, cuuid_serial: str, endpoints: dict, ts=None):
+        '''endpoints data model:
+        {
+        'callbacks' : { },
+        'mgr_type'  : 'string', # 'llamas', 'sfm', or <any other string>
+        'mod_timestamp' : int,
+        }
+        '''
+        if ts is None:
+            ts = time.time_ns()
+        endpoints['mod_timestamp'] = ts
+        mgr_type = endpoints['mgr_type']
+        self.endpoints[cuuid_serial][mgr_type] = endpoints
+        self.mod_timestamp = max(self.mod_timestamp, ts)
+
+    def get_endpoints(self, cuuid_serial: str, mgr_type: str):
+        return self.endpoints[cuuid_serial][mgr_type]
+
+    def match(self, mgr_type: str, callbacks: dict):
+        for eps in self.endpoints.values():
+            for type, ep in eps.items():
+                if type == mgr_type and callbacks == ep['callbacks']:
+                    return True
+        return False
+
+    def set_fm_endpoints(self, endpoints: dict,
+                         cur_ts: int, mod_ts: int, skipSFM=True):
+        for cuuid_serial, eps in endpoints.items():
+            for type, ep in eps.items():
+                if skipSFM and type == 'sfm':
+                    continue
+                self.set_endpoints(cuuid_serial, ep, ts=ep['mod_timestamp'])
+        self.mod_timestamp = mod_ts
+
+
 class FMServer(flask_fat.APIBaseline):
     def __init__(self, config, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.conf = config
-        self.llamas_callbacks = {} # key: bridge cuuid:serial
-        self.sfm_callbacks = {} # key: bridge cuuid:serial
+        self.callbacks = Callbacks()
         self.init_socket()
 
-    def get_endpoints(self, consumers, name):
+    def get_endpoints(self, consumers, mgr_type, name):
         endpoints = []
         for con in consumers:
             try:
-                endpoints.append(self.llamas_callbacks[con][name])
+                endpoints.append(self.callbacks.get_endpoints(con, mgr_type)['callbacks'][name])
             except KeyError:
                 log.debug(f'consumer {con} has no subscribed {name} endpoint')
         # end for

@@ -26,7 +26,9 @@ import logging
 import logging.config
 import yaml
 import json
+import time
 from uuid import UUID
+from pdb import set_trace
 from genz.genz_common import GCID
 
 INVALID_GCID = GCID(val=0xffffffff)
@@ -80,13 +82,14 @@ class Conf():
         from zephyr_res import ResourceList, Resource
         fab = self.fab
         ro = op is not None
-        res_list = ResourceList(fab, [], conf_add, readOnly=ro)
+        ts = conf_add.get('mod_timestamp', time.time_ns())
+        res_list = ResourceList(fab, [], conf_add, readOnly=ro, ts=ts)
         newRes, addCons = False, False
         for res_dict in conf_add['resources']:
             if op == 'add':
                 res = Resource(res_list, res_dict)
                 res_list.append(res)
-                fab.resources.add(res)
+                fab.resources.add(res, ts=ts)
             elif res_dict['instance_uuid'] == '???': # new resource
                 if addCons:
                     log.warning('mixed newRes and addCons resources')
@@ -125,7 +128,7 @@ class Conf():
             self.add_resource(conf_add)
         log.info('finished adding resources from {}'.format(self.file))
 
-    def fab_resources(self, fab_res) -> None:
+    def fab_resources(self, fab_res, ts=None) -> None:
         '''Called by SFM with resources fetched from PFM
         '''
         if fab_res is None:
@@ -135,12 +138,16 @@ class Conf():
             log.info('no PFM fab resources to add')
             return
         log.info('adding resources from PFM')
+        if ts is not None:
+            self.fab.resources.mod_timestamp = ts
         for fres in fab_res:
             self.add_resource(fres, op='add', send=False)
         log.info('finished adding resources from PFM')
 
     def remove_resource(self, conf_rm, send=True, op=None) -> dict:
         fab = self.fab
+        js = None
+        ts = conf_rm.get('mod_timestamp', None)
         for res_dict in conf_rm['resources']:
             if res_dict['instance_uuid'] == '???': # unknown resource
                 log.warning('remove resource request missing instance_uuid')
@@ -148,12 +155,14 @@ class Conf():
                 instance_uuid = UUID(res_dict['instance_uuid'])
                 res = fab.resources.by_instance_uuid[instance_uuid]
                 res_list = res.res_list
-                res_list.remove_consumers(res, conf_rm['consumers'])
+                if js is None: # get json before res_list is modified
+                    js = res_list.to_json()
+                res_list.remove_consumers(res, conf_rm['consumers'], ts=ts)
                 op = 'rm_cons'
                 if len(res.consumers) == 0: # last consumer removed
-                    fab.resources.remove(res) # remove res itself
+                    fab.resources.remove(res, ts=ts) # remove res itself
                     op = 'remove'
-        js = res_list.to_json()
+        # send removed/modified resources to SFM
         if send:
             fab.send_sfm('sfm_res', 'resource', js, op=op)
         return js

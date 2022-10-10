@@ -309,12 +309,13 @@ class Routes():
         self.fab_uuid = fab_uuid
         self.fr_to = {}  # key: (fr:Component, to:Component)
         self.ifaces = {} # key: Interface
+        self.mod_timestamp = time.time_ns()
         if routes is not None:
             for rt in routes:
                 self.add(rt.fr, rt.to, route=rt)
 
     def get_routes(self, fr: Component, to: Component) -> List[Route]:
-        return self.fr_to[(fr, to)]
+        return self.fr_to[(fr, to)]['route_list']
 
     def add_ifaces(self, route: Route) -> None:
         for iface in route.ifaces:
@@ -331,7 +332,13 @@ class Routes():
             rts.discard(route)
         #end for
 
-    def add(self, fr: Component, to: Component, route: Route) -> None:
+    def update_mod_timestamp(self, fr: Component, to: Component, ts=None) -> None:
+        if ts is None:
+            ts = time.time_ns()
+        self.fr_to[(fr, to)]['mod_timestamp'] = ts
+        self.mod_timestamp = max(self.mod_timestamp, ts)
+
+    def add(self, fr: Component, to: Component, route: Route, ts=None) -> None:
         try:
             rts = self.get_routes(fr, to)
             for rt in rts:
@@ -341,8 +348,9 @@ class Routes():
             # not in list - add it - at the proper place
             bisect.insort(rts, route)
         except KeyError: # not in dict - add
-            self.fr_to[(fr, to)] = [ route ]
+            self.fr_to[(fr, to)] = { 'mod_timestamp': 0, 'route_list': [ route ] }
         self.add_ifaces(route)
+        self.update_mod_timestamp(fr, to, ts=ts)
 
     def remove(self, fr: Component, to: Component, route: Route) -> bool:
         try:
@@ -351,6 +359,7 @@ class Routes():
         except (KeyError, ValueError):
             return False
         self.remove_ifaces(route)
+        self.update_mod_timestamp(fr, to)
         return True
 
     def impacted(self, iface: Interface):
@@ -410,9 +419,10 @@ class Routes():
         for k in routes_dict.keys():
             fr, to = self.parse_fr_to(k, fab)
             rts = Routes(fab.fab_uuid) if fab_rts is None else fab_rts
-            for rtl in routes_dict[k]:
+            mod_timestamp = routes_dict[k]['mod_timestamp']
+            for rtl in routes_dict[k]['route_list']:
                 rt = self.parse_route(rtl, fab)
-                rts.add(fr, to, rt)
+                rts.add(fr, to, rt, ts=mod_timestamp)
             # end for rtl
             if fab_rts is None:
                 ret_dict[(fr, to)] = rts
@@ -422,19 +432,24 @@ class Routes():
     def to_json(self):
         routes_dict = {}
         for k, v in self.fr_to.items():
-            routes_dict[str(k[0]) + '->' + str(k[1])] = [r.to_json() for r in v]
+            routes_dict[str(k[0]) + '->' + str(k[1])] = {
+                'mod_timestamp': v['mod_timestamp'],
+                'route_list': [r.to_json() for r in v['route_list']]
+            }
         top_dict = { 'fab_uuid': str(self.fab_uuid),
-                     'timestamp': time.time_ns(),
+                     'cur_timestamp': time.time_ns(),
+                     'mod_timestamp': self.mod_timestamp,
                      'routes': routes_dict
                     }
         return top_dict
 
     def __str__(self):
         r = 'fab_uuid: {}, '.format(self.fab_uuid)
+        # Revisit: mod_timestamp?
         r += 'routes: {}'.format(self.fr_to)
         return '{' + r + '}'
 
     def __iter__(self):
         for rts in self.fr_to.values():
-            for rt in rts:
+            for rt in rts['route_list']:
                 yield rt

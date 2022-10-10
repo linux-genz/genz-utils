@@ -634,7 +634,7 @@ class Component():
         if self.has_switch:
             self.switch_init(core)
         self.comp_err_signal_init(core)
-        self.fab.update_comp(self)
+        self.fab.update_comp(self, forceTimestamp=True)
         return self.usable
 
     def opcode_set_init(self):
@@ -1481,7 +1481,8 @@ class Component():
                 log.info('{}: interface{} is not usable'.format(
                     self.gcid, iface.num))
 
-    def update_cstate(self, prefix='control'):
+    def update_cstate(self, prefix='control', forceTimestamp=False):
+        prev_cstate = self.cstate
         genz = zephyr_conf.genz
         core_file = self.path / prefix / 'core@0x0/core'
         with core_file.open(mode='rb+') as f:
@@ -1491,6 +1492,8 @@ class Component():
                                          verbosity=self.verbosity)
             cstatus = genz.CStatus(core.CStatus, core)
             self.cstate = CState(cstatus.field.CState)
+            if forceTimestamp or (self.cstate != prev_cstate):
+                self.fab.update_mod_timestamp(comp=self)
 
     def unreachable_comp(self, to, iface, route):
         log.warning('{}: unreachable comp {} due to {} failure'.format(

@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import time
 import uuid
 from datetime import datetime
 from pdb import set_trace
@@ -40,6 +41,7 @@ def subscribe_llamas():
     callback_endpoints = body.get('callbacks', None)
     endpoint_alias = body.get('alias', None)
     bridges = body.get('bridges', [])
+    mgr_type = body.get('mgr_type', 'llamas')
 
     if callback_endpoints is None:
         response['error'] = f'No callbacks in body!\n{body}'
@@ -50,7 +52,7 @@ def subscribe_llamas():
         status = 'error'
         code = 400
     else:
-        if callback_endpoints in Journal.mainapp.llamas_callbacks.values():
+        if Journal.mainapp.callbacks.match(mgr_type, callback_endpoints):
             status = f'Endpoints "{callback_endpoints}" already in the list'
             code = 403
         else:
@@ -59,7 +61,9 @@ def subscribe_llamas():
             # save callback endpoints and move local bridges
             fab = Journal.mainapp.conf.fab
             for br in bridges:
-                Journal.mainapp.llamas_callbacks[br] = callback_endpoints
+                callback_dict = { 'mgr_type'  : mgr_type,
+                                  'callbacks' : callback_endpoints }
+                Journal.mainapp.callbacks.set_endpoints(br, callback_dict)
                 resp = send_move_local_bridge(fab, br, callback_endpoints['local_bridge'])
                 log.debug(f'send_move_local_bridge resp={resp}')
 
@@ -111,9 +115,10 @@ def subscribe_sfm():
     """
         Subscribe Secondary Fabric Manager (SFM) endpoints.
     @param req.body: {
-        'callbacks'    : {'name': <endpoint>},
+        'callbacks'    : {'name': <endpoint_url>},
         'alias'        : <value>, # unused
-        'bridges'      : <List[cuuid:serial]>,
+        'bridges'      : <List[cuuid:serial]>, # required if SFM
+        'mgr_type'     : 'string', # 'sfm' or any other string != 'llamas'
     }
     """
     response = {}
@@ -126,24 +131,30 @@ def subscribe_sfm():
     callback_endpoints = body.get('callbacks', None)
     endpoint_alias = body.get('alias', None)
     bridges = body.get('bridges', [])
+    mgr_type = body.get('mgr_type', None)
 
     if callback_endpoints is None:
         response['error'] = f'No callbacks in body!\n{body}'
         status = 'error'
         code = 400
-    elif len(bridges) == 0:
-        response['error'] = f'No bridges in body!\n{body}'
+    elif len(bridges) != 1 and mgr_type == 'sfm':
+        response['error'] = f'One SFM bridge required in body!\n{body}'
         status = 'error'
         code = 400
     else:
+        if len(bridges) == 0: # non-SFM need not have any Gen-Z bridges
+            bridges = [ uuid.uuid4() ] # use an instance-uuid as key
         status = f'SFM callback endpoints "{callback_endpoints}" added'
 
-        # save callback endpoints and enable SFM
+        # save callback endpoints and enable SFM (if mgr_type is 'sfm')
         fab = Journal.mainapp.conf.fab
         for br in bridges:
-            Journal.mainapp.sfm_callbacks[br] = callback_endpoints
-            resp = enable_sfm(fab, br)
-            log.debug(f'enable_sfm resp={resp}')
+            callback_dict = { 'mgr_type'  : mgr_type,
+                              'callbacks' : callback_endpoints }
+            Journal.mainapp.callbacks.set_endpoints(br, callback_dict)
+            if mgr_type == 'sfm':
+                resp = enable_sfm(fab, br)
+                log.debug(f'enable_sfm resp={resp}')
         # end for br
 
     log.info(f'subscribe/sfm: {status}')
@@ -158,3 +169,4 @@ def enable_sfm(fab, br_cuuid_serial):
         log.warning(f'bridge {br_cuuid_serial} not found')
         return None
     resp = fab.enable_sfm(br)
+    return resp

@@ -45,6 +45,7 @@ class Interface():
         self.phy_status = PHYOpStatus.PHYUp
         self.phy_tx_lwr = 0
         self.phy_rx_lwr = 0
+        self.mod_timestamp = None
 
     def setup_paths(self, prefix):
         self._prefix = prefix
@@ -82,9 +83,9 @@ class Interface():
         # end with
         return iface
 
-    def iface_state(self):
+    def iface_state(self, ts=None):
         iface = self.iface_read()
-        state = self.check_i_state(iface, timeout=0, do_read=False)
+        state = self.check_i_state(iface, timeout=0, do_read=False, ts=ts)
         self.usable = (state is IState.IUp)
         return state
 
@@ -412,7 +413,8 @@ class Interface():
                     (istatus.field.LinkCTLCompleted == 1))
         return istatus.field.LinkCTLComplStatus
 
-    def check_i_state(self, iface, timeout=500000000, do_read=True):
+    def check_i_state(self, iface, timeout=500000000, do_read=True, ts=None):
+        prev_istate = self.istate
         genz = zephyr_conf.genz
         istatus = genz.IStatus(iface.IStatus, iface)
         start = time.time_ns()
@@ -430,7 +432,16 @@ class Interface():
             done = (((now - start) > timeout) or
                     (istate in [IState.IUp, IState.ILP]))
         self.istate = istate
+        self.conditional_update_mod_timestamp(prev_istate, istate,
+                                              ts=now if ts is None else ts)
         return istate
+
+    def conditional_update_mod_timestamp(self, prev, cur, ts=None):
+        if prev != cur:
+            if ts is None:
+                ts = time.time_ns()
+            self.mod_timestamp = ts
+            self.comp.fab.update_mod_timestamp(ts=ts)
 
     def get_peer_cstate(self, iface):
         genz = zephyr_conf.genz
@@ -530,12 +541,15 @@ class Interface():
     # Returns True if interface PHY is usable - is PHY-Up/PHY-Up-LP*
     # Also sets phy_status/phy[tx|rx]_lwr, for use by to_json()
     def phy_status_ok(self, phy):
+        prev_state = (self.phy_status, self.phy_tx_lwr, self.phy_rx_lwr)
         genz = zephyr_conf.genz
         phy_status = genz.PHYStatus(phy.PHYStatus, phy)
         op_status = phy_status.field.PHYLayerOpStatus
         self.phy_status = PHYOpStatus(op_status)
         self.phy_tx_lwr = phy_status.field.PHYTxLinkWidthReduced
         self.phy_rx_lwr = phy_status.field.PHYRxLinkWidthReduced
+        cur_state = (self.phy_status, self.phy_tx_lwr, self.phy_rx_lwr)
+        self.conditional_update_mod_timestamp(prev_state, cur_state)
         return self.phy_status.up_or_uplp()
 
     def compute_mhc(self, cid, rt, hc, valid):
@@ -696,6 +710,7 @@ class Interface():
     def to_json(self):
         return { 'num': str(self),
                  'state': str(self.istate),
+                 'mod_timestamp': self.mod_timestamp,
                  'phy': { 'status': str(self.phy_status),
                           'tx_LWR': self.phy_tx_lwr,
                           'rx_LWR': self.phy_rx_lwr }
