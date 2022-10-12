@@ -162,7 +162,6 @@ def zeroconf_register(fab, mainapp):
         server=f'{mainapp.hostname}.local.'
     )
 
-    fab.mainapp = mainapp # Revisit: should this be here?
     mainapp.zeroconfInfo = info
     ip_version = (IPVersion.All if args.ip6 else
                   IPVersion.V6Only if args.ip6_only else IPVersion.V4Only)
@@ -269,7 +268,7 @@ def main():
     sys_devices = Path('/sys/devices')
     fab_paths = sys_devices.glob('genz*')
     for fab_path in sorted(fab_paths):
-        fab = Fabric(nl, map, fab_path, random_cids=args.random_cids,
+        fab = Fabric(nl, mainapp, map, fab_path, random_cids=args.random_cids,
                      accept_cids=args.accept_cids, fab_uuid=fab_uuid,
                      conf=conf, mgr_uuid=mgr_uuid, verbosity=args.verbosity)
         fabrics[fab_path] = fab

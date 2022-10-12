@@ -75,10 +75,11 @@ class Fabric(nx.MultiGraph):
         # Revisit: consider bandwidth, latency, LWR
         return 1 if usable else None
 
-    def __init__(self, nl, map, path, fab_uuid=None, grand_plan=None,
+    def __init__(self, nl, mainapp, map, path, fab_uuid=None, grand_plan=None,
                  random_cids=False, accept_cids=False, conf=None,
                  mgr_uuid=None, verbosity=0):
         self.nl = nl
+        self.mainapp = mainapp
         self.map = map
         self.path = path
         self.fabnum = component_num(path)
