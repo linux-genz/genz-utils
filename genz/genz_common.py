@@ -89,10 +89,11 @@ class PHYOpStatus(IntEnum):
     PHYRvF = 15
 
     def __str__(self):
-        _phy_status = ['PHY-Down', 'PHY-Up', 'PHY-Down-Retrain',
-                       'PHY-Up-LP1', 'PHY-Up-LP2', 'PHY-Up-LP3', 'PHY-Up-LP4',
-                       'PHY-LP1', 'PHY-LP2', 'PHY-LP3', 'PHY-LP4']
-        return _phy_status[self.value]
+        _phy_status = ['Down', 'Up', 'Down-Retrain',
+                       'Up-LP1', 'Up-LP2', 'Up-LP3', 'Up-LP4',
+                       'LP1', 'LP2', 'LP3', 'LP4',
+                       'RvB', 'RvC', 'RvD', 'RvE', 'RvF']
+        return 'PHY-' + _phy_status[self.value]
 
     def up_or_uplp(self):
         return (self.value == PHYOpStatus.PHYUp or

@@ -42,8 +42,25 @@ cclass_name = [ 'reserved',    'memory_p2p64', 'memory',      'int_switch',
                 'exp_switch',  'fab_switch',   'processor',   'processor',
                 'accelerator', 'accelerator',  'accelerator', 'accelerator',
                 'io',          'io',           'io',          'io',
-                'block',       'block',        'tr',          'multi_class',
+                'block',       'block',        'tr',          'multiclass',
                 'bridge',      'bridge',       'compliance',  'lph' ]
+
+cclass_name_to_classes = {
+    'memory': (0x1, 0x2),
+    'switch': (0x3, 0x4, 0x5),
+    'int_switch': (0x3,),
+    'exp_switch': (0x4,),
+    'fab_switch': (0x5,),
+    'processor': (0x6, 0x7),
+    'accelerator': (0x8, 0x9, 0xA, 0xB),
+    'io': (0xC, 0xD, 0xE, 0xF),
+    'block': (0x10, 0x11),
+    'tr': (0x12,),
+    'multiclass': (0x13,),
+    'bridge': (0x14, 0x15),
+    'compliance': (0x16,),
+    'lph': (0x17,),
+}
 
 eventName = { 0x00: 'RecovProtocolErr',
               0x01: 'UnrecovProtocolErr',
