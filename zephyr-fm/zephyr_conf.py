@@ -111,8 +111,10 @@ class Conf():
         # send new/modified resources to SFM
         js = res_list.to_json()
         if send:
-            fab.send_sfm('sfm_res', 'resource', js,
-                         op='add' if newRes else 'add_cons')
+            op='add' if newRes else 'add_cons'
+            fab.send_sfm('sfm_res', 'resource', js, op=op)
+            fab.send_mgrs(['sfm', 'llamas'], 'mgr_res', 'resource', js,
+                          op=op, invertTypes=True)
         return js
 
     def add_resources(self) -> None:
@@ -165,6 +167,8 @@ class Conf():
         # send removed/modified resources to SFM
         if send:
             fab.send_sfm('sfm_res', 'resource', js, op=op)
+            fab.send_mgrs(['sfm', 'llamas'], 'mgr_res', 'resource', js,
+                          op=op, invertTypes=True)
         return js
 
     def get_resources(self, cuuid_serial) -> List['ResourceList']:

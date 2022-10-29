@@ -139,8 +139,26 @@ class Component():
     def __eq__(self, other):
         return self.uuid == other.uuid
 
-    def to_json(self):
-        return self.cuuid_serial
+    def to_json(self, verbosity=0):
+        if verbosity == 0:
+            return self.cuuid_serial
+        js = { 'cclass': self.cclass,
+               'cstate': str(self.cstate),
+               'fru_uuid': self.fru_uuid,
+               'gcids': [ self.gcid ],
+               'id': self.cuuid_serial,
+               'instance_uuid': self.uuid,
+               'max_data': self.max_data,
+               'max_iface': self.max_iface,
+               'mgr_uuid': self.mgr_uuid,
+               'mod_timestamp': self.fab.get_mod_timestamp(self)[1],
+               'nonce': self.fab.encrypt_nonce(self.nonce),
+               'rsp_page_grid_ps': self.rsp_page_grid_ps
+               }
+        name = self.fab.get_comp_name(self)
+        if name is not None:
+            js['name'] = name
+        return js
 
     def set_dr(self, dr):
         self.dr = dr
@@ -1275,7 +1293,8 @@ class Component():
     def has_switch(self):
         return self.switch_dir is not None
 
-    def config_interface(self, iface, pfm, ingress_iface, prev_comp):
+    def config_interface(self, iface, pfm, ingress_iface, prev_comp,
+                         send=False):
         args = zephyr_conf.args
         iface.update_peer_info()
         # get peer CState
@@ -1325,7 +1344,7 @@ class Component():
             peer_gcid = iface.peer_gcid
             msg += 'peer gcid={}'.format(peer_gcid)
             if peer_gcid is None:
-                msg += 'peer is C-Up but GCID not valid - ignoring peer'
+                msg += ' peer is C-Up but GCID not valid - ignoring peer'
                 log.warning(msg)
                 return
             if peer_gcid in self.fab.comp_gcids: # another path?
@@ -1432,6 +1451,11 @@ class Component():
                 peer_iface = Interface(comp, iface.peer_iface_num, iface)
                 iface.set_peer_iface(peer_iface)
                 gcid = self.fab.assign_gcid(comp)
+                if gcid is None:
+                    msg += 'no GCID available in pool - ignoring component'
+                    log.warning(msg)
+                    return
+                op = 'add'
                 msg += 'assigned gcid={}'.format(gcid)
                 self.fab.add_link(iface, peer_iface)
             else: # have a prev_comp
@@ -1439,6 +1463,7 @@ class Component():
                 comp.set_dr(dr)
                 peer_iface = iface.peer_iface
                 gcid = comp.gcid
+                op = 'change'
                 msg += 'reusing previously-assigned gcid={}'.format(gcid)
             # deal with "leftover" comp path from previous zephyr run
             path = self.fab.make_path(gcid)
@@ -1460,14 +1485,19 @@ class Component():
                 return
             usable = comp.comp_init(pfm, prefix='dr', ingress_iface=peer_iface,
                                     route=route[1])
+            if send:
+                js = comp.to_json(verbosity=1)
+                self.fab.send_mgrs(['llamas'], 'mgr_topo', 'component', js,
+                                   op=op, invertTypes=True)
             if usable and comp.has_switch:  # if switch, recurse
-                comp.explore_interfaces(pfm, ingress_iface=peer_iface)
+                comp.explore_interfaces(pfm, ingress_iface=peer_iface,
+                                        send=send)
             elif not usable:
                 log.warning(f'{comp} is not usable')
         # end if peer_cstate
 
     def explore_interfaces(self, pfm, ingress_iface=None, explore_ifaces=None,
-                           prev_comp=None):
+                           prev_comp=None, send=False):
         if explore_ifaces is None:
             # examine all interfaces (except ingress) & init those components
             explore_ifaces = self.interfaces
@@ -1476,7 +1506,12 @@ class Component():
                 log.debug('{}: skipping ingress interface{}'.format(
                     self.gcid, iface.num))
             elif iface.usable:
-                self.config_interface(iface, pfm, ingress_iface, prev_comp)
+                try:
+                    self.config_interface(iface, pfm, ingress_iface, prev_comp,
+                                          send=send)
+                except Exception as e:
+                    log.warning(f'{self.gcid}: interface{iface.num} config failed with exception "{e}" - marking unusable')
+                    iface.usable = False
             else:
                 log.info('{}: interface{} is not usable'.format(
                     self.gcid, iface.num))
@@ -1553,6 +1588,43 @@ class Component():
         # end with
         routes = self.fab.setup_bidirectional_routing(sfm, self)
         return routes # Revisit
+
+    def disable_sfm(self, sfm, prefix='control'):
+        '''Disable @sfm as Secondary Fabric Manager of this component and
+        remove SFM routing.
+        '''
+        core_file = self.path / prefix / 'core@0x0/core'
+        with core_file.open(mode='rb+') as f:
+            genz = zephyr_conf.genz
+            core = self.core
+            core.set_fd(f)
+            # Set Fabric Manager Transition bit (only on SFM)
+            if self is sfm:
+                cap1ctl = genz.CAP1Control(core.CAP1Control, core)
+                cap1ctl.FabricMgrTransition = 1
+                core.CAP1Control = cap1ctl.val
+                self.control_write(core, genz.CoreStructure.CAP1Control, sz=8)
+            # clear SFMCIDValid/SFMSIDValid
+            cap2ctl = genz.CAP2Control(core.CAP2Control, core)
+            cap2ctl.field.SFMCIDValid = 0
+            cap2ctl.field.SFMSIDValid = 0
+            core.CAP2Control = cap2ctl.val
+            self.control_write(core, genz.CoreStructure.CAP2Control, sz=8)
+            # clear SecondaryFabMgrRole, HostMgrMGRUUIDEnb (only on SFM)
+            if self is sfm:
+                cap1ctl.SecondaryFabMgrRole = 0
+                cap1ctl.HostMgrMGRUUIDEnb = HostMgrUUID.Zero
+                core.CAP1Control = cap1ctl.val
+                self.control_write(core, genz.CoreStructure.CAP1Control, sz=8)
+            # Clear Fabric Manager Transition bit
+            if self is sfm:
+                cap1ctl.FabricMgrTransition = 0
+                core.CAP1Control = cap1ctl.val
+                self.control_write(core, genz.CoreStructure.CAP1Control, sz=8)
+        # end with
+        # Revisit: remove SFM routes (when route refcounts are available)
+        #routes = self.fab.setup_bidirectional_routing(sfm, self)
+        #return routes # Revisit
 
     def promote_sfm_to_pfm(self, sfm, pfm, prefix='control'):
         '''Promote @sfm to Primary Fabric Manager of this component and

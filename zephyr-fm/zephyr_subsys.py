@@ -74,8 +74,10 @@ class Callbacks():
             ts = time.time_ns()
         self.mod_timestamp = ts
 
-    def set_endpoints(self, cuuid_serial: str, endpoints: dict, ts=None):
-        '''endpoints data model:
+    def set_endpoints(self, cuuid_serial: str, endpoints: dict, ts=None) -> None:
+        '''cuuid_serial can instead be an instance_uuid, for managers that
+        are not associated with a Gen-Z component
+        endpoints data model:
         {
         'callbacks' : { },
         'mgr_type'  : 'string', # 'llamas', 'sfm', or <any other string>
@@ -89,8 +91,51 @@ class Callbacks():
         self.endpoints[cuuid_serial][mgr_type] = endpoints
         self.mod_timestamp = max(self.mod_timestamp, ts)
 
-    def get_endpoints(self, cuuid_serial: str, mgr_type: str):
-        return self.endpoints[cuuid_serial][mgr_type]
+    def remove_endpoints(self, cuuid_serial: str, endpoints: dict, ts=None) -> None:
+        '''cuuid_serial can instead be an instance_uuid, for managers that
+        are not associated with a Gen-Z component
+        endpoints data model:
+        {
+        'callbacks' : { },
+        'mgr_type'  : 'string', # 'llamas', 'sfm', or <any other string>
+        'mod_timestamp' : int,
+        }
+        '''
+        if ts is None:
+            ts = time.time_ns()
+        mgr_type = endpoints['mgr_type']
+        del self.endpoints[cuuid_serial][mgr_type]
+        if len(self.endpoints[cuuid_serial]) == 0:
+            del self.endpoints[cuuid_serial]
+        self.mod_timestamp = max(self.mod_timestamp, ts)
+
+    def send_endpoints_update(self, fab, cuuid_serial,
+                              mgr_type: str = None, op=None):
+        ep = self.get_endpoints(cuuid_serial, mgr_type=mgr_type)
+        if mgr_type is None:
+            js = { cuuid_serial: ep }
+        else:
+            js = { cuuid_serial: { mgr_type: ep } }
+        fab.send_mgrs(['sfm'], 'mgr_endpoints', 'endpoints', js, op=op)
+
+    def get_endpoints(self, cuuid_serial: str, mgr_type: str = None):
+        if mgr_type is None:
+            return self.endpoints[cuuid_serial]
+        else:
+            return self.endpoints[cuuid_serial][mgr_type]
+
+    def get_callbacks(self, mgr_types: List[str], callback: str,
+                      invertTypes=False):
+        for eps in self.endpoints.values():
+            for type, ep in eps.items():
+                if not invertTypes:
+                    if type in mgr_types and callback in ep['callbacks']:
+                        yield ep['callbacks'][callback]
+                else: # invertTypes
+                    if type not in mgr_types and callback in ep['callbacks']:
+                        yield ep['callbacks'][callback]
+            # end for type
+        # end for eps
 
     def match(self, mgr_type: str, callbacks: dict):
         for eps in self.endpoints.values():
@@ -100,13 +145,24 @@ class Callbacks():
         return False
 
     def set_fm_endpoints(self, endpoints: dict,
-                         cur_ts: int, mod_ts: int, skipSFM=True):
+                         cur_ts: int, mod_ts: int, skipSFM=True) -> dict:
         for cuuid_serial, eps in endpoints.items():
             for type, ep in eps.items():
                 if skipSFM and type == 'sfm':
                     continue
                 self.set_endpoints(cuuid_serial, ep, ts=ep['mod_timestamp'])
         self.mod_timestamp = mod_ts
+        return { 'success': [] }
+
+    def remove_fm_endpoints(self, endpoints: dict,
+                            cur_ts: int, mod_ts: int, skipSFM=True) -> dict:
+        for cuuid_serial, eps in endpoints.items():
+            for type, ep in eps.items():
+                if skipSFM and type == 'sfm':
+                    continue
+                self.remove_endpoints(cuuid_serial, ep, ts=ep['mod_timestamp'])
+        self.mod_timestamp = mod_ts
+        return { 'success': [] }
 
 
 class FMServer(flask_fat.APIBaseline):
@@ -300,7 +356,7 @@ def main():
         log.info('running as secondary fabric manager')
         mainapp.zeroconfBrowser = fab.zeroconf_browser(mainapp.zeroconf)
 
-    if args.keyboard > 3:
+    if args.keyboard > 0:
         set_trace()
 
     try:
@@ -308,6 +364,11 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        if zephyr_conf.is_sfm:
+            log.info('unsubscribe SFM endpoints')
+            mainapp.conf.fab.unsubscribe_sfm(mainapp.conf.fab.pfm_fm)
+        else: # PFM
+            mainapp.conf.fab.set_pfm(None)
         log.info('zeroconf unregister service')
         mainapp.zeroconf.unregister_service(mainapp.zeroconfInfo)
         mainapp.zeroconf.close()

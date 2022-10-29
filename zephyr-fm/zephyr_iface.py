@@ -23,6 +23,7 @@
 
 import ctypes
 import time
+from typing import List, Tuple, Iterator
 from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount, MAX_HC
 from pdb import set_trace
 import zephyr_conf
@@ -83,11 +84,11 @@ class Interface():
         # end with
         return iface
 
-    def iface_state(self, ts=None):
+    def iface_state(self, ts=None) -> Tuple:
         iface = self.iface_read()
-        state = self.check_i_state(iface, timeout=0, do_read=False, ts=ts)
+        state, changed = self.check_i_state(iface, do_read=False, ts=ts)
         self.usable = (state is IState.IUp)
-        return state
+        return (state, changed)
 
     # Returns True if interface is usable - is I-Up, not I-Down/I-CFG/I-LP
     def iface_init(self, prefix='control'):
@@ -105,7 +106,7 @@ class Interface():
                 self.usable = False
                 return False
             self.hvs = iface.HVS
-            if not self.phy_init():
+            if not self.phy_init()[0]:
                 log.info('{}: interface{} is not PHY-Up'.format(
                     self.comp.gcid, self.num))
                 self.usable = False
@@ -116,10 +117,11 @@ class Interface():
             self.ierror_init(iface, icap1)
             # Revisit: select compatible LLR/P2PNextHdr/P2PEncrypt settings
             # Revisit: set CtlOpClassPktFiltEnb, if Switch (for now)
-            # enable Explicit OpCodes, and LPRT (if Switch)
+            # enable Explicit OpCodes, LPRT (if Switch), and IErrFaultInjEnb
             icap1ctl = genz.ICAP1Control(iface.ICAP1Control, iface)
             icap1ctl.field.OpClassSelect = 0x1
             icap1ctl.field.LPRTEnb = is_switch
+            icap1ctl.field.IErrFaultInjEnb = 1 # Revisit: Always?
             iface.ICAP1Control = icap1ctl.val
             log.debug('{}: writing ICAP1Control'.format(self))
             self.comp.control_write(iface,
@@ -190,7 +192,7 @@ class Interface():
             self.comp.control_write(iface,
                             genz.InterfaceStructure.IStatus, sz=4, off=0)
             # verify I-Up
-            state = self.check_i_state(iface)
+            state = self.check_i_state(iface)[0]
             self.usable = (state is IState.IUp)
             # Revisit: orthus goes I-Down if we do this earlier
             # set LinkRFCDisable (depending on local_br)
@@ -413,7 +415,8 @@ class Interface():
                     (istatus.field.LinkCTLCompleted == 1))
         return istatus.field.LinkCTLComplStatus
 
-    def check_i_state(self, iface, timeout=500000000, do_read=True, ts=None):
+    def check_i_state(self, iface, timeout=500000000, do_read=True,
+                      expected = [IState.IUp, IState.ILP], ts=None) -> Tuple:
         prev_istate = self.istate
         genz = zephyr_conf.genz
         istatus = genz.IStatus(iface.IStatus, iface)
@@ -428,13 +431,12 @@ class Interface():
             log.debug('{}: check_i_state[{}]: state={}'.format(
                 self.comp.gcid, self.num, istate))
             now = time.time_ns()
-            # Revisit: allow caller to pass in list of expected states
-            done = (((now - start) > timeout) or
-                    (istate in [IState.IUp, IState.ILP]))
+            done = ((not do_read) or ((now - start) > timeout) or
+                    (istate in expected))
         self.istate = istate
         self.conditional_update_mod_timestamp(prev_istate, istate,
                                               ts=now if ts is None else ts)
-        return istate
+        return (istate, prev_istate != istate)
 
     def conditional_update_mod_timestamp(self, prev, cur, ts=None):
         if prev != cur:
@@ -515,7 +517,7 @@ class Interface():
     def peer_comp(self):
         return self.peer_iface.comp if self.peer_iface is not None else None
 
-    def phy_init(self):
+    def phy_init(self) -> Tuple:
         # This does not actually init anything - it only checks PHY status
         # Revisit: handle multiple PHYs
         # Revisit: interface phy struct is mandatory, but does not exist
@@ -536,11 +538,13 @@ class Interface():
             self.phy_status = PHYOpStatus.PHYUp
             self.phy_tx_lwr = 0
             self.phy_rx_lwr = 0
-            return True # Revisit
+            return (True, False) # Revisit
 
-    # Returns True if interface PHY is usable - is PHY-Up/PHY-Up-LP*
+    # Returns Tuple: (phy_usable, phy_changed)
+    # phy_usable: True if interface PHY is usable - is PHY-Up/PHY-Up-LP*
+    # phy_changed: True if prev status/tx_lwr/rx_lwr != current status
     # Also sets phy_status/phy[tx|rx]_lwr, for use by to_json()
-    def phy_status_ok(self, phy):
+    def phy_status_ok(self, phy) -> Tuple:
         prev_state = (self.phy_status, self.phy_tx_lwr, self.phy_rx_lwr)
         genz = zephyr_conf.genz
         phy_status = genz.PHYStatus(phy.PHYStatus, phy)
@@ -550,7 +554,7 @@ class Interface():
         self.phy_rx_lwr = phy_status.field.PHYRxLinkWidthReduced
         cur_state = (self.phy_status, self.phy_tx_lwr, self.phy_rx_lwr)
         self.conditional_update_mod_timestamp(prev_state, cur_state)
-        return self.phy_status.up_or_uplp()
+        return (self.phy_status.up_or_uplp(), prev_state != cur_state)
 
     def compute_mhc(self, cid, rt, hc, valid):
         if self.lprt is None:

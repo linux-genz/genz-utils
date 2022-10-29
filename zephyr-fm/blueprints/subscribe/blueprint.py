@@ -66,6 +66,9 @@ def subscribe_llamas():
                 Journal.mainapp.callbacks.set_endpoints(br, callback_dict)
                 resp = send_move_local_bridge(fab, br, callback_endpoints['local_bridge'])
                 log.debug(f'send_move_local_bridge resp={resp}')
+                Journal.mainapp.callbacks.send_endpoints_update(
+                    fab, br, op='add', mgr_type=mgr_type)
+            # end for br
 
             # send resources
             for br in bridges:
@@ -137,13 +140,19 @@ def subscribe_sfm():
         response['error'] = f'No callbacks in body!\n{body}'
         status = 'error'
         code = 400
+    elif mgr_type is None:
+        response['error'] = f'Missing required mgr_type!'
+        status = 'error'
+        code = 400
     elif len(bridges) != 1 and mgr_type == 'sfm':
         response['error'] = f'One SFM bridge required in body!\n{body}'
         status = 'error'
         code = 400
+    elif len(bridges) < 1:
+        response['error'] = f'One or more SFM bridges (or instance_uuid) required in body!\n{body}'
+        status = 'error'
+        code = 400
     else:
-        if len(bridges) == 0: # non-SFM need not have any Gen-Z bridges
-            bridges = [ uuid.uuid4() ] # use an instance-uuid as key
         status = f'SFM callback endpoints "{callback_endpoints}" added'
 
         # save callback endpoints and enable SFM (if mgr_type is 'sfm')
@@ -155,6 +164,8 @@ def subscribe_sfm():
             if mgr_type == 'sfm':
                 resp = enable_sfm(fab, br)
                 log.debug(f'enable_sfm resp={resp}')
+            Journal.mainapp.callbacks.send_endpoints_update(fab, br, op='add',
+                                                            mgr_type=mgr_type)
         # end for br
 
     log.info(f'subscribe/sfm: {status}')
@@ -169,4 +180,73 @@ def enable_sfm(fab, br_cuuid_serial):
         log.warning(f'bridge {br_cuuid_serial} not found')
         return None
     resp = fab.enable_sfm(br)
+    return resp
+
+@Journal.BP.route(f'/{Journal.name}/unsubscribe', methods=['POST'])
+def unsubscribe():
+    """
+        Unsubscribe manager endpoints.
+    @param req.body: {
+        'callbacks'    : {'name': <endpoint_url>},
+        'alias'        : <value>, # unused
+        'bridges'      : <List[cuuid:serial]>, # required if SFM
+        'mgr_type'     : 'string', # 'sfm', 'llamas' or any other string
+    }
+    """
+    response = {}
+    status = 'nothing'
+    code = 200
+    body = flask.request.get_json()
+    if not body:
+        body = flask.request.form
+
+    callback_endpoints = body.get('callbacks', None)
+    endpoint_alias = body.get('alias', None)
+    bridges = body.get('bridges', [])
+    mgr_type = body.get('mgr_type', None)
+
+    if callback_endpoints is None:
+        response['error'] = f'No callbacks in body!\n{body}'
+        status = 'error'
+        code = 400
+    elif mgr_type is None:
+        response['error'] = f'Missing required mgr_type!'
+        status = 'error'
+        code = 400
+    elif len(bridges) != 1 and mgr_type == 'sfm':
+        response['error'] = f'One SFM bridge required in body!\n{body}'
+        status = 'error'
+        code = 400
+    elif len(bridges) < 1:
+        response['error'] = f'One or more SFM bridges (or instance_uuid) required in body!\n{body}'
+        status = 'error'
+        code = 400
+    else:
+        status = f'Manager callback endpoints "{callback_endpoints}" removed'
+
+        # remove callback endpoints and disable SFM (if mgr_type is 'sfm')
+        fab = Journal.mainapp.conf.fab
+        for br in bridges:
+            Journal.mainapp.callbacks.send_endpoints_update(
+                fab, br, op='remove', mgr_type=mgr_type)
+            if mgr_type == 'sfm':
+                resp = disable_sfm(fab, br)
+                log.debug(f'disable_sfm resp={resp}')
+            callback_dict = { 'mgr_type'  : mgr_type,
+                              'callbacks' : callback_endpoints }
+            Journal.mainapp.callbacks.remove_endpoints(br, callback_dict)
+        # end for br
+
+    log.info(f'subscribe/unsubscribe: {status}')
+    response['status'] = status
+
+    return flask.make_response(flask.jsonify(response), code)
+
+def disable_sfm(fab, br_cuuid_serial):
+    try:
+        br = fab.cuuid_serial[br_cuuid_serial]
+    except KeyError:
+        log.warning(f'bridge {br_cuuid_serial} not found')
+        return None
+    resp = fab.disable_sfm(br)
     return resp

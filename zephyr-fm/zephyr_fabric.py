@@ -49,6 +49,18 @@ from zephyr_comp import (Component, LocalBridge, component_num, get_cuuid,
 from zephyr_route import RouteElement, Routes, Route
 from zephyr_res import Resources
 
+# Revisit: copied from zephyr_subsys.py
+# Magic to get JSONEncoder to call to_json method, if it exists
+def _default(self, obj):
+    return getattr(obj.__class__, 'to_json', _default.default)(obj)
+
+_default.default = json.JSONEncoder().default
+json.JSONEncoder.default = _default
+
+def uuid_to_json(self):
+    return str(self)
+UUID.to_json = uuid_to_json
+
 TEMP_SUBNET = 0xffff  # where we put uninitialized local bridges
 randgen = random.SystemRandom() # crypto secure random numbers from os.urandom
 fabs = Path('/sys/bus/genz/fabrics')
@@ -66,6 +78,7 @@ def register(dispatcher, *names):
 class Fabric(nx.MultiGraph):
     events = {} # UEP events dispatch dict
 
+    @staticmethod
     def link_weight(fr, to, edge_dict):
         fr_iface = edge_dict[str(fr.uuid)]
         to_iface = edge_dict[str(to.uuid)]
@@ -144,6 +157,10 @@ class Fabric(nx.MultiGraph):
         self.comp_gcids[comp.gcid] = comp
         self.update_comp(comp)
 
+    def get_mod_timestamp(self, comp=None) -> Tuple:
+        return (self.graph['mod_timestamp'],
+                None if comp is None else self.nodes[comp]['mod_timestamp'])
+
     def update_mod_timestamp(self, comp=None, ts=None, forceUpdate=False):
         if ts is None:
             ts = time.time_ns()
@@ -160,6 +177,12 @@ class Fabric(nx.MultiGraph):
         self.nodes[comp]['rsp_page_grid_ps'] = comp.rsp_page_grid_ps
         comp.update_cstate(forceTimestamp=forceTimestamp)
         self.nodes[comp]['cstate'] = str(comp.cstate) # Revisit: to_json() doesn't work
+
+    def get_comp_name(self, comp):
+        try:
+            return self.nodes[comp]['name']
+        except KeyError:
+            return None
 
     def set_comp_name(self, comp, name: str):
         self.nodes[comp]['name'] = name
@@ -291,10 +314,14 @@ class Fabric(nx.MultiGraph):
     def set_pfm(self, pfm):
         self.pfm = pfm
         self.graph['pfm'] = pfm
+        self.send_mgrs(['llamas', 'sfm'], 'mgr_topo', 'graph', self.graph,
+                       op='change', invertTypes=True)
 
     def set_sfm(self, sfm: Component):
         self.sfm = sfm
         self.graph['sfm'] = sfm
+        self.send_mgrs(['llamas', 'sfm'], 'mgr_topo', 'graph', self.graph,
+                       op='change', invertTypes=True)
 
     def all_shortest_paths(self, fr: Component, to: Component,
                            cutoff_factor: float = 3.0,
@@ -418,8 +445,10 @@ class Fabric(nx.MultiGraph):
             excess_rts = nlargest(n - max_routes, merged)
             self.teardown_routing(fr, to, excess_rts, send=send)
         if send and len(new_rts) > 0:
-            self.send_sfm('sfm_routes', 'routes',
-                          Routes(fab_uuid=self.fab_uuid, routes=new_rts).to_json(), op='add')
+            js = Routes(fab_uuid=self.fab_uuid, routes=new_rts).to_json()
+            self.send_sfm('sfm_routes', 'routes', js, op='add')
+            self.send_mgrs(['sfm', 'llamas'], 'mgr_routes', 'routes', js,
+                           op='add', invertTypes=True)
         return new_rts
 
     def setup_bidirectional_routing(self, fr: Component, to: Component,
@@ -452,8 +481,10 @@ class Fabric(nx.MultiGraph):
                 self.routes.remove(fr, to, route)
         # end for
         if send and len(routes) > 0:
-            self.send_sfm('sfm_routes', 'routes',
-                          Routes(fab_uuid=self.fab_uuid, routes=routes).to_json(), op='remove')
+            js = Routes(fab_uuid=self.fab_uuid, routes=routes).to_json()
+            self.send_sfm('sfm_routes', 'routes', js, op='remove')
+            self.send_mgrs(['sfm', 'llamas'], 'mgr_routes', 'routes', js,
+                           op='remove', invertTypes=True)
 
     def recompute_routes(self, iface1, iface2):
         # Revisit: this is O(n**2) during crawl-out, worse later
@@ -505,37 +536,47 @@ class Fabric(nx.MultiGraph):
                 rt.fr.unreachable_comp(rt.to, iface, rt)
         # end for
 
+    # UEP dispatch handlers
     @register(events, 'IfaceErr')
-    def iface_error(self, key, br, sender, iface, pkt):
+    def iface_error(self, key, br, sender, iface, rec):
         genz = zephyr_conf.genz
-        es = genz.IErrorES(pkt['ES'])
+        es = genz.IErrorES(rec['ES'])
         log.info('{}: {}:{}({}) from {} on {}'.format(br, key, es.errName,
                                                 es.errSeverity, sender, iface))
-        status = iface.phy_init() # get PHY status (no actual init)
-        state = iface.iface_state()
+        phyOk, phyChanged = iface.phy_init() # check PHY status (no actual init)
+        istate, iChanged = iface.iface_state()
         # Revisit: Containment and RootCause
+        if phyChanged or iChanged:
+            js = { iface.comp.uuid: iface.to_json() }
+            self.send_mgrs(['llamas'], 'mgr_topo', 'interface', js,
+                           op='change', invertTypes=True)
         if not iface.usable:
             self.iface_unusable(iface)
         return { key: 'ok' }
 
     @register(events, 'WarmIfaceReset', 'FullIfaceReset')
-    def iface_reset(self, key, br, sender, iface, pkt):
+    def iface_reset(self, key, br, sender, iface, rec):
         log.info('{}: {} from {} on {}'.format(br, key, sender, iface))
-        status = iface.phy_init() # get PHY status (no actual init)
-        state = iface.iface_state()
+        # Revisit: refactor - same as iface_error()
+        phyOk, phyChanged = iface.phy_init() # check PHY status (no actual init)
+        istate, iChanged = iface.iface_state()
+        if phyChanged or iChanged:
+            js = { iface.comp.uuid: iface.to_json() }
+            self.send_mgrs(['llamas'], 'mgr_topo', 'interface', js,
+                           op='change', invertTypes=True)
         if not iface.usable:
             self.iface_unusable(iface)
         return { key: 'ok' }
 
     @register(events, 'NewPeerComp')
-    def new_peer_comp(self, key, br, sender, iface, pkt):
+    def new_peer_comp(self, key, br, sender, iface, rec):
         log.info('{}: {} from {} on {}'.format(br, key, sender, iface))
         iup = iface.iface_init()
         # Revisit: check iup
         # find previous Component (if there is one)
         prev_comp = iface.peer_comp
-        sender.explore_interfaces(self.pfm, ingress_iface=None, # Revisit
-                                  explore_ifaces=[iface], prev_comp=prev_comp)
+        sender.explore_interfaces(self.pfm, ingress_iface=None, explore_ifaces=[iface],
+                                  prev_comp=prev_comp, send=True)
         return { key: 'ok' }
 
     def dispatch(self, key, *args, **kwargs):
@@ -551,7 +592,9 @@ class Fabric(nx.MultiGraph):
             self.promote_sfm_to_pfm()
 
         mgr_uuid = UUID(body.get('GENZ_A_UEP_MGR_UUID'))
-        # Revisit: check mgr_uuid against self.mgr_uuid
+        if mgr_uuid != self.mgr_uuid:
+            log.warning(f'incorrect mgr_uuid: {mgr_uuid}')
+            return None
         br_gcid = GCID(val=body.get('GENZ_A_UEP_BRIDGE_GCID'))
         try:
             br = self.comp_gcids[br_gcid]
@@ -574,7 +617,7 @@ class Fabric(nx.MultiGraph):
             try:
                 sender = self.comp_gcids[sender_gcid]
             except KeyError:
-                log.warning(f'unknown sender GCID: {sender_gcid}')
+                log.warning(f'unknown UEP sender GCID: {sender_gcid}')
                 return None
         if rec['IV']:
             ifnum = rec['IfaceID']
@@ -655,6 +698,13 @@ class Fabric(nx.MultiGraph):
         for comp in self.components.values():
             comp.enable_sfm(sfm)
         self.set_sfm(sfm)
+        return 'ok'
+
+    def disable_sfm(self, sfm: Component):
+        # Revisit: what to do if there isn't a registered SFM?
+        for comp in self.components.values():
+            comp.disable_sfm(sfm)
+        self.set_sfm(None)
         return 'ok'
 
     # zeroconf ServiceBrowser service handlers
@@ -772,10 +822,43 @@ class Fabric(nx.MultiGraph):
             pfm.is_subscribed = True
             log.info(f'--- Subscribed to {url}, callbacks at {callback_endpoints}')
         else:
-            log.error('---- Failed to subscribe to redfish event! {} {} ---- '.format(url, callback_endpoints))
+            log.error('---- Failed to subscribe to FM event! {} {} ---- '.format(url, callback_endpoints))
             if resp is not None:
                 # Revisit: log the actual status message from the response
                 log.error(f'subscription error reason [{resp.status_code}]: {resp.reason}')
+
+    def unsubscribe_sfm(self, pfm: 'FM'):
+        if not pfm.is_subscribed: # not subscribed
+            return
+
+        bridges = [br.cuuid_serial for br in self.bridges]
+
+        url, callback_endpoints = self.endpoints_url(
+            pfm, fm_endpoint='subscribe/unsubscribe')
+        data = {
+            'callbacks' : callback_endpoints,
+            'alias'     : None,
+            'bridges'   : bridges,
+            'mgr_type'  : 'sfm'
+        }
+
+        log.debug(f'unsubscribe_sfm: url={url}, data={data}') # Revisit: temp debug
+        try:
+            resp = requests.post(url, json=data)
+        except Exception as err:
+            resp = None
+            log.debug(f'unsubscribe_sfm(): {err}')
+
+        is_success = resp is not None and resp.status_code < 300
+
+        if is_success:
+            pfm.is_subscribed = False
+            log.info(f'--- Unsubscribed to {url}, callbacks at {callback_endpoints}')
+        else:
+            log.error(f'---- Failed to unsubscribe to FM event! {url} {callback_endpoints} ---- ')
+            if resp is not None:
+                # Revisit: log the actual status message from the response
+                log.error(f'unsubscription error reason [{resp.status_code}]: {resp.reason}')
 
     def get_fm_topo(self, fm: 'FM'):
         url, _ = self.endpoints_url(fm, fm_endpoint='fabric/topology')
@@ -910,6 +993,31 @@ class Fabric(nx.MultiGraph):
         ep_data = data.get('endpoints', {})
         self.mainapp.callbacks.set_fm_endpoints(ep_data, cur_ts, mod_ts)
 
+    def send_mgrs(self, mgr_types: List[str], callback: str, item: str, js,
+                  op=None, invertTypes=False):
+        callbacks = self.mainapp.callbacks.get_callbacks(mgr_types, callback,
+                                                         invertTypes=invertTypes)
+        hdrs = {'Content-type': 'application/json', 'Accept': 'text/plain'}
+        data = {
+            'fabric_uuid'   : str(self.fab_uuid),
+            'mgr_uuid'      : str(self.mgr_uuid),
+            'cur_timestamp' : time.time_ns(),
+            f'{item}'       : js,
+        }
+        if op is not None:
+            data['operation'] = op
+        log.debug(f'send_mgrs: data={data}') # Revisit: temp debug
+        for url in callbacks:
+            try:
+                # We have to convert to json ourselves because if we try to let
+                # requests do it, it doesn't get our magic to_json() stuff
+                resp = requests.post(url, data=json.dumps(data), headers=hdrs)
+            except Exception as err:
+                resp = None
+                log.debug(f'send_mgrs(): {err}')
+        # end for url
+        # Revisit: error handling
+
     def send_sfm(self, callback: str, item: str, js, op=None):
         if self.sfm is None: # no SFM
             return
@@ -967,7 +1075,10 @@ class Fabric(nx.MultiGraph):
         self.zeroconf_update()
         # Revisit: ask llamas on former-PFM to remove all fabric components?
         self.pfm, self.sfm = self.sfm, None
+        self.graph['pfm'], self.graph['sfm'] = self.pfm, self.sfm
         self.pfm_fm = None
+        self.send_mgrs(['llamas', 'sfm'], 'mgr_topo', 'graph', self.graph,
+                       op='change', invertTypes=True)
 
     def check_pfm(self, fm: 'FM'):
         url, _ = self.endpoints_url(fm, fm_endpoint='fabric/topology')

@@ -203,10 +203,15 @@ def routes_add():
     {
         'fab_uuid'    : 'string',
         'routes'      : {
-              'From(SID:CID)->To(SID:CID)': [
-                  'SID:CID.Iface->SID:CID.Iface',
-                  ...
-              ],
+              'From(SID:CID)->To(SID:CID)': {
+                  'mod_timestamp': int,
+                  'route_list': [
+                    [
+                      'SID:CID.Iface->SID:CID.Iface',
+                      ...
+                    ]
+                  ],
+              },
               ...
         }
     }
@@ -292,11 +297,11 @@ def sfm_routes():
     response['success'].append(f'{op}')
     return flask.make_response(flask.jsonify(response), 200)
 
-@Journal.BP.route(f'/{Journal.name}/sfm_endpoints', methods=['POST'])
-def sfm_endpoints():
+@Journal.BP.route(f'/{Journal.name}/mgr_endpoints', methods=['POST'])
+def mgr_endpoints():
     """
         Accepts POST request with a json body detailing the endpoint changes
-    that the PFM wants to alert the SFM about.
+    that the PFM wants to alert the SFM (or other mgr) about.
     POST body model:
     {
         'fabric_uuid' : 'string',
@@ -317,8 +322,11 @@ def sfm_endpoints():
         return flask.make_response(flask.jsonify(msg), 400)
 
     # Revisit: validate json against schema
-    routes = body.get('routes', None)
+    endpoints = body.get('endpoints', None)
     fabric_uuid = body.get('fabric_uuid', None)
+    now = time.time_ns()
+    cur_ts = body.get('cur_timestamp', now)
+    mod_ts = body.get('mod_timestamp', now)
     # Revisit: check mgr_uuid
     op = body.get('operation', None)
 
@@ -332,9 +340,10 @@ def sfm_endpoints():
         msg = { 'error' : f'Unknown operation: {op}.' }
         return flask.make_response(flask.jsonify(msg), 404)
     if op == 'add':
-        response = fab.add_routes(routes, send=False)
+        response = mainapp.callbacks.set_fm_endpoints(endpoints, cur_ts, mod_ts)
     else: # op == 'remove'
-        response = fab.remove_routes(routes, send=False)
+        response = mainapp.callbacks.remove_fm_endpoints(endpoints,
+                                                         cur_ts, mod_ts)
 
     response['success'].append(f'{op}')
     return flask.make_response(flask.jsonify(response), 200)
