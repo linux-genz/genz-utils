@@ -49,6 +49,7 @@ import multiprocessing as mp
 import socket
 import os
 import sys
+from datetime import datetime
 from zeroconf import IPVersion, ServiceInfo, Zeroconf
 from setproctitle import getproctitle, setproctitle
 from pdb import set_trace, post_mortem
@@ -194,7 +195,6 @@ class FMServer(flask_fat.APIBaseline):
         self.ip = socket.gethostbyname(self.hostname)
 
 def cmd_add(url, **args):
-    from datetime import datetime
     data = {
         'timestamp' : datetime.now()
     }
@@ -267,6 +267,8 @@ def main():
                         type=float, help='Control DRTO')
     parser.add_argument('--no-nonce', action='store_true',
                         help='do no nonce exchanges')
+    parser.add_argument('--reversed', action='store_true',
+                        help='explore interfaces reversed (high to low)')
     parser.add_argument('--write-mgruuid', action='store_true',
                         help='Write MGR-UUID workaround for broken capture')
     ip_group = parser.add_mutually_exclusive_group()
@@ -334,8 +336,10 @@ def main():
         if args.sfm:
             fab.sfm_init()
         else:
-            fab.fab_init()
-            log.info('finished exploring fabric {}'.format(fab.fabnum))
+            start = datetime.now()
+            fab.fab_init(reclaim=args.reclaim)
+            end = datetime.now()
+            log.info(f'finished exploring fabric {fab.fabnum}, exploration took {end-start}')
     # end for fab_path
 
     if len(fabrics) == 0:

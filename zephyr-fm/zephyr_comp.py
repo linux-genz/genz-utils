@@ -1500,7 +1500,9 @@ class Component():
                            prev_comp=None, send=False):
         if explore_ifaces is None:
             # examine all interfaces (except ingress) & init those components
-            explore_ifaces = self.interfaces
+            args = zephyr_conf.args
+            explore_ifaces = (reversed(self.interfaces) if args.reversed
+                              else self.interfaces)
         for iface in explore_ifaces:
             if iface == ingress_iface:
                 log.debug('{}: skipping ingress interface{}'.format(
