@@ -10,7 +10,7 @@ formatters:
 handlers:
   console:
     class: logging.StreamHandler
-    level: DEBUG # Revisit: default log level
+    level: INFO # Revisit: default log level
     formatter: simple
     stream: ext://sys.stdout
   file_handler:
@@ -27,7 +27,11 @@ loggers:
     handlers: [console, file_handler]
     propagate: false
   FlaskFatLog:
-    level: DEBUG # Revisit: default log level
+    level: INFO # Revisit: default log level
+    handlers: [console, file_handler]
+    propagate: false
+  werkzeug:
+    level: WARN # INFO logs per-request line, which we don't want
     handlers: [console, file_handler]
     propagate: false
 root:
