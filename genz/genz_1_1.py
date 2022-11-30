@@ -120,6 +120,8 @@ eventName = { 0x00: 'RecovProtocolErr',
               0xfe: 'VdefA',
               0xff: 'VdefB' }
 
+eventType = { val: key for key, val in eventName.items() }
+
 def ceil_div(num: int, denom: int) -> int:
     return -(-num // denom)
 
@@ -2061,6 +2063,7 @@ class ControlStructureMap(LittleEndianStructure):
                 'mcap'                        : 'MCAPTable',
                 'msap'                        : 'MSAPTable',
                 'msmcap'                      : 'MSMCAPTable',
+                'i_snapshot'                  : 'ISnapshotFactory',
     }
 
     def nameToId(self, name):
@@ -2073,10 +2076,11 @@ class ControlStructureMap(LittleEndianStructure):
                      parent=None, core=None, offset=0, size=None):
         try:
             # first try file as a file name, e.g., 'core'
-            struct = globals()[self._struct[file]].from_buffer(data, offset)
+            struct = globals()[self._struct[file]].from_buffer_kw(data, offset,
+                                                               parent=parent)
         except KeyError:
             # next try file as a structure name, e.g., 'CoreStructure'
-            struct = globals()[file].from_buffer(data, offset)
+            struct = globals()[file].from_buffer_kw(data, offset, parent=parent)
         struct.data = data
         struct.offset = offset
         struct.verbosity = verbosity
@@ -2091,6 +2095,13 @@ class ControlStructureMap(LittleEndianStructure):
 
     def set_fd(self, f):
         self.fd = f.fileno()
+
+def add_from_buffer_kw(cls):
+    def from_buffer_kw(data, offset=0, **kwargs):
+        return cls.from_buffer(data, offset)
+
+    setattr(cls, 'from_buffer_kw', from_buffer_kw)
+    return cls
 
 #Revisit: jmh - this is almost totally version independent
 class ControlStructure(ControlStructureMap):
@@ -2326,6 +2337,7 @@ class ControlHeader(ControlStructure):
     def __str__(self):
         return self.__repr__()
 
+@add_from_buffer_kw
 class CoreStructure(ControlStructure):
     _fields_ = [('Type',          c_u64, 12), # 0x0
                 ('Vers',          c_u64,  4),
@@ -2503,6 +2515,7 @@ class CoreStructure(ControlStructure):
         self.sw = None
         self.comp_dest = None
 
+@add_from_buffer_kw
 class ComponentDestinationTableStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12),
                 ('Vers',                       c_u64,  4),
@@ -2536,6 +2549,7 @@ class ComponentDestinationTableStructure(ControlStructure):
     _ptr_fields = ['RouteControlPtr', 'SSDTPTR', 'MSDTPTR', 'REQVCATPTR',
                    'RITPTR', 'RSPVCATPTR']
 
+@add_from_buffer_kw
 class OpCodeSetStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12),
                 ('Vers',                       c_u64,  4),
@@ -2569,6 +2583,7 @@ class OpCodeSetStructure(ControlStructure):
     _special_dict = {'CAP1': OpCodeSetCAP1, 'CAP1Control': OpCodeSetCAP1Control}
 
 # base class from which to dynamically build OpCodeSetTable
+@add_from_buffer_kw
 class OpCodeSetTableTemplate(ControlTable):
     _fields  = [('SetID',                          c_u64,  3), #0x0
                 ('R0',                             c_u64,  5),
@@ -2708,7 +2723,7 @@ class OpCodeSetTableTemplate(ControlTable):
 
 # factory class to dynamically build OpCodeSetTable
 class OpCodeSetTableFactory(ControlTable):
-    def from_buffer(data, offset=0):
+    def from_buffer_kw(data, offset=0, **kwargs):
         sz = len(data)
         opcode_set = OpCodeSetTable.from_buffer(data, offset)
         if opcode_set.Version == 0:
@@ -2728,6 +2743,7 @@ class OpCodeSetTableFactory(ControlTable):
 class OpCodeSetTable(ControlTable):
     _fields_ = OpCodeSetTableTemplate._fields
 
+@add_from_buffer_kw
 class OpCodeSetUUIDTable(ControlTable):
     _fields_ = [('SupportedP2PVdefSet',            c_u64, 64),
                 ('EnabledP2PVdefSet',              c_u64, 64),
@@ -2895,7 +2911,7 @@ class InterfaceTemplate(ControlStructure):
 
 # factory class to dynamically build InterfaceStructure
 class InterfaceFactory(ControlStructure):
-    def from_buffer(data, offset=0):
+    def from_buffer_kw(data, offset=0, **kwargs):
         sz = len(data)
         if sz > 0x90: # Revisit: hardcoded value
             fields = InterfaceTemplate._fields + InterfaceTemplate._optional_fields
@@ -2909,6 +2925,7 @@ class InterfaceFactory(ControlStructure):
 class InterfaceStructure(ControlStructure):
     _fields_ = InterfaceTemplate._fields
 
+@add_from_buffer_kw
 class InterfacePHYStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12),  # Basic PHY Fields
                 ('Vers',                       c_u64,  4),
@@ -2942,6 +2959,7 @@ class InterfacePHYStructure(ControlStructure):
 
     _special_dict = {'PHYType': PHYType, 'PHYStatus': PHYStatus}
 
+@add_from_buffer_kw
 class ComponentPAStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12),
                 ('Vers',                       c_u64,  4),
@@ -2983,6 +3001,7 @@ class ComponentPAStructure(ControlStructure):
 
     _special_dict = {'PACAP1': PACAP1, 'PACAP1Ctl': PACAP1Control}
 
+@add_from_buffer_kw
 class ComponentCAccessStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12),
                 ('Vers',                       c_u64,  4),
@@ -3002,6 +3021,7 @@ class ComponentCAccessStructure(ControlStructure):
     _special_dict = {'CPageSz': CPageSz, 'CAccessCAP1': CAccessCAP1,
                      'CAccessCTL': CAccessCTL}
 
+@add_from_buffer_kw
 class ComponentErrorSignalStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12), # 0x0
                 ('Vers',                       c_u64,  4),
@@ -3039,6 +3059,7 @@ class ComponentErrorSignalStructure(ControlStructure):
                 ('IEventSigTgtl',              c_u64, 64), # 0xa8
                 ('IEventSigTgtm',              c_u64, 64), # 0xb0
                 ('IEventSigTgth',              c_u64, 64), # 0xb8
+                # MVk/MgmtVCk/MgmtIfacek are for UEPs
                 ('MV0',                        c_u64,  1), # 0xc0
                 ('MgmtVC0',                    c_u64,  5),
                 ('MgmtIface0',                 c_u64, 12),
@@ -3100,6 +3121,7 @@ class ComponentErrorSignalStructure(ControlStructure):
                      # Revisit: CErrorSigTgt, CEventSigTgt, IEventSigTgt
                      }
 
+@add_from_buffer_kw
 class ComponentPageGridStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12),
                 ('Vers',                       c_u64,  4),
@@ -3132,6 +3154,7 @@ class ComponentPageGridStructure(ControlStructure):
 
     _special_dict = {'PGZMMUCAP1': PGZMMUCAP1, 'PTEATTRl': PTEATTRl}
 
+@add_from_buffer_kw
 class ComponentPageTableStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12),
                 ('Vers',                       c_u64,  4),
@@ -3160,6 +3183,7 @@ class ComponentPageTableStructure(ControlStructure):
 
     _special_dict = {'PTZMMUCAP1': PTZMMUCAP1, 'PTEATTRl': PTEATTRl}
 
+@add_from_buffer_kw
 class ComponentSwitchStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12),
                 ('Vers',                       c_u64,  4),
@@ -3195,19 +3219,20 @@ class ComponentSwitchStructure(ControlStructure):
                 ('MSMCPRTPTR',                 c_u64, 32),
                 ('MCEUUIDl',                   c_u64, 64),
                 ('MCEUUIDh',                   c_u64, 64),
+                # MVk/MgmtVCk/MgmtIfacek are for UnrelCtlWriteMSG
                 ('MV0',                        c_u64,  1),
-                ('MGMTVC0',                    c_u64,  5),
-                ('MGMTIfaceID0',               c_u64, 12),
+                ('MgmtVC0',                    c_u64,  5),
+                ('MgmtIface0',                 c_u64, 12),
                 ('MV1',                        c_u64,  1),
-                ('MGMTVC1',                    c_u64,  5),
-                ('MGMTIfaceID1',               c_u64, 12),
+                ('MgmtVC1',                    c_u64,  5),
+                ('MgmtIface1',                 c_u64, 12),
                 ('MV2',                        c_u64,  1),
-                ('MGMTVC2',                    c_u64,  5),
-                ('MGMTIfaceID2',               c_u64, 12),
+                ('MgmtVC2',                    c_u64,  5),
+                ('MgmtIface2',                 c_u64, 12),
                 ('R5',                         c_u64, 10),
                 ('MV3',                        c_u64,  1),
-                ('MGMTVC3',                    c_u64,  5),
-                ('MGMTIfaceID3',               c_u64, 12),
+                ('MgmtVC3',                    c_u64,  5),
+                ('MgmtIface3',                 c_u64, 12),
                 ('R6',                         c_u64, 46),
                 ('R7',                         c_u64, 64),
                 ('R8',                         c_u64, 64),
@@ -3222,6 +3247,7 @@ class ComponentSwitchStructure(ControlStructure):
                      'SwitchCAP1Control': SwitchCAP1Control,
                      'SwitchOpCTL': SwitchOpCTL}
 
+@add_from_buffer_kw
 class VendorDefinedStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12), #0x0
                 ('Vers',                       c_u64,  4),
@@ -3230,6 +3256,7 @@ class VendorDefinedStructure(ControlStructure):
                 ('VdefData1',                  c_u64, 64)]
     # Revisit: print rest of structure in hex?
 
+@add_from_buffer_kw
 class VendorDefinedUUIDStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12), #0x0
                 ('Vers',                       c_u64,  4),
@@ -3255,6 +3282,7 @@ class ControlTableElement(ControlStructure):
             return super().__repr__()
         return super().__str__()
 
+@add_from_buffer_kw
 class PATable(ControlTableArray):
     def fileToStructInit(self):
         super().fileToStructInit()
@@ -3280,6 +3308,7 @@ class RKDArray(ControlTableArray):
         self.array = (RKD * items).from_buffer(self.data, self.offset)
         self.element = RKD
 
+@add_from_buffer_kw
 class ComponentRKDStructure(ControlStructure):
     _fields_ = [('Type',                       c_u64, 12),
                 ('Vers',                       c_u64,  4),
@@ -3310,6 +3339,7 @@ class ComponentRKDStructure(ControlStructure):
             rkdAuth |= mask
         self.embeddedArray[row].RKDAuth = rkdAuth
 
+@add_from_buffer_kw
 class IStatsVCArray(ControlTableArray):
     def fileToStructInit(self):
         super().fileToStructInit()
@@ -3330,8 +3360,8 @@ class IStatsVCArray(ControlTableArray):
 
 # base class from which to dynamically build InterfaceStatisticsStructure
 class InterfaceStatisticsTemplate(ControlStructure):
-                # Common Statistics Fields
-    _fields =  [('Type',                       c_u64, 12), #0x0
+                # Structure Header/Control/PTRs
+    _control = [('Type',                       c_u64, 12), #0x0
                 ('Vers',                       c_u64,  4),
                 ('Size',                       c_u64, 16),
                 ('IStatCAP1',                  c_u64, 16),
@@ -3339,7 +3369,9 @@ class InterfaceStatisticsTemplate(ControlStructure):
                 ('IStatStatus',                c_u64,  8),
                 ('VendorDefinedPTR',           c_u64, 32), #0x8
                 ('ISnapshotPTR',               c_u64, 32),
-                ('ISnapshotInterval',          c_u64, 64), #0x10 snapshot starts here
+                ]
+                # Common Statistics Fields
+    _common =  [('ISnapshotInterval',          c_u64, 64), #0x10 snapshot starts here
                 ('PCRCErrors',                 c_u64, 32), #0x18
                 ('ECRCErrors',                 c_u64, 32),
                 ('TxStompedECRC',              c_u64, 32), #0x20
@@ -3367,8 +3399,28 @@ class InterfaceStatisticsTemplate(ControlStructure):
     _vc_arr =  [('VCArray',                    IStatsVCArray), #0x50/0x90
                 ]
 
+    _fields = _control + _common
+
+    _relay_offset = (0x50, 0x90) # Revisit: hardcoded values
+
     _special_dict = {'IStatStatus': IStatStatus, 'IStatControl': IStatControl,
                      'IStatCAP1': IStatCAP1}
+
+    @staticmethod
+    def fields_relay_offset(cls, cap1):
+        if cap1.ProvisionedStatsFields == ProvisionedIStats.Common:
+            fields = cls._fields
+            relay_offset = 0
+        elif cap1.ProvisionedStatsFields == ProvisionedIStats.CommonReqRsp:
+            fields = cls._fields + cls._req_rsp
+            relay_offset = 0
+        elif cap1.ProvisionedStatsFields == ProvisionedIStats.CommonPktRelay:
+            fields = cls._fields
+            relay_offset = cls._relay_offset[0]
+        else:  # CommonReqRspPktRelay
+            fields = cls._fields + cls._req_rsp
+            relay_offset = cls._relay_offset[1]
+        return (fields, relay_offset)
 
     def fileToStructInit(self):
         super().fileToStructInit()
@@ -3383,25 +3435,13 @@ class InterfaceStatisticsTemplate(ControlStructure):
 
 # factory class to dynamically build InterfaceStatisticsStructure
 class InterfaceStatisticsFactory(ControlStructure):
-    def from_buffer(data, offset=0):
+    def from_buffer_kw(data, offset=0, **kwargs):
         sz = len(data)
         elems = 0
         stats = InterfaceStatisticsStructure.from_buffer(data, offset)
         cap1 = IStatCAP1(stats.IStatCAP1, stats)
-        if cap1.ProvisionedStatsFields == ProvisionedIStats.Common:
-            fields = InterfaceStatisticsTemplate._fields
-            relay_offset = 0
-        elif cap1.ProvisionedStatsFields == ProvisionedIStats.CommonReqRsp:
-            fields = (InterfaceStatisticsTemplate._fields +
-                      InterfaceStatisticsTemplate._req_rsp)
-            relay_offset = 0
-        elif cap1.ProvisionedStatsFields == ProvisionedIStats.CommonPktRelay:
-            fields = InterfaceStatisticsTemplate._fields
-            relay_offset = 0x50 # Revisit: hardcoded value
-        else:  # CommonReqRspPktRelay
-            fields = (InterfaceStatisticsTemplate._fields +
-                      InterfaceStatisticsTemplate._req_rsp)
-            relay_offset = 0x90 # Revisit: hardcoded value
+        fields, relay_offset = InterfaceStatisticsTemplate.fields_relay_offset(
+            InterfaceStatisticsTemplate, cap1)
         if relay_offset > 0:
             elems = (sz - relay_offset) // (5 * 8) # Revisit: hardcoded value
             fields.extend(InterfaceStatisticsTemplate._vc_arr)
@@ -3415,6 +3455,49 @@ class InterfaceStatisticsFactory(ControlStructure):
 class InterfaceStatisticsStructure(ControlStructure):
     _fields_ = InterfaceStatisticsTemplate._fields
 
+# base class from which to dynamically build ISnapshotTable
+class ISnapshotTemplate(ControlTable):
+    _fields = InterfaceStatisticsTemplate._common
+
+    _req_rsp = InterfaceStatisticsTemplate._req_rsp
+
+    _vc_arr = InterfaceStatisticsTemplate._vc_arr
+
+    _relay_offset = (0x40, 0x80) # Revisit: hardcoded values
+
+    def fileToStructInit(self):
+        super().fileToStructInit()
+        if self.relayOff > 0:
+            # Revisit: saving as self.VCArray doesn't work
+            self.embeddedArray = self.VCArray.fileToStruct('IStatsVCArray', self.data,
+                                    verbosity=self.verbosity, fd=self.fd,
+                                    path=self.path, parent=self,
+                                    core=self.core, offset=self.offset+self.relayOff)
+        else:
+            self.embeddedArray = None
+
+# factory class to dynamically build ISnapshotTable
+class ISnapshotFactory(ControlTable):
+    def from_buffer_kw(data, offset=0, parent=None):
+        sz = len(data)
+        elems = 0
+        cap1 = IStatCAP1(parent.IStatCAP1, parent)
+        fields, relay_offset = InterfaceStatisticsTemplate.fields_relay_offset(
+            ISnapshotTemplate, cap1)
+        if relay_offset > 0:
+            elems = (sz - relay_offset) // (5 * 8) # Revisit: hardcoded value
+            fields.extend(ISnapshotTemplate._vc_arr)
+        ISnapshot = type('ISnapshotTable',
+                         (ISnapshotTemplate,), {'_fields_': fields,
+                                                          'relayOff': relay_offset,
+                                                          'vcElems': elems,
+                                                          'Size': sz})
+        return ISnapshot.from_buffer(data, offset)
+
+class ISnapshotTable(ControlTable):
+    _fields_ = InterfaceStatisticsTemplate._common
+
+@add_from_buffer_kw
 class RequesterVCATTable(ControlTable2DArray):
     def fileToStructInit(self):
         super().fileToStructInit()
@@ -3432,6 +3515,7 @@ class RequesterVCATTable(ControlTable2DArray):
         self.array = ((VCAT * cols) * rows).from_buffer(self.data)
         self.element = VCAT
 
+@add_from_buffer_kw
 class ResponderVCATTable(ControlTable2DArray):
     def fileToStructInit(self):
         super().fileToStructInit()
@@ -3450,6 +3534,7 @@ class ResponderVCATTable(ControlTable2DArray):
         self.array = ((VCAT * cols) * rows).from_buffer(self.data)
         self.element = VCAT
 
+@add_from_buffer_kw
 class VCATTable(ControlTable2DArray):
     def fileToStructInit(self):
         super().fileToStructInit()
@@ -3468,6 +3553,7 @@ class VCATTable(ControlTable2DArray):
         self.array = ((VCAT * cols) * rows).from_buffer(self.data)
         self.element = VCAT
 
+@add_from_buffer_kw
 class RITTable(ControlTableArray):
     fullEntryWrite = True
 
@@ -3503,6 +3589,7 @@ class SSDTMSDTLPRTMPRTTable(ControlTable2DArray):
         self.array = ((SSDT * cols) * rows).from_buffer(self.data)
         self.element = SSDT
 
+@add_from_buffer_kw
 class SSDTTable(SSDTMSDTLPRTMPRTTable):
     @property
     def rows(self):
@@ -3516,6 +3603,7 @@ class SSDTTable(SSDTMSDTLPRTMPRTTable):
         self._name = 'SSDT'
         super().fileToStructInit()
 
+@add_from_buffer_kw
 class MSDTTable(SSDTMSDTLPRTMPRTTable):
     @property
     def rows(self):
@@ -3529,6 +3617,7 @@ class MSDTTable(SSDTMSDTLPRTMPRTTable):
         self._name = 'MSDT'
         super().fileToStructInit()
 
+@add_from_buffer_kw
 class LPRTTable(SSDTMSDTLPRTMPRTTable):
     @property
     def rows(self):
@@ -3542,6 +3631,7 @@ class LPRTTable(SSDTMSDTLPRTMPRTTable):
         self._name = 'LPRT'
         super().fileToStructInit()
 
+@add_from_buffer_kw
 class MPRTTable(SSDTMSDTLPRTMPRTTable):
     @property
     def rows(self):
@@ -3578,26 +3668,31 @@ class SSAPMCAPMSAPMSMCAPTable(ControlTableArray):
         self.array = (SSAP * items).from_buffer(self.data)
         self.element = SSAP
 
+@add_from_buffer_kw
 class SSAPTable(SSAPMCAPMSAPMSMCAPTable):
     def fileToStructInit(self):
         self._name = 'SSAP'
         super().fileToStructInit()
 
+@add_from_buffer_kw
 class MCAPTable(SSAPMCAPMSAPMSMCAPTable):
     def fileToStructInit(self):
         self._name = 'MCAP'
         super().fileToStructInit()
 
+@add_from_buffer_kw
 class MSAPTable(SSAPMCAPMSAPMSMCAPTable):
     def fileToStructInit(self):
         self._name = 'MSAP'
         super().fileToStructInit()
 
+@add_from_buffer_kw
 class MSMCAPTable(SSAPMCAPMSAPMSMCAPTable):
     def fileToStructInit(self):
         self._name = 'MSMCAP'
         super().fileToStructInit()
 
+@add_from_buffer_kw
 class CAccessRKeyTable(ControlTableArray):
     def fileToStructInit(self):
         super().fileToStructInit()
@@ -3611,6 +3706,7 @@ class CAccessRKeyTable(ControlTableArray):
         self.array = (RKey * items).from_buffer(self.data)
         self.element = RKey
 
+@add_from_buffer_kw
 class CAccessLP2PTable(ControlTableArray):
     def fileToStructInit(self):
         super().fileToStructInit()
@@ -3626,6 +3722,7 @@ class CAccessLP2PTable(ControlTableArray):
         self.array = (LP2P * items).from_buffer(self.data)
         self.element = LP2P
 
+@add_from_buffer_kw
 class PGTable(ControlTableArray):
     def fileToStructInit(self):
         super().fileToStructInit()
@@ -3664,6 +3761,7 @@ def pte_addr_set(self, val):
     self.ADDRl = val & ((1 << self.addr_l_bits) - 1)
     self.ADDRh = val >> self.addr_l_bits
 
+@add_from_buffer_kw
 class PTETable(ControlTableArray):
     def splitField(self, fld, bits):
         fld_bits = fld[2]
@@ -3860,6 +3958,7 @@ class PTETable(ControlTableArray):
         self.array = (PTE * items).from_buffer(self.data)
         self.element = PTE
 
+@add_from_buffer_kw
 class RouteControlTable(ControlTable):
     _fields_ = [('RCCAP1',                         c_u64, 16),
                 ('R0',                             c_u64, 10),
@@ -3907,6 +4006,7 @@ class UEPEventRecord(ControlTable):
     def __init__(self, verbosity=0, **kwargs):
         if 'EventName' in kwargs:
             del kwargs['EventName']
+        self.Vers = 1
         super().__init__(verbosity=verbosity, **kwargs)
 
     def dataToRec(data, verbosity=0, csv=False):
