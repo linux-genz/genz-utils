@@ -183,6 +183,8 @@ def main():
                         help='sort output packets by time')
     parser.add_argument('-T', '--text', action='store',
                         help='input file containing ohb packet text')
+    parser.add_argument('--ns', action='store_true',
+                        help='output times in ns')
     args = parser.parse_args()
     if args.verbosity > 5:
         print('Gen-Z version = {}'.format(args.genz_version))
@@ -191,15 +193,16 @@ def main():
         if args.csv:
             print('Time,Delta,Intf,OpcName,OCL,OpCode,LEN,SCID,DCID,Tag,VC,PCRC,AKey,Deadline,ECN,GC,NH,PM,LP,TA,RK,DR,DRIface,RDSize,PadCNT,Addr,MGRUUID,TC,NS,UN,PU,RC,MS,PD,FPS,RRSPReason,RNR_QD,RS,Reason,ECRC')
         for pkt, delta in process_text(genz, args, args.text):
+            intf = pkt.user & 0xfff
+            pkt_time = pkt.time*1e9 if args.ns else pkt.time*1e6
+            pkt_delta = delta*1e9 if args.ns else delta*1e6
+            unit = 'nS' if args.ns else 'uS'
             if args.csv:
-                print('{:.6f},{:.6f},{:x},{}'.format(
-                    pkt.time*1e6, delta*1e6, pkt.user & 0xfff, pkt))
+                print(f'{pkt_time:.6f},{pkt_delta:.6f},{intf:x},{pkt}')
             elif args.time_delta:
-                print('Time: {:14.6f}uS, Delta: {:14.6f}uS, Intf: {:x}, {}'.format(
-                    pkt.time*1e6, delta*1e6, pkt.user & 0xfff, pkt))
+                print(f'Time: {pkt_time:16.6f}{unit}, Delta: {pkt_delta:14.6f}{unit}, Intf: {intf:x}, {pkt}')
             else:
-                print('Time: {:14.6f}uS, Intf: {:x}, {}'.format(
-                    pkt.time*1e6, pkt.user & 0xfff, pkt))
+                print('Time: {pkt_time:16.6f}{unit}, Intf: {intf:x}, {pkt}')
         # end for
     # end if args.text
 
