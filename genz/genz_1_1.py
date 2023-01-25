@@ -3589,6 +3589,43 @@ class SSDTMSDTLPRTMPRTTable(ControlTable2DArray):
         self.array = ((SSDT * cols) * rows).from_buffer(self.data)
         self.element = SSDT
 
+    def __str__(self):
+        r = type(self).__name__
+        if self.verbosity < 2:
+            return r
+        r += ':\n'
+        if self.verbosity < 4:
+            return r
+        elif self.verbosity == 4:
+            name = type(self.array[0][0]).__name__
+            for i in range(self.rows):
+                v0 = self.array[i][0].V
+                for j in range(self.cols):
+                    v = self.array[i][j].V
+                    if v and not v0: # include 0th col (for MHC)
+                        r += '    {}[{}][{}]={}\n'.format(name, i, 0,
+                                                      repr(self.array[i][0]))
+                        v0 = True
+                    if v:
+                        r += '    {}[{}][{}]={}\n'.format(name, i, j,
+                                                      repr(self.array[i][j]))
+        else:
+            # Revisit: the str() output should be indented another 2 spaces
+            name = type(self.array[0][0]).__name__
+            for i in range(self.rows):
+                v0 = self.array[i][0].V if self.verbosity < 6 else 1
+                for j in range(self.cols):
+                    v = self.array[i][j].V if self.verbosity < 6 else 1
+                    if v and not v0: # include 0th col (for MHC)
+                        r += '    {}[{}][{}]={}\n'.format(name, i, 0,
+                                                      str(self.array[i][0]))
+                        v0 = True
+                    if v:
+                        r += '    {}[{}][{}]={}\n'.format(name, i, j,
+                                                      str(self.array[i][j]))
+
+        return r
+
 @add_from_buffer_kw
 class SSDTTable(SSDTMSDTLPRTMPRTTable):
     @property
