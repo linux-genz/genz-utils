@@ -107,6 +107,9 @@ class RouteElement():
                else comp.ssdt_refcount.dec(to.gcid.cid, self.rt_num))
         if refcountOnly:
             return
+        if comp.is_unreachable(comp.fab.pfm):
+            log.debug(f'set_ssdt: {comp} is unreachable from PFM') # Revisit: debug
+            return
         mhc, wr0, wrN = comp.compute_mhc(to.gcid.cid, self.rt_num,
                                          self.hc, valid)
         # Revisit: vca
@@ -119,12 +122,16 @@ class RouteElement():
 
     def set_lprt(self, to: Component, valid=1, updateRtNum=False,
                  refcountOnly=False):
+        comp = self.comp
         iface = self.ingress_iface
         if updateRtNum:
             self.route_entries_avail(self.comp, to)
         wrR = (iface.lprt_refcount.inc(to.gcid.cid, self.rt_num) if valid
                else iface.lprt_refcount.dec(to.gcid.cid, self.rt_num))
         if refcountOnly:
+            return
+        if comp.is_unreachable(comp.fab.pfm):
+            log.debug(f'set_lprt: {comp} is unreachable from PFM') # Revisit: debug
             return
         mhc, wr0, wrN = iface.compute_mhc(to.gcid.cid, self.rt_num,
                                           self.hc, valid)

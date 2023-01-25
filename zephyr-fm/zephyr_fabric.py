@@ -659,6 +659,10 @@ class Fabric(nx.MultiGraph):
         # dispatch to event handler based on EventName
         return self.dispatch(rec['EventName'], br, sender, iface, rec)
 
+    def unreachable_comps(self, fr: Component):
+        '''Return list of unreachable components from @fr'''
+        return filter(lambda x: x.is_unreachable(fr), self.components)
+
     def to_json(self):
         self.graph['cur_timestamp'] = time.time_ns()
         nl = nx.node_link_data(self)

@@ -1604,10 +1604,13 @@ class Component():
                 self.fab.update_mod_timestamp(comp=self)
 
     def unreachable_comp(self, to, iface, route):
-        log.warning('{}: unreachable comp {} due to {} failure'.format(
-            self, to, iface))
+        log.warning(f'{self}: unreachable component {to} due to interface {iface} failure')
         # tear down route from "self" to "to"'
         self.fab.teardown_routing(self, to, [route])
+
+    def is_unreachable(self, fr: 'Component'):
+        return not self.usable or (self is not fr and
+                                   len(self.fab.routes.get_routes(fr, self)) < 1)
 
     def warm_reset(self, iface, prefix='control', peer_c_reset_only=False):
         if not peer_c_reset_only:
