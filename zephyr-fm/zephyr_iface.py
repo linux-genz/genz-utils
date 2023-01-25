@@ -274,8 +274,12 @@ class Interface():
 
     def nonce_exchange(self, iface) -> bool:
         args = zephyr_conf.args
-        # do nonce init of peer
-        self.peer_iface.do_nonce_init(sendNonce=False, noNonce=args.no_nonce)
+        try:
+            # do nonce init of peer
+            self.peer_iface.do_nonce_init(sendNonce=False, noNonce=args.no_nonce)
+        except:  # Revisit: restrict to specific exceptions
+            # unable to talk to peer interface from PFM
+            return False
         # do nonce init and exchange
         nonce_valid = self.nonce_init(iface, sendNonce=True, noNonce=args.no_nonce)
         return nonce_valid
