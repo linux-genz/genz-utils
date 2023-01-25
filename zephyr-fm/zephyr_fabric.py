@@ -1089,7 +1089,7 @@ class Fabric(nx.MultiGraph):
         log.debug(f'promote_sfm_to_pfm: first={first}')
         if not first:
             return
-        log.warning('promoting SFM to PFM')
+        log.warning(f'promoting SFM {self.sfm} to PFM')
         zephyr_conf.is_sfm = False
         # cancel heartbeat
         self.heartbeat.stop()
@@ -1108,7 +1108,6 @@ class Fabric(nx.MultiGraph):
 
     def check_pfm(self, fm: 'FM'):
         url, _ = self.endpoints_url(fm, fm_endpoint='fabric/topology')
-        log.debug(f'check_pfm: checking {url} at {time.monotonic()}')
         # just get the HEAD - no data needed
         try:
             # Revisit: use requests.Session & HTTPAdapter to retry before giving up
