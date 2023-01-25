@@ -167,10 +167,12 @@ class Interface():
             # Revisit: set Ingress/Egress AKeyMask
             # Revisit: set IngressDREnb only when needed
             ictl.field.IngressDREnb = 1
+            # set auto-stop
+            ictl.AutoStop = 1
             # enable interface
             ictl.field.IfaceEnb = 1
             iface.IControl = ictl.val
-            log.debug('{}: writing IControl IfaceEnb'.format(self))
+            log.debug(f'{self}: writing IControl IfaceEnb/IngressDREnb/AutoStop')
             try:
                 self.comp.control_write(iface, genz.InterfaceStructure.IControl,
                                         sz=4, off=4, check=True)
@@ -344,7 +346,7 @@ class Interface():
             self.peer_inband_disabled = self.get_peer_inband_mgmt_disabled(iface)
             self.peer_mgr_type = self.get_peer_mgr_type(iface)
 
-    def send_peer_attr1(self, iface, timeout=10000):
+    def send_peer_attr1(self, iface, timeout=10000): # timeout in ns
         genz = zephyr_conf.genz
         icontrol = genz.IControl(iface.IControl, iface)
         icontrol.field.PeerAttr1Req = 1
@@ -366,7 +368,7 @@ class Interface():
             status = self.send_peer_c_reset(iface)
         return status
 
-    def send_peer_c_reset(self, iface, timeout=10000):
+    def send_peer_c_reset(self, iface, timeout=10000): # timeout in ns
         genz = zephyr_conf.genz
         icontrol = genz.IControl(iface.IControl, iface)
         icontrol.field.PeerCReset = 1
@@ -374,6 +376,7 @@ class Interface():
         self.comp.control_write(iface, genz.InterfaceStructure.IControl,
                                 sz=4, off=4)
         status = self.wait_link_ctl(iface, timeout)
+        # Revisit: wait for peer to no longer be C-Up
         icontrol.field.PeerCReset = 0
         iface.IControl = icontrol.val
         return status

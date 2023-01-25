@@ -547,6 +547,12 @@ class Fabric(nx.MultiGraph):
         es = genz.IErrorES(rec['ES'])
         errName = es.errName
         log.info(f'{br}: {key}:{errName}({es.errSeverity}) UEP from {sender} on {iface}')
+        # with AutoStop enabled, IfaceFCFwdProgressViolation requires peer_c_reset
+        if errName == 'IfaceFCFwdProgressViolation':
+            log.debug(f'attempting peer_c_reset on {iface}')
+            iface.peer_c_reset()
+            iface.update_peer_info()
+            iface.peer_comp.was_reset(iface)
         try:
             phyOk, phyChanged = iface.phy_init() # check PHY status (no actual init)
             istate, iChanged = iface.iface_state()

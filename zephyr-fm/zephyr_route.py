@@ -163,8 +163,9 @@ class RouteElement():
 
 class DirectedRelay(RouteElement):
     def __init__(self, dr_comp: Component,
-                 ingress_iface: Interface, dr_iface: Interface):
-        super().__init__(dr_comp, ingress_iface, dr_iface)
+                 ingress_iface: Interface, dr_iface: Interface,
+                 to_iface: Interface = None):
+        super().__init__(dr_comp, ingress_iface, dr_iface, to_iface=to_iface)
         self.dr = True
 
 class RouteInfo():

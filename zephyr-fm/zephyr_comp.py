@@ -1636,6 +1636,33 @@ class Component():
             iface.update_peer_info()
         return iface.peer_cstate
 
+    def was_reset(self, peer_iface=None):
+        '''Component was reset and is not operational until reconfigured'''
+        self.usable = False
+        fab = self.fab
+        if peer_iface is None:
+            peer_iface = self.nearest_iface_to(fab.pfm).peer_iface
+        # mark all interfaces as unusable (and teardown all routes using them)
+        log.info(f'{self} was reset - teardown all routes')
+        for iface in self.interfaces:
+            fab.iface_unusable(iface)
+        # revert comp back to DR
+        log.info(f'{self} revert to DR via {peer_iface}')
+        dr_comp = peer_iface.comp
+        from zephyr_route import DirectedRelay
+        dr = DirectedRelay(dr_comp, None, peer_iface, to_iface=peer_iface.peer_iface)
+        self.set_dr(dr)
+        route = fab.setup_bidirectional_routing(fab.pfm, self,
+                            write_to_ssdt=False) # a later comp_init() will write SSDT
+        try:
+            self.add_fab_dr_comp()
+        except Exception as e:
+            log.error(f'add_fab_dr_comp(gcid={self.gcid}, dr_gcid={self.dr.gcid}, dr_iface={self.dr.egress_iface}) failed with exception {e}')
+
+    def nearest_iface_to(self, to: 'Component'):
+        rts = self.fab.get_routes(self, to)
+        return rts[0][0].egress_iface
+
     def enable_sfm(self, sfm, prefix='control'):
         '''Enable @sfm as Secondary Fabric Manager of this component and
         setup bidirectional routing.
