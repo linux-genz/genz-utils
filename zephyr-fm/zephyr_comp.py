@@ -438,6 +438,7 @@ class Component():
             # setup SSDT and RIT entries for route back to FM
             if pfm and ingress_iface is not None:
                 self.ssdt_size(prefix=prefix)
+                self.ssdt_read() # required before set_ssdt()
                 # use route elem to correctly set SSDT HC & MHC
                 elem = route[0][0]
                 elem.set_ssdt(pfm, updateRtNum=True)
