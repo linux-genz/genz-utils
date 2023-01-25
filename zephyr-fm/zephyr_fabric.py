@@ -599,6 +599,12 @@ class Fabric(nx.MultiGraph):
                                   prev_comp=prev_comp, reclaim=True, send=True)
         return { key: 'ok' }
 
+    @register(events, 'ExceededTransientErrThresh')
+    def trans_err_thresh(self, key, br, sender, iface, rec):
+        log.info(f'{br}: {key} UEP from {sender} on {iface}')
+        # Revisit: do something useful
+        return { key: 'ok' }
+
     def dispatch(self, key, *args, **kwargs):
         try:
             ret = getattr(self, self.events[key])(key, *args, **kwargs)
