@@ -831,6 +831,84 @@ class Component():
         self.control_write(ces,
                     genz.ComponentErrorSignalStructure.IEventDetect, sz=8)
 
+    def pfm_uep_init(self, ces, pfm, valid=True):
+        genz = zephyr_conf.genz
+        if pfm is None or self is pfm:
+            valid = False
+        # Set MV/MgmtVC/Iface0
+        pfm_rts = self.fab.get_routes(self, pfm)
+        if len(pfm_rts) == 0:
+            valid = False
+        ces.MgmtVC0 = 0 # Revisit: VC should come from route
+        ces.MgmtIface0 = pfm_rts[0][0].egress_iface.num if valid else 0
+        ces.MV0 = int(valid)
+        pfmUEPMask = (0x01 if valid else 0) # use MgmtVC/Iface0
+        for i in range(0, len(pfm_rts) if valid else 1):
+            if not valid or pfm_rts[i][0].egress_iface.num != ces.MgmtIface0:
+                # an HA route using a different egress_iface
+                ces.MgmtVC1 = 0 # Revisit: VC should come from route
+                ces.MgmtIface1 = pfm_rts[i][0].egress_iface.num if valid else 0
+                ces.MV1 = int(valid)
+                pfmUEPMask |= (0x2 if valid else 0) # also use MgmtVC/Iface1
+                break
+            # end if
+        # end for
+        # write MgmtVC/IFace 0, 1, and (unused) 2
+        self.control_write(ces,
+                    genz.ComponentErrorSignalStructure.MV0, sz=8)
+        # Set PFM UEP Mask
+        ces.PFMUEPMask = pfmUEPMask
+        self.control_write(ces,
+                    genz.ComponentErrorSignalStructure.PMUEPMask, sz=8)
+
+    def pfm_uep_update(self, pfm, valid=True):
+        ces_file = self.ces_dir / 'component_error_and_signal_event'
+        with ces_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            ces = self.map.fileToStruct('component_error_and_signal_event',
+                                        data, fd=f.fileno(),
+                                        verbosity=self.verbosity)
+            self.pfm_uep_init(ces, pfm, valid=valid)
+
+    def sfm_uep_init(self, ces, sfm, valid=True):
+        genz = zephyr_conf.genz
+        if sfm is None or self is sfm:
+            valid = False
+        # Set MV/MgmtVC/Iface3
+        sfm_rts = self.fab.get_routes(self, sfm)
+        if len(sfm_rts) == 0:
+            valid = False
+        ces.MgmtVC3 = 0 # Revisit: VC should come from route
+        ces.MgmtIface3 = sfm_rts[0][0].egress_iface.num if valid else 0
+        ces.MV3 = int(valid)
+        sfmUEPMask = (0x08 if valid else 0) # use MgmtVC/Iface3
+        for i in range(0, len(sfm_rts) if valid else 1):
+            if not valid or sfm_rts[i][0].egress_iface.num != ces.MgmtIface3:
+                # an HA route using a different egress_iface
+                ces.MgmtVC4 = 0 # Revisit: VC should come from route
+                ces.MgmtIface4 = sfm_rts[i][0].egress_iface.num if valid else 0
+                ces.MV4 = int(valid)
+                sfmUEPMask |= (0x10 if valid else 0) # also use MgmtVC/Iface4
+                break
+            # end if
+        # end for
+        # write MgmtVC/IFace 3, 4, and (unused) 5
+        self.control_write(ces,
+                    genz.ComponentErrorSignalStructure.MV3, sz=8)
+        # Set SFM UEP Mask
+        ces.SFMUEPMask = sfmUEPMask
+        self.control_write(ces,
+                    genz.ComponentErrorSignalStructure.PMUEPMask, sz=8)
+
+    def sfm_uep_update(self, sfm, valid=True):
+        ces_file = self.ces_dir / 'component_error_and_signal_event'
+        with ces_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            ces = self.map.fileToStruct('component_error_and_signal_event',
+                                        data, fd=f.fileno(),
+                                        verbosity=self.verbosity)
+            self.sfm_uep_init(ces, sfm, valid=valid)
+
     def comp_err_signal_init(self, core):
         if self.ces_dir is None:
             return
@@ -888,28 +966,7 @@ class Component():
             if cap1.field.IEventDetectSup:
                 self.ievent_init(ces)
             # IError setup is done by iface_init()
-            if not self.local_br:
-                # Set MV/MgmtVC/Iface
-                pfm_rts = self.fab.get_routes(self, self.fab.pfm)
-                ces.MgmtVC0 = 0 # Revisit: VC should come from route
-                ces.MgmtIface0 = pfm_rts[0][0].egress_iface.num
-                ces.MV0 = 1
-                for i in range(0, len(pfm_rts)):
-                    if pfm_rts[i][0].egress_iface.num != ces.MgmtIface0:
-                        # an HA route using a different egress_iface
-                        ces.MgmtVC1 = 0 # Revisit: VC should come from route
-                        ces.MgmtIface1 = pfm_rts[i][0].egress_iface.num
-                        ces.MV1 = 1
-                        break
-                    # end if
-                # end for
-                self.control_write(ces,
-                            genz.ComponentErrorSignalStructure.MV0, sz=8)
-                # Set PFM UEP Mask
-                ces.PFMUEPMask = 0x01 # use MgmtVC/Iface0
-                self.control_write(ces,
-                            genz.ComponentErrorSignalStructure.PMUEPMask, sz=8)
-            # end if local_br
+            self.pfm_uep_init(ces, self.fab.pfm)
         # end with
 
     def switch_init(self, core):
@@ -1597,6 +1654,7 @@ class Component():
                 self.control_write(core, genz.CoreStructure.CAP1Control, sz=8)
         # end with
         routes = self.fab.setup_bidirectional_routing(sfm, self)
+        self.sfm_uep_update(sfm)
         return routes # Revisit
 
     def disable_sfm(self, sfm, prefix='control'):
@@ -1632,6 +1690,7 @@ class Component():
                 core.CAP1Control = cap1ctl.val
                 self.control_write(core, genz.CoreStructure.CAP1Control, sz=8)
         # end with
+        self.sfm_uep_update(None, valid=False)
         # Revisit: remove SFM routes (when route refcounts are available)
         #routes = self.fab.setup_bidirectional_routing(sfm, self)
         #return routes # Revisit
@@ -1679,6 +1738,9 @@ class Component():
                 core.CAP1Control = cap1ctl.val
                 self.control_write(core, genz.CoreStructure.CAP1Control, sz=8)
         # end with
+        # update UEP targets
+        self.pfm_uep_update(sfm) # PFM UEPs target (former) SFM
+        self.sfm_uep_update(None, valid=False) # no SFM UEPs
         # Revisit: remove PFM routes (when route refcounts are available)
         #routes = self.fab.setup_bidirectional_routing(sfm, self)
         #return routes # Revisit

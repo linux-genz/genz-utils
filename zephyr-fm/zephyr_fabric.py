@@ -444,6 +444,10 @@ class Fabric(nx.MultiGraph):
             log.debug(f'too many routes ({n}) from {fr} to {to}')
             excess_rts = nlargest(n - max_routes, merged)
             self.teardown_routing(fr, to, excess_rts, send=send)
+        if write_ssdt and to is self.pfm:
+            fr.pfm_uep_update(self.pfm)
+        elif write_ssdt and to is self.sfm:
+            fr.sfm_uep_update(self.sfm)
         if send and len(new_rts) > 0:
             js = Routes(fab_uuid=self.fab_uuid, routes=new_rts).to_json()
             self.send_sfm('sfm_routes', 'routes', js, op='add')
