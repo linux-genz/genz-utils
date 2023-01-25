@@ -1364,7 +1364,7 @@ class Component():
         return self.switch_dir is not None
 
     def config_interface(self, iface, pfm, ingress_iface, prev_comp,
-                         send=False):
+                         send=False, reclaim=False):
         args = zephyr_conf.args
         iface.update_peer_info()
         # get peer CState
@@ -1433,7 +1433,7 @@ class Component():
                 log.info(msg)
                 # new path might enable additional or shorter routes
                 self.fab.recompute_routes(iface, peer_iface)
-            elif args.reclaim:
+            elif reclaim:
                 msg += ', reclaiming C-Up component'
                 path = self.fab.make_path(peer_gcid)
                 comp = Component(iface.peer_cclass, self.fab, self.map, path,
@@ -1460,7 +1460,7 @@ class Component():
                     try:
                         comp.add_fab_comp(setup=True)
                     except Exception as e:
-                        log.error('add_fab_comp failed with exception {}'.format(e))
+                        log.error(f'add_fab_comp(gcid={comp.gcid},tmp_gcid={comp.tmp_gcid},dr={comp.dr}) failed with exception {e}')
                         reset_required = True
                         peer_c_reset_only = True
                 if not reset_required:
@@ -1468,13 +1468,13 @@ class Component():
                                             route=route[1])
                     reset_required = not usable
                     if usable and comp.has_switch:  # if switch, recurse
-                        comp.explore_interfaces(pfm, ingress_iface=peer_iface)
+                        comp.explore_interfaces(pfm, ingress_iface=peer_iface,
+                                                reclaim=reclaim)
                 if reset_required:
                     peer_cstate = comp.warm_reset(iface,
                                             peer_c_reset_only=peer_c_reset_only)
                     if peer_cstate is not CState.CCFG:
-                        log.warning('unable to reset - ignoring component on {}'.format(
-                            iface))
+                        log.warning(f'unable to reset - ignoring component {comp} on {iface}')
                         return
             elif args.accept_cids: # Revisit: mostly duplicate of reclaim
                 # Revisit: add prev_comp handling
@@ -1501,7 +1501,8 @@ class Component():
                     return
                 usable = comp.comp_init(pfm, ingress_iface=peer_iface, route=route[1])
                 if usable and comp.has_switch:  # if switch, recurse
-                    comp.explore_interfaces(pfm, ingress_iface=peer_iface)
+                    comp.explore_interfaces(pfm, ingress_iface=peer_iface,
+                                            reclaim=reclaim)
                 elif not usable:
                     log.warning(f'{comp} is not usable')
                     return
@@ -1551,7 +1552,7 @@ class Component():
             try:
                 comp.add_fab_dr_comp()
             except Exception as e:
-                log.error('add_fab_dr_comp failed with exception {}'.format(e))
+                log.error(f'add_fab_dr_comp(gcid={comp.gcid}, dr_gcid={comp.dr.gcid}, dr_iface={comp.dr.egress_iface}) failed with exception {e}')
                 return
             usable = comp.comp_init(pfm, prefix='dr', ingress_iface=peer_iface,
                                     route=route[1])
@@ -1561,13 +1562,13 @@ class Component():
                                    op=op, invertTypes=True)
             if usable and comp.has_switch:  # if switch, recurse
                 comp.explore_interfaces(pfm, ingress_iface=peer_iface,
-                                        send=send)
+                                        send=send, reclaim=reclaim)
             elif not usable:
                 log.warning(f'{comp} is not usable')
         # end if peer_cstate
 
     def explore_interfaces(self, pfm, ingress_iface=None, explore_ifaces=None,
-                           prev_comp=None, send=False):
+                           prev_comp=None, send=False, reclaim=False):
         if explore_ifaces is None:
             # examine all interfaces (except ingress) & init those components
             args = zephyr_conf.args
@@ -1580,8 +1581,8 @@ class Component():
             elif iface.usable:
                 try:
                     self.config_interface(iface, pfm, ingress_iface, prev_comp,
-                                          send=send)
-                except Exception as e:
+                                          send=send, reclaim=reclaim)
+                except Exception as e:  # Revisit: not all exceptions
                     log.warning(f'{self.gcid}: interface{iface.num} config failed with exception "{e}" - marking unusable')
                     iface.usable = False
             else:

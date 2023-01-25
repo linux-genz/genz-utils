@@ -231,7 +231,7 @@ class Fabric(nx.MultiGraph):
         serial = get_serial(br_path)
         return str(cuuid) + ':' + serial
 
-    def fab_init(self):
+    def fab_init(self, reclaim=False):
         zephyr_conf.is_sfm = False
         for br_path in self.br_paths():
             cuuid_serial = self.get_cuuid_serial(br_path)
@@ -250,7 +250,7 @@ class Fabric(nx.MultiGraph):
                 usable = br.comp_init(self.pfm)
                 if usable:
                     self.bridges.append(br)
-                    br.explore_interfaces(self.pfm)
+                    br.explore_interfaces(self.pfm, reclaim=reclaim)
                 else:
                     self.set_pfm(None)
                     log.warning(f'{self.fabnum}:{gcid} bridge{brnum} is not usable')
@@ -584,13 +584,13 @@ class Fabric(nx.MultiGraph):
 
     @register(events, 'NewPeerComp')
     def new_peer_comp(self, key, br, sender, iface, rec):
-        log.info('{}: {} from {} on {}'.format(br, key, sender, iface))
+        log.info(f'{br}: {key} UEP from {sender} on {iface}')
         iup = iface.iface_init()
         # Revisit: check iup
         # find previous Component (if there is one)
         prev_comp = iface.peer_comp
         sender.explore_interfaces(self.pfm, ingress_iface=None, explore_ifaces=[iface],
-                                  prev_comp=prev_comp, send=True)
+                                  prev_comp=prev_comp, reclaim=True, send=True)
         return { key: 'ok' }
 
     def dispatch(self, key, *args, **kwargs):
