@@ -499,9 +499,12 @@ class Component():
                         self.dr = None
                         prefix = 'control'
                 except Exception as e:
-                    log.error('add_fab_comp failed with exception {}'.format(e))
+                    log.error(f'add_fab_comp(gcid={self.gcid},tmp_gcid={self.tmp_gcid},dr={self.dr}) failed with exception {e}')
                     self.usable = False
                     return self.usable
+                # mark routes from PFM as no longer DR
+                for rt in self.fab.get_routes(pfm, self):
+                    rt[-1].dr = False
             # end if pfm
         # end with
         cuuid = get_cuuid(self.path)
@@ -1521,6 +1524,7 @@ class Component():
                                  netlink=self.nl, verbosity=self.verbosity)
                 peer_iface = Interface(comp, iface.peer_iface_num, iface)
                 iface.set_peer_iface(peer_iface)
+                dr.to_iface = peer_iface
                 gcid = self.fab.assign_gcid(comp)
                 if gcid is None:
                     msg += 'no GCID available in pool - ignoring component'

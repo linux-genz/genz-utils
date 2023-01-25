@@ -368,6 +368,24 @@ class Fabric(nx.MultiGraph):
                 info.remove_route(rt)
         # end for
 
+    def find_dr_routes(self, fr: Component, to: Component,
+                       cur_routes: List[Route] = None):
+        # the assumption is that we already have routes to the dr_comp and just
+        # need to add on the DR hop to each
+        dr = to.dr
+        dr_comp = dr.comp
+        if dr_comp == fr:  # special case for direct attach
+            rt = Route([fr, to], [dr])
+            if self.route_entries_avail(rt):
+                self.route_info_update(rt, True)
+                yield rt
+            return
+        for dr_rt in self.get_routes(fr, dr_comp):
+            rt = Route(dr_rt.path + [to], dr_rt.elems + [dr])
+            if rt not in cur_routes and self.route_entries_avail(rt):
+                self.route_info_update(rt, True)
+                yield rt
+
     def find_routes(self, fr: Component, to: Component,
                     cutoff_factor: float = 3.0,
                     min_paths: int = 2, routes: List[Route] = None,
@@ -378,7 +396,10 @@ class Fabric(nx.MultiGraph):
                 if rt not in cur_routes:
                     yield rt
             return
-
+        if to.dr is not None: # must route through to's DR interface
+            for rt in self.find_dr_routes(fr, to, cur_routes):
+                yield rt
+            return
         min_paths = min_paths if max_routes is None else min(min_paths, max_routes)
         paths = self.all_shortest_paths(fr, to, cutoff_factor=cutoff_factor,
                                         min_paths=min_paths,

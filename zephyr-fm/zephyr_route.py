@@ -165,8 +165,9 @@ class RouteElement():
 
     def __str__(self):
         # Revisit: handle self.dr and vca
-        return ('{}->{}'.format(self.egress_iface, self.to_iface)
-                if self.to_iface else '{}'.format(self.egress_iface))
+        return (f'{self.egress_iface}(DR)' if self.dr else
+                f'{self.egress_iface}->{self.to_iface}'
+                if self.to_iface else f'{self.egress_iface}')
 
 class DirectedRelay(RouteElement):
     def __init__(self, dr_comp: Component,
@@ -213,6 +214,8 @@ class Route():
             # end for
         else:
             for elem in elems:
+                if elem is not elems[-1]:
+                    assert not elem.dr
                 # fixup ingress_iface
                 elem.ingress_iface = ingress_iface
                 self.ifaces.add(elem.egress_iface)
@@ -220,6 +223,14 @@ class Route():
                 ingress_iface = elem.to_iface
             # end for
         # end if
+
+    @property
+    def path(self):
+        return self._path
+
+    @property
+    def elems(self):
+        return self._elems
 
     @property
     def fr(self):
