@@ -238,8 +238,11 @@ class Interface():
                               (ierr_tgt.val[1] << 16) | ierr_tgt.val[0])
         log.debug('{}: writing IErrorSigTgt'.format(self))
         try:
+            # Revisit: sz=6 on orthus causes it to clear TETH/TETE/FCFWDProgress
+            #self.comp.control_write(iface, genz.InterfaceStructure.IErrorSigTgt,
+            #                        sz=6, check=True)
             self.comp.control_write(iface, genz.InterfaceStructure.IErrorSigTgt,
-                                    sz=6, check=True)
+                                    sz=8, check=True)
         except ValueError:
             log.warning(f'{self}: prevented IErrorSigTgt write of all-ones')
             self.usable = False
