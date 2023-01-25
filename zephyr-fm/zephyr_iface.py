@@ -717,6 +717,7 @@ class Interface():
     def to_json(self):
         return { 'num': str(self),
                  'state': str(self.istate),
+                 'usable': self.usable,
                  'mod_timestamp': self.mod_timestamp,
                  'phy': { 'status': str(self.phy_status),
                           'tx_LWR': self.phy_tx_lwr,
