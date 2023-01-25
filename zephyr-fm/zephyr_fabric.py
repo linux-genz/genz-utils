@@ -545,10 +545,15 @@ class Fabric(nx.MultiGraph):
     def iface_error(self, key, br, sender, iface, rec):
         genz = zephyr_conf.genz
         es = genz.IErrorES(rec['ES'])
-        log.info('{}: {}:{}({}) from {} on {}'.format(br, key, es.errName,
-                                                es.errSeverity, sender, iface))
-        phyOk, phyChanged = iface.phy_init() # check PHY status (no actual init)
-        istate, iChanged = iface.iface_state()
+        errName = es.errName
+        log.info(f'{br}: {key}:{errName}({es.errSeverity}) UEP from {sender} on {iface}')
+        try:
+            phyOk, phyChanged = iface.phy_init() # check PHY status (no actual init)
+            istate, iChanged = iface.iface_state()
+        except ValueError:  # got all-ones
+            log.warning(f'{iface.comp.gcid}: iface_error interface{iface.num} returned all-ones data')
+            iface.usable = False
+            return { key: 'iface all-ones' }
         # Revisit: Containment and RootCause
         if phyChanged or iChanged:
             js = { iface.comp.uuid: iface.to_json() }
@@ -560,10 +565,15 @@ class Fabric(nx.MultiGraph):
 
     @register(events, 'WarmIfaceReset', 'FullIfaceReset')
     def iface_reset(self, key, br, sender, iface, rec):
-        log.info('{}: {} from {} on {}'.format(br, key, sender, iface))
+        log.info(f'{br}: {key} UEP from {sender} on {iface}')
         # Revisit: refactor - same as iface_error()
-        phyOk, phyChanged = iface.phy_init() # check PHY status (no actual init)
-        istate, iChanged = iface.iface_state()
+        try:
+            phyOk, phyChanged = iface.phy_init() # check PHY status (no actual init)
+            istate, iChanged = iface.iface_state()
+        except ValueError:  # got all-ones
+            log.warning(f'{iface.comp.gcid}: iface_reset interface{iface.num} returned all-ones data')
+            iface.usable = False
+            return { key: 'iface all-ones' }
         if phyChanged or iChanged:
             js = { iface.comp.uuid: iface.to_json() }
             self.send_mgrs(['llamas'], 'mgr_topo', 'interface', js,

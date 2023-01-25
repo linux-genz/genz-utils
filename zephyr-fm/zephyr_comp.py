@@ -645,7 +645,12 @@ class Component():
                 cctl = genz.CControl(core.CControl, core)
                 cctl.field.ComponentEnb = 1
                 core.CControl = cctl.val
-                self.control_write(core, genz.CoreStructure.CControl, sz=8)
+                try:
+                    self.control_write(core, genz.CoreStructure.CControl, sz=8)
+                except ValueError:
+                    log.warning(f'{self}: prevented CControl write of all-ones')
+                    self.usable = False
+                    return False
                 log.info('{} transitioning to C-Up'.format(self.gcid))
                 # update our peer's peer-info (about us, now that we're C-Up)
                 if (ingress_iface is not None and
@@ -1611,11 +1616,14 @@ class Component():
                 data = bytearray(f.read())
                 core = self.map.fileToStruct('core', data, fd=f.fileno(),
                                              verbosity=self.verbosity)
-                # Revisit: check read data (ZUUID?) is not all ones
                 cctl = genz.CControl(core.CControl, core)
                 cctl.field.ComponentReset = CReset.WarmReset
                 core.CControl = cctl.val
-                self.control_write(core, genz.CoreStructure.CControl, sz=8)
+                try:
+                    self.control_write(core, genz.CoreStructure.CControl, sz=8)
+                except ValueError:
+                    log.warning(f'{self}: prevented CControl write of all-ones')
+                    return None
             # end with
         # end if
         iface.update_peer_info()

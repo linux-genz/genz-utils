@@ -102,7 +102,7 @@ class Interface():
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
             log.debug('{}: iface_init interface{}={}'.format(self.comp.gcid, self.num, iface))
             if iface.all_ones_type_vers_size():
-                log.warning(f'{self.comp.gcid}: interface{self.num} returned all-ones data')
+                log.warning(f'{self.comp.gcid}: iface_init interface{self.num} returned all-ones data')
                 self.usable = False
                 return False
             self.hvs = iface.HVS
@@ -534,6 +534,8 @@ class Interface():
                 phy = self.comp.map.fileToStruct('interface_phy', data, fd=f.fileno(),
                                                  verbosity=self.comp.verbosity)
                 log.debug('{}: phy{}={}'.format(self.comp.gcid, self.num, phy))
+                if phy.all_ones_type_vers_size():
+                    raise ValueError
                 return self.phy_status_ok(phy)
         except IndexError:
             log.debug('{}: phy{} missing - assume PHY-Up'.format(
