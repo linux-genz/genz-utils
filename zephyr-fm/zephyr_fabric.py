@@ -1090,6 +1090,22 @@ class Fabric(nx.MultiGraph):
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
             self.promote_sfm_to_pfm()
 
+    def check_connectivity(self, br_gcid_val, sgcid_val, dgcid_val):
+        '''Check the ~20 things that could prevent successful communication
+        between sgcid & dgcid.
+        '''
+        code = 200
+        br_gcid = GCID(val=br_gcid_val)
+        sgcid = GCID(val=sgcid_val)
+        dgcid = GCID(val=dgcid_val)
+        # Revisit: until HW supports ControlNOP generation on requesters,
+        # the sgcid must equal br_gcid
+        if br_gcid != sgcid:
+            resp = { 'error' : 'sgcid must match br_gcid.' }
+            return (resp, 404)
+        resp = { 'status': 'not implemented' }
+        return (resp, code)
+
 
 class RepeatedTimer(sched.scheduler):
     def __init__(self, interval, function, *args, **kwargs):

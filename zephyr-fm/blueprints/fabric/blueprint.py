@@ -347,3 +347,42 @@ def mgr_endpoints():
 
     response['success'].append(f'{op}')
     return flask.make_response(flask.jsonify(response), 200)
+
+@Journal.BP.route(f'/{Journal.name}/check', methods=['POST'])
+def check():
+    """
+        Accepts POST request with a json body describing the source/dest
+    components for which to check connectivity.
+    POST Body model:
+    {
+        'fabric_uuid' : 'string',
+        'mgr_uuid'    : 'string',
+        'bridge_gcid' : 'uint32',
+        'sgcid'       : 'uint32',
+        'dgcid'       : 'uint32',
+    }
+    """
+    global Journal
+    mainapp = Journal.mainapp
+    fab = mainapp.conf.fab
+    body = flask.request.get_json()
+
+    if body is None:
+        msg = { 'error ' : ''}
+        return flask.make_response(flask.jsonify(msg), 400)
+
+    # Revisit: validate json against schema
+    fabric_uuid = body.get('fabric_uuid', None)
+    # Check that the fabric_uuid matches ours
+    if fabric_uuid != str(fab.fab_uuid):
+        msg = { 'error' : f'Incorrect fabric_uuid: {fabric_uuid}.' }
+        return flask.make_response(flask.jsonify(msg), 404)
+
+    mgr_uuid = body.get('mgr_uuid', None)
+    # Revisit: check mgr_uuid
+
+    bridge_gcid = body.get('bridge_gcid', None)
+    sgcid = body.get('sgcid', None)
+    dgcid = body.get('dgcid', None)
+    resp, code = fab.check_connectivity(bridge_gcid, sgcid, dgcid)
+    return flask.make_response(flask.jsonify(resp), code)
