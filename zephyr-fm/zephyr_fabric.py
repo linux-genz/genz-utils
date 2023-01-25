@@ -913,7 +913,7 @@ class Fabric(nx.MultiGraph):
                                  verbosity=self.verbosity)
                 gcid = self.assign_gcid(comp, proposed_gcid=gcid)
                 if path.exists():
-                    comp.remove_fab_comp()
+                    comp.remove_fab_comp(force=True)
                 comp.add_fab_comp(setup=True)
             # Revisit: instead, call rsp_page_grid_init(readOnly=True)
             comp.rsp_page_grid_ps = ps

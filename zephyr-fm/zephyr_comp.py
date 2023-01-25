@@ -129,6 +129,7 @@ class Component():
         self.req_vcat = None
         self.rsp_vcat = None
         self.rsp_page_grid_ps = 0
+        self.paths_setup = False
         fab.components[self.uuid] = self
         fab.add_node(self, instance_uuid=self.uuid, cclass=self.cclass,
                      mgr_uuid=self.mgr_uuid)
@@ -220,8 +221,10 @@ class Component():
             self.update_path()
         return ret
 
-    def remove_fab_comp(self):
-        log.debug('remove_fab_comp for {}'.format(self))
+    def remove_fab_comp(self, force=False):
+        log.debug(f'remove_fab_comp for {self}, paths_setup={self.paths_setup}')
+        if not (force or self.paths_setup):
+            return None
         cmd_name = self.nl.cfg.get('REMOVE_FAB_COMP')
         data = {'gcid':     self.gcid.val,
                 'br_gcid':  self.br_gcid.val,
@@ -250,7 +253,9 @@ class Component():
         return ret
 
     def remove_fab_dr_comp(self):
-        log.debug('remove_fab_dr_comp for {}'.format(self))
+        log.debug(f'remove_fab_dr_comp for {self}, paths_setup={self.paths_setup}')
+        if not self.paths_setup:
+            return None
         cmd_name = self.nl.cfg.get('REMOVE_FAB_DR_COMP')
         data = {'gcid':     self.gcid.val,
                 'br_gcid':  self.br_gcid.val,
@@ -334,6 +339,7 @@ class Component():
                 'pg_table@*'))[0]
             self.rsp_pte_table_dir = list(self.rsp_pg_dir.glob(
                 'pte_table@*'))[0]
+        self.paths_setup = True
 
     def remove_paths(self):
         self.comp_dest_dir = None
@@ -348,6 +354,7 @@ class Component():
         self.rsp_pg_dir = None
         self.rsp_pg_table_dir = None
         self.rsp_pte_table_dir = None
+        self.paths_setup = False
 
     def check_usable(self, prefix='control'):
         self.update_cstate(prefix=prefix)
