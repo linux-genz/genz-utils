@@ -572,7 +572,7 @@ class Interface():
         if self.lprt is None:
             return (hc, rt != 0, False)
         # Revisit: what about changes to other fields, like VCA & EI?
-        curV = self.lprt[cid][rt].V
+        curV = self.lprt[cid][rt].V  # Revisit: not used
         if valid:
             cur_min = min(self.lprt[cid], key=lambda x: x.HC if x.V else MAX_HC)
             cur_min = cur_min.HC if cur_min.V else MAX_HC

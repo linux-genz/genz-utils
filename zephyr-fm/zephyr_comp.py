@@ -1222,7 +1222,7 @@ class Component():
         if self.ssdt is None:
             return (hc, rt != 0, False)
         # Revisit: what about changes to other fields, like VCA & EI?
-        curV = self.ssdt[cid][rt].V
+        curV = self.ssdt[cid][rt].V  # Revisit: not used
         if valid:
             cur_min = min(self.ssdt[cid], key=lambda x: x.HC if x.V else MAX_HC)
             cur_min = cur_min.HC if cur_min.V else MAX_HC
@@ -1383,6 +1383,7 @@ class Component():
         elif iface.boundary_interface:
             msg += 'boundary interface - ignoring peer'
             log.info(msg)
+            # Revisit: contact foreign FM
             return
         if iface.peer_mgr_type == 0:  # Revisit: enum
             # Revisit: mamba/switch/orthus reporting wrong value
@@ -1431,7 +1432,8 @@ class Component():
                     log.warning(msg)
                     # Revisit: contact foreign FM
                     return
-                self.fab.add_link(iface, peer_iface)
+                added = self.fab.add_link(iface, peer_iface)
+                # Revisit: use added to determine what to do
                 msg += ' additional path to {}'.format(comp)
                 log.info(msg)
                 # new path might enable additional or shorter routes
@@ -1742,9 +1744,9 @@ class Component():
         '''Promote @sfm to Primary Fabric Manager of this component and
         invalidate the previous SFM GCID (since it is now PFM).
         '''
+        genz = zephyr_conf.genz
         core_file = self.path / prefix / 'core@0x0/core'
         with core_file.open(mode='rb+') as f:
-            genz = zephyr_conf.genz
             core = self.core
             core.set_fd(f)
             cap1ctl = genz.CAP1Control(core.CAP1Control, core)

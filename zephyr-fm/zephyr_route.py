@@ -69,6 +69,7 @@ class RouteElement():
         return self.egress_iface.iface_dir
 
     def route_entries_avail(self, fr: Component, to: Component) -> bool:
+        '''Major side effect: sets self.rt_num if avail'''
         # Revisit: Subnets
         cid = to.gcid.cid
         if self.rit_only:
@@ -177,16 +178,25 @@ class DirectedRelay(RouteElement):
         self.dr = True
 
 class RouteInfo():
+    '''Every SSDT and LPRT entry has a RouteInfo to keep track of
+    all Routes that make use of that entry.
+    '''
     def __init__(self):
-        self.routes = set() # Revisit: Route or RouteElem?
+        self._elems = set() # RouteElement
 
-    def add_route(self, route: 'Route') -> int:
-        self.routes.add(route)
-        return len(self.routes)
+    def add_route(self, elem: RouteElement) -> int:
+        self._elems.add(elem)
+        return len(self._elems)
 
-    def remove_route(self, route: 'Route') -> int:
-        self.routes.discard(route)
-        return len(self.routes)
+    def remove_route(self, elem: RouteElement) -> int:
+        self._elems.discard(elem)
+        return len(self._elems)
+
+    def min_hc(self) -> int:
+        return 0 if len(self) == 0 else min(self._elems, key=lambda x: x.hc).hc
+
+    def __len__(self):
+        return len(self._elems)
 
 class Route():
     def __init__(self, path: List[Component], elems: List[RouteElement] = None):
@@ -198,8 +208,8 @@ class Route():
         self.ifaces = set()
         self.refcount = RefCount()
         ingress_iface = None
+        hc = path_len - 2
         if elems is None:
-            hc = path_len - 2
             for fr, to in moving_window(2, path):
                 edge_data = fr.fab.get_edge_data(fr, to)[0]
                 egress_iface = edge_data[str(fr.uuid)]
@@ -221,6 +231,9 @@ class Route():
                 self.ifaces.add(elem.egress_iface)
                 self.ifaces.add(elem.to_iface)
                 ingress_iface = elem.to_iface
+                # and hc
+                elem.hc = hc
+                hc -= 1
             # end for
         # end if
 
@@ -244,6 +257,31 @@ class Route():
     def hc(self):
         return len(self) - 1
 
+    def route_entries_avail(self) -> bool:
+        fr = self.fr
+        to = self.to
+        for elem in self:
+            if not elem.route_entries_avail(fr, to):
+                return False
+        return True
+
+    def route_info_update(self, add: bool):
+        fr = self.fr
+        to = self.to
+        cid = to.gcid.cid
+        for elem in self:
+            if elem.rit_only:
+                continue # No route info to update
+            elif elem.ingress_iface is None: # SSDT
+                info = elem.comp.route_info[cid][elem.rt_num]
+            else: # LPRT
+                info = elem.ingress_iface.route_info[cid][elem.rt_num]
+            if add:
+                info.add_route(elem)
+            else:
+                info.remove_route(elem)
+        # end for
+
     def invert(self, fab: 'Fabric') -> 'Route':
         # MultiGraph - this guarantees identical links
         elems = []
@@ -258,8 +296,8 @@ class Route():
             hc -= 1
         # end for
         inverse = Route(self._path[::-1], elems=elems)
-        if fab.route_entries_avail(inverse):
-            fab.route_info_update(inverse, True)
+        if inverse.route_entries_avail():
+            inverse.route_info_update(True)
         else:
             inverse = None
         return inverse
@@ -334,7 +372,7 @@ class Routes():
                 self.add(rt.fr, rt.to, route=rt)
 
     def get_routes(self, fr: Component, to: Component) -> List[Route]:
-        return self.fr_to[(fr, to)]['route_list']
+        return [] if fr is to else self.fr_to[(fr, to)]['route_list']
 
     def add_ifaces(self, route: Route) -> None:
         for iface in route.ifaces:

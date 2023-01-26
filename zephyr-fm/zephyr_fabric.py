@@ -342,32 +342,6 @@ class Fabric(nx.MultiGraph):
                 break
         # end for
 
-    # Revisit: this doesn't use 'self' and so should be in class Route
-    def route_entries_avail(self, rt: Route) -> bool:
-        fr = rt.fr
-        to = rt.to
-        for elem in rt:
-            if not elem.route_entries_avail(fr, to):
-                return False
-        return True
-
-    def route_info_update(self, rt: Route, add: bool):
-        fr = rt.fr
-        to = rt.to
-        cid = to.gcid.cid
-        for elem in rt:
-            if elem.rit_only:
-                continue # No route info to update
-            elif elem.ingress_iface is None: # SSDT
-                info = elem.comp.route_info[cid][elem.rt_num]
-            else: # LPRT
-                info = elem.ingress_iface.route_info[cid][elem.rt_num]
-            if add:
-                info.add_route(rt)
-            else:
-                info.remove_route(rt)
-        # end for
-
     def find_dr_routes(self, fr: Component, to: Component,
                        cur_routes: List[Route] = None):
         # the assumption is that we already have routes to the dr_comp and just
@@ -376,14 +350,14 @@ class Fabric(nx.MultiGraph):
         dr_comp = dr.comp
         if dr_comp == fr:  # special case for direct attach
             rt = Route([fr, to], [dr])
-            if self.route_entries_avail(rt):
-                self.route_info_update(rt, True)
+            if rt.route_entries_avail():
+                rt.route_info_update(True)
                 yield rt
             return
         for dr_rt in self.get_routes(fr, dr_comp):
             rt = Route(dr_rt.path + [to], dr_rt.elems + [dr])
-            if rt not in cur_routes and self.route_entries_avail(rt):
-                self.route_info_update(rt, True)
+            if rt not in cur_routes and rt.route_entries_avail():
+                rt.route_info_update(True)
                 yield rt
 
     def find_routes(self, fr: Component, to: Component,
@@ -409,16 +383,16 @@ class Fabric(nx.MultiGraph):
             if max_routes is not None and cnt >= max_routes:
                 return
             rt = Route(path)
-            if rt not in cur_routes and self.route_entries_avail(rt):
-                self.route_info_update(rt, True)
+            if rt not in cur_routes and rt.route_entries_avail():
+                rt.route_info_update(True)
                 cnt += 1
                 yield rt
             # MultiGraph routes - by definition, same len as original rt
             for mg_rt in rt.multigraph_routes():
                 if max_routes is not None and cnt >= max_routes:
                     return
-                if mg_rt not in cur_routes and self.route_entries_avail(mg_rt):
-                    self.route_info_update(mg_rt, True)
+                if mg_rt not in cur_routes and mg_rt.route_entries_avail():
+                    mg_rt.route_info_update(True)
                     cnt += 1
                     yield mg_rt
             # end for mg_rt
@@ -450,11 +424,12 @@ class Fabric(nx.MultiGraph):
                       routes=None, send=True, overrideMaxRoutes=False) -> List[Route]:
         cur_rts = self.get_routes(fr, to)
         new_rts = []
+        excess_rts = []
         max_routes = None if overrideMaxRoutes else zephyr_conf.args.max_routes
         for route in self.find_routes(fr, to, routes=routes, max_routes=max_routes,
                                       cur_routes=cur_rts):
             route.refcount.inc()
-            log.info(f'adding route from {fr} to {to} via {route}, refcount={route.refcount.value()}')
+            log.debug(f'adding route from {fr} to {to} via {route}, refcount={route.refcount.value()}')
             self.write_route(route, write_ssdt, refcountOnly=(not send))
             self.routes.add(fr, to, route)
             new_rts.append(route)
@@ -465,6 +440,7 @@ class Fabric(nx.MultiGraph):
             log.debug(f'too many routes ({n}) from {fr} to {to}')
             excess_rts = nlargest(n - max_routes, merged)
             self.teardown_routing(fr, to, excess_rts, send=send)
+        log.info(f'added {len(new_rts)} routes, removed {len(excess_rts)} routes from {fr} to {to}')
         if write_ssdt and to is self.pfm:
             fr.pfm_uep_update(self.pfm)
         elif write_ssdt and to is self.sfm:
@@ -501,7 +477,7 @@ class Fabric(nx.MultiGraph):
                 if not last:
                     log.debug(f'decremented route {route} refcount, refcount={route.refcount.value()}')
                     continue
-                log.info(f'removing route from {fr} to {to} via {route}')
+                log.debug(f'removing route from {fr} to {to} via {route}')
                 self.write_route(route, enable=False, refcountOnly=(not send))
                 self.routes.remove(fr, to, route)
         # end for
@@ -531,13 +507,16 @@ class Fabric(nx.MultiGraph):
                 return True
         return False
 
-    def add_link(self, fr_iface: Interface, to_iface: Interface) -> None:
+    def add_link(self, fr_iface: Interface, to_iface: Interface) -> bool:
+        '''Returns True if link added; False if link was already there'''
         fr = fr_iface.comp
         to = to_iface.comp
         # prevent adding same link multiple times
         if not self.has_link(fr_iface, to_iface):
             self.add_edges_from([(fr, to, {str(fr.uuid): fr_iface,
                                            str(to.uuid): to_iface})])
+            return True
+        return False
 
     def make_path(self, gcid):
         return fabs / 'fabric{f}/{f}:{s:04x}/{f}:{s:04x}:{c:03x}'.format(
@@ -548,10 +527,11 @@ class Fabric(nx.MultiGraph):
         self.fabnum = component_num(path)
 
     def iface_unusable(self, iface):
+        iface.usable = False
         # lookup impacted routes
         impacted = self.routes.impacted(iface)
         for rt in impacted:
-            log.debug('route {} impacted by unusable {}'.format(rt, iface))
+            log.info(f'route {rt} impacted by unusable {iface}')
             # route around failed link (if possible)
             try:
                 self.teardown_routing(rt.fr, rt.to, [rt])
@@ -711,8 +691,8 @@ class Fabric(nx.MultiGraph):
                     index = existing.index(rt)
                     existing[index].refcount.inc()
                     log.info(f'incremented refcount on existing route {existing[index]}, refcount={existing[index].refcount.value()}')
-                elif self.route_entries_avail(rt):
-                    self.route_info_update(rt, True)
+                elif rt.route_entries_avail():
+                    rt.route_info_update(True)
                     self.setup_routing(fr, to, routes=[rt], send=send, overrideMaxRoutes=True)
                 else:
                     log.warning(f'insufficient route entries to add {rt}')
@@ -734,8 +714,8 @@ class Fabric(nx.MultiGraph):
             for rt in rts.get_routes(fr, to):
                 if rt not in self.get_routes(fr, to):
                     log.info('cannot remove non-existent route {}'.format(rt))
-                elif self.route_entries_avail(rt):
-                    self.route_info_update(rt, False)
+                elif rt.route_entries_avail():
+                    rt.route_info_update(False)
                     self.teardown_routing(fr, to, [rt], send=send)
                 else:
                     log.warning('missing route entries removing {}'.format(rt))
