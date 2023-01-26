@@ -117,6 +117,7 @@ class Fabric(nx.MultiGraph):
         self.pfm_fm = None
         self.fms = {}
         self.promote_sfm_refcount = RefCount()
+        self._g = None  # Graph() for routing
         mgr_uuids = [] if self.mgr_uuid is None else [self.mgr_uuid]
         ns = time.time_ns()
         super().__init__(fab_uuid=self.fab_uuid, mgr_uuids=mgr_uuids,
@@ -156,6 +157,7 @@ class Fabric(nx.MultiGraph):
         self.cuuid_serial[comp.cuuid_serial] = comp
         self.comp_gcids[comp.gcid] = comp
         self.update_comp(comp)
+        self._g = None  # will be recreated in all_shortest_paths()
 
     def get_mod_timestamp(self, comp=None) -> Tuple:
         return (self.graph['mod_timestamp'],
@@ -327,8 +329,17 @@ class Fabric(nx.MultiGraph):
                            cutoff_factor: float = 3.0,
                            min_paths: int = 2,
                            max_paths: int = None) -> List[List[Component]]:
-        g = nx.Graph(self)  # Revisit: don't re-create g on every call
-        all = nx.shortest_simple_paths(g, fr, to, weight=Fabric.link_weight)
+        # Revisit: need to control how multi-edge attributes are merged so that
+        # link_weight returns the right answer (especially for returning "None")
+        if self._g is None:
+            # shortest_simple_paths does not work on a MultiGraph
+            self._g = nx.Graph(self)
+        try:
+            all = nx.shortest_simple_paths(self._g, fr, to,
+                                           weight=Fabric.link_weight)
+        except Exception as e:
+            log.error(f'all_shortest_paths: fr={fr}, to={to}: "{e}"')
+            return
         path_cnt = 1
         for path in all:
             if path_cnt == 1:
@@ -515,6 +526,7 @@ class Fabric(nx.MultiGraph):
         if not self.has_link(fr_iface, to_iface):
             self.add_edges_from([(fr, to, {str(fr.uuid): fr_iface,
                                            str(to.uuid): to_iface})])
+            self._g = None  # will be recreated in all_shortest_paths()
             return True
         return False
 
