@@ -366,7 +366,7 @@ class Fabric(nx.MultiGraph):
                 yield rt
             return
         for dr_rt in self.get_routes(fr, dr_comp):
-            rt = Route(dr_rt.path + [to], dr_rt.elems + [dr])
+            rt = Route(dr_rt.path + [to], itertools.chain(dr_rt.elems, [dr]))
             if rt not in cur_routes and rt.route_entries_avail():
                 rt.route_info_update(True)
                 yield rt
@@ -464,11 +464,13 @@ class Fabric(nx.MultiGraph):
         return new_rts
 
     def setup_bidirectional_routing(self, fr: Component, to: Component,
-                                    write_to_ssdt=True, routes=None) -> Tuple[List[Route], List[Route]]:
+                                    write_to_ssdt=True) -> Tuple[List[Route], List[Route]]:
         if fr is to: # Revisit: loopback
             return None
-        to_routes = self.setup_routing(fr, to, routes=routes) # always write fr ssdt
+        to_routes = self.setup_routing(fr, to) # always write fr ssdt
         to_inverted = [rt.invert(self) for rt in to_routes]
+        # rt.invert may return None for routes that cannot be inverted
+        # (because a route table row is full) - filter those routes out
         to_filtered = filter(lambda rt: rt is not None, to_inverted)
         fr_routes = (self.setup_routing(to, fr, write_ssdt=write_to_ssdt,
                                         routes=to_filtered)
@@ -489,6 +491,7 @@ class Fabric(nx.MultiGraph):
                     log.debug(f'decremented route {route} refcount, refcount={route.refcount.value()}')
                     continue
                 log.debug(f'removing route(hc={route.hc}) from {fr} to {to} via {route}')
+                route.route_info_update(False) # remove route_info
                 self.write_route(route, enable=False, refcountOnly=(not send))
                 self.routes.remove(fr, to, route)
         # end for
@@ -504,6 +507,16 @@ class Fabric(nx.MultiGraph):
         for fr, to in self.routes.fr_to.keys():
             log.debug(f'recompute routes: {fr}, {to}')
             self.setup_routing(fr, to)
+
+    def replace_dr_routes(self, fr: Component, to: Component):
+        for dr_rt in filter(lambda x: x.is_dr, self.get_routes(fr, to)):
+            rt = Route(dr_rt.path, dr_rt.elems, noDR=True)
+            # do replacement
+            if rt.route_entries_avail():
+                self.routes.remove(fr, to, dr_rt) # remove old DR
+                dr_rt.route_info_update(False)
+                self.routes.add(fr, to, rt)       # add new
+                rt.route_info_update(True)
 
     def has_link(self, fr_iface: Interface, to_iface: Interface) -> bool:
         fr = fr_iface.comp
@@ -728,7 +741,6 @@ class Fabric(nx.MultiGraph):
                 if rt not in self.get_routes(fr, to):
                     log.info(f'cannot remove non-existent route {rt}')
                 elif rt.route_entries_avail():
-                    rt.route_info_update(False)
                     self.teardown_routing(fr, to, [rt], send=send)
                 else:
                     log.warning(f'missing route entries removing {rt}')

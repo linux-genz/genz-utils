@@ -24,9 +24,10 @@
 import ctypes
 import json
 import re
-from typing import List, Tuple
+from typing import List, Tuple, NamedTuple
 from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount
 from pdb import set_trace
+from collections import Counter
 from itertools import product
 import bisect
 import time
@@ -42,19 +43,46 @@ def moving_window(n, iterable):
         start += 1
         stop += 1
 
+class RouteElementTuple(NamedTuple):
+    comp: Component
+    ingress_iface: Interface
+    egress_iface: Interface
+    to_iface: Interface = None
+    hc: int = 0
+    dr: bool = False
+    vca: int = 0
+
 class RouteElement():
     def __init__(self, comp: Component,
                  ingress_iface: Interface, egress_iface: Interface,
-                 to_iface: Interface = None, rt_num: int = None,
-                 hc: int = 0):
-        self.comp = comp
-        self.ingress_iface = ingress_iface # optional: which lprt to write
-        self.egress_iface = egress_iface   # required
-        self.to_iface = to_iface           # optional: the peer of egress_iface
-        self.dr = False
-        self.rt_num = rt_num
-        self.hc = hc
-        # Revisit: vca
+                 to_iface: Interface = None, hc: int = 0, dr: bool = False):
+        self._tuple = RouteElementTuple(comp, ingress_iface, egress_iface,
+                                        to_iface, hc, dr)
+        self.rt_num = None  # the only mutable field; not included in hash
+
+    @property
+    def comp(self):
+        return self._tuple.comp
+
+    @property
+    def ingress_iface(self):
+        return self._tuple.ingress_iface
+
+    @property
+    def egress_iface(self):
+        return self._tuple.egress_iface
+
+    @property
+    def to_iface(self):
+        return self._tuple.to_iface
+
+    @property
+    def hc(self):
+        return self._tuple.hc
+
+    @property
+    def dr(self):
+        return self._tuple.dr
 
     @property
     def gcid(self):
@@ -83,6 +111,7 @@ class RouteElement():
         found = None
         free = None
         for i in range(len(row)):
+            # Revisit: cannot share if VCA's differ
             if row[i].V == 1 and row[i].EI == self.egress_iface.num:
                 found = i
                 break
@@ -97,6 +126,19 @@ class RouteElement():
             self.rt_num = free
         return True
 
+    def route_info_update(self, to: Component, add: bool):
+        cid = to.gcid.cid
+        if self.rit_only:
+            return # No route info to update
+        elif self.ingress_iface is None: # SSDT
+            info = self.comp.route_info[cid][self.rt_num]
+        else: # LPRT
+            info = self.ingress_iface.route_info[cid][self.rt_num]
+        if add:
+            info.add_route(self)
+        else:
+            info.remove_route(self)
+
     def set_ssdt(self, to: Component, valid=1, updateRtNum=False,
                  refcountOnly=False):
         comp = self.comp
@@ -104,20 +146,18 @@ class RouteElement():
             return
         if updateRtNum:
             self.route_entries_avail(comp, to)
-        wrR = (comp.ssdt_refcount.inc(to.gcid.cid, self.rt_num) if valid
-               else comp.ssdt_refcount.dec(to.gcid.cid, self.rt_num))
+            self.route_info_update(to, valid)
         if refcountOnly:
             return
         if comp.is_unreachable(comp.fab.pfm):
             log.debug(f'set_ssdt: {comp} is unreachable from PFM') # Revisit: debug
             return
-        mhc, wr0, wrN = comp.compute_mhc(to.gcid.cid, self.rt_num,
-                                         self.hc, valid)
+        mhc, hc, v, wr0, wrN = comp.compute_mhc_hc(to.gcid.cid, self.rt_num,
+                                                   self.hc, valid)
         # Revisit: vca
-        if wrN or wrR:
+        if wrN:
             comp.ssdt_write(to.gcid.cid, self.egress_iface.num,
-                            rt=self.rt_num, valid=valid, mhc=mhc, hc=self.hc)
-        # Revisit: ok to do 2 independent writes? Which order?
+                            rt=self.rt_num, valid=v, mhc=mhc, hc=hc)
         if wr0:
             comp.ssdt_write(to.gcid.cid, 0, mhc=mhc, mhcOnly=True)
 
@@ -126,21 +166,19 @@ class RouteElement():
         comp = self.comp
         iface = self.ingress_iface
         if updateRtNum:
-            self.route_entries_avail(self.comp, to)
-        wrR = (iface.lprt_refcount.inc(to.gcid.cid, self.rt_num) if valid
-               else iface.lprt_refcount.dec(to.gcid.cid, self.rt_num))
+            self.route_entries_avail(comp, to)
+            self.route_info_update(to, valid)
         if refcountOnly:
             return
         if comp.is_unreachable(comp.fab.pfm):
             log.debug(f'set_lprt: {comp} is unreachable from PFM') # Revisit: debug
             return
-        mhc, wr0, wrN = iface.compute_mhc(to.gcid.cid, self.rt_num,
-                                          self.hc, valid)
+        mhc, hc, v, wr0, wrN = iface.compute_mhc_hc(to.gcid.cid, self.rt_num,
+                                                    self.hc, valid)
         # Revisit: vca
-        if wrN or wrR:
+        if wrN:
             iface.lprt_write(to.gcid.cid, self.egress_iface.num,
-                             rt=self.rt_num, valid=valid, mhc=mhc, hc=self.hc)
-        # Revisit: ok to do 2 independent writes? Which order?
+                             rt=self.rt_num, valid=v, mhc=mhc, hc=hc)
         if wr0:
             iface.lprt_write(to.gcid.cid, 0, mhc=mhc, mhcOnly=True)
 
@@ -150,13 +188,11 @@ class RouteElement():
     def __eq__(self, other):
         if not isinstance(other, RouteElement):
             return NotImplemented
-        return (self.comp == other.comp and
-                self.ingress_iface == other.ingress_iface and
-                self.egress_iface == other.egress_iface and
-                self.to_iface == other.to_iface and
-                self.dr == other.dr)
+        return self._tuple == other._tuple
 
     def __lt__(self, other):
+        '''Used for ordering Routes by gcid, egress_iface, dr.
+        '''
         if not isinstance(other, RouteElement):
             return NotImplemented
         return (self != other and
@@ -164,8 +200,11 @@ class RouteElement():
                  self.egress_iface < other.egress_iface or
                  self.dr < other.dr))
 
+    def __hash__(self):
+        return hash(self._tuple)
+
     def __str__(self):
-        # Revisit: handle self.dr and vca
+        # Revisit: handle vca
         return (f'{self.egress_iface}(DR)' if self.dr else
                 f'{self.egress_iface}->{self.to_iface}'
                 if self.to_iface else f'{self.egress_iface}')
@@ -174,68 +213,69 @@ class DirectedRelay(RouteElement):
     def __init__(self, dr_comp: Component,
                  ingress_iface: Interface, dr_iface: Interface,
                  to_iface: Interface = None):
-        super().__init__(dr_comp, ingress_iface, dr_iface, to_iface=to_iface)
-        self.dr = True
+        super().__init__(dr_comp, ingress_iface, dr_iface, to_iface=to_iface,
+                         dr=True)
 
-class RouteInfo():
+class RouteInfo(Counter):
     '''Every SSDT and LPRT entry has a RouteInfo to keep track of
-    all Routes that make use of that entry.
+    all RouteElements that make use of that entry.
     '''
-    def __init__(self):
-        self._elems = set() # RouteElement
-
     def add_route(self, elem: RouteElement) -> int:
-        self._elems.add(elem)
-        return len(self._elems)
+        self[elem] += 1
+        return len(self) # Revisit: total()?
 
     def remove_route(self, elem: RouteElement) -> int:
-        self._elems.discard(elem)
-        return len(self._elems)
+        self[elem] -= 1
+        if self[elem] <= 0:
+            del self[elem]
+        return len(self) # Revisit: total()?
 
     def min_hc(self) -> int:
-        return 0 if len(self) == 0 else min(self._elems, key=lambda x: x.hc).hc
-
-    def __len__(self):
-        return len(self._elems)
+        # Revisit: maintain min_hc on each add/remove, so this is O(1) not O(N)
+        return None if len(self) == 0 else min(self.keys(), key=lambda x: x.hc).hc
 
 class Route():
-    def __init__(self, path: List[Component], elems: List[RouteElement] = None):
+    def __init__(self, path: List[Component], elems: List[RouteElement] = None,
+                 noDR: bool = False):
         path_len = len(path)
         if path_len < 2:
             raise(IndexError)
         self._path = path
-        self._elems = [] if elems is None else elems
         self.ifaces = set()
         self.refcount = RefCount()
         ingress_iface = None
         hc = path_len - 2
+        telems = [] # temporary list
         if elems is None:
             for fr, to in moving_window(2, path):
                 edge_data = fr.fab.get_edge_data(fr, to)[0]
                 egress_iface = edge_data[str(fr.uuid)]
                 to_iface = edge_data[str(to.uuid)]
+                # never generate a DR route
                 elem = RouteElement(fr, ingress_iface, egress_iface, to_iface,
                                     hc=hc)
-                self._elems.append(elem)
+                telems.append(elem)
                 self.ifaces.add(egress_iface)
                 self.ifaces.add(to_iface)
                 ingress_iface = to_iface
                 hc -= 1
             # end for
         else:
-            for elem in elems:
-                if elem is not elems[-1]:
-                    assert not elem.dr
-                # fixup ingress_iface
-                elem.ingress_iface = ingress_iface
-                self.ifaces.add(elem.egress_iface)
-                self.ifaces.add(elem.to_iface)
-                ingress_iface = elem.to_iface
-                # and hc
-                elem.hc = hc
+            for e in elems:
+                if hc > 0: # only the last element can be DR
+                    assert not e.dr
+                # copy e.dr unless noDR is True
+                elem = RouteElement(e.comp, ingress_iface, e.egress_iface,
+                                    to_iface=e.to_iface, hc=hc,
+                                    dr=0 if noDR else e.dr)
+                telems.append(elem)
+                self.ifaces.add(e.egress_iface)
+                self.ifaces.add(e.to_iface)
+                ingress_iface = e.to_iface
                 hc -= 1
             # end for
         # end if
+        self._elems = tuple(telems)  # _elems is immutable for hash
 
     @property
     def path(self):
@@ -257,6 +297,10 @@ class Route():
     def hc(self):
         return len(self) - 1
 
+    @property
+    def is_dr(self):
+        return self._elems[-1].dr
+
     def route_entries_avail(self) -> bool:
         fr = self.fr
         to = self.to
@@ -266,20 +310,12 @@ class Route():
         return True
 
     def route_info_update(self, add: bool):
-        fr = self.fr
         to = self.to
-        cid = to.gcid.cid
         for elem in self:
-            if elem.rit_only:
-                continue # No route info to update
-            elif elem.ingress_iface is None: # SSDT
-                info = elem.comp.route_info[cid][elem.rt_num]
-            else: # LPRT
-                info = elem.ingress_iface.route_info[cid][elem.rt_num]
-            if add:
-                info.add_route(elem)
-            else:
-                info.remove_route(elem)
+            try:
+                elem.route_info_update(to, add)
+            except TypeError:
+                log.error(f'route_info_update failed: to={to}, elem={elem}, rt_num={elem.rt_num}')
         # end for
 
     def invert(self, fab: 'Fabric') -> 'Route':
@@ -340,7 +376,7 @@ class Route():
         return iter(self._elems)
 
     def __hash__(self):
-        return hash(repr(self))
+        return hash(self._elems)
 
     def __eq__(self, other): # all elements in list must match
         if not isinstance(other, Route):

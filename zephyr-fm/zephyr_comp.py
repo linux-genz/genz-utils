@@ -512,9 +512,8 @@ class Component():
                     log.error(f'add_fab_comp(gcid={self.gcid},tmp_gcid={self.tmp_gcid},dr={self.dr}) failed with exception {e}')
                     self.usable = False
                     return self.usable
-                # mark routes from PFM as no longer DR
-                for rt in self.fab.get_routes(pfm, self):
-                    rt[-1].dr = False
+                # replace DR routes from PFM with non-DR versions
+                self.fab.replace_dr_routes(pfm, self)
             # end if pfm
         # end with
         cuuid = get_cuuid(self.path)
@@ -1225,23 +1224,37 @@ class Component():
         log.debug(f'{self.gcid}: ssdt_sz={self._ssdt_sz}')
         return self._ssdt_sz
 
-    def compute_mhc(self, cid, rt, hc, valid):
-        if self.ssdt is None:
-            return (hc, rt != 0, False)
-        # Revisit: what about changes to other fields, like VCA & EI?
-        curV = self.ssdt[cid][rt].V  # Revisit: not used
+    def compute_mhc_hc_row(self, row, info: 'RouteInfo',
+                           cid: int, rt: int, hc: int, valid: int):
+        elem = row[rt]
+        curV = elem.V
+        curHC = elem.HC if curV else MAX_HC
         if valid:
-            cur_min = min(self.ssdt[cid], key=lambda x: x.HC if x.V else MAX_HC)
-            cur_min = cur_min.HC if cur_min.V else MAX_HC
-            new_min = min(cur_min, hc)
+            newHC = min(hc, curHC)
+            newV = 1
+            cur_min = min(row, key=lambda x: x.HC if x.V else MAX_HC)
+            curMHC = cur_min.HC if cur_min.V else MAX_HC
+            newMHC = min(curMHC, newHC)
         else:
-            cur_min = self.ssdt[cid][0].MHC
-            new_min = min((self.ssdt[cid][i] for i in range(len(self.ssdt[cid]))
+            newHC = info.min_hc()  # None if no remaining info items
+            newV = 0 if newHC is None else 1
+            curMHC = row[0].MHC
+            new_min = min((row[i] for i in range(len(row))
                           if i != rt), key=lambda x: x.HC if x.V else MAX_HC)
-            new_min = new_min.HC if new_min.V else MAX_HC
-        wr0 = new_min != cur_min and rt != 0
-        wrN = new_min < cur_min
-        return (new_min, wr0, wrN)
+            newMHC = min(new_min.HC if new_min.V else MAX_HC,
+                         newHC if newHC is not None else MAX_HC)
+            newMHC = 0 if newMHC == MAX_HC else newMHC
+            newHC = 0 if newHC is None else newHC
+        wr0 = newMHC != curMHC and rt != 0
+        wrN = newV != curV or newHC != curHC or (newMHC != curMHC and rt == 0)
+        return (newMHC, newHC, newV, wr0, wrN)
+
+    def compute_mhc_hc(self, cid: int, rt: int, hc: int, valid: int):
+        if self.ssdt is None:
+            return (hc, hc, valid, rt != 0, False)
+        row = self.ssdt[cid]
+        info = self.route_info[cid][rt]
+        return self.compute_mhc_hc_row(row, info, cid, rt, hc, valid)
 
     def ssdt_read(self):
         if self.ssdt is not None or self.ssdt_dir is None:
@@ -1253,7 +1266,6 @@ class Component():
             self.ssdt = self.map.fileToStruct('ssdt', data, path=ssdt_file,
                                     core=self.core, parent=self.comp_dest,
                                     fd=f.fileno(), verbosity=self.verbosity)
-            self.ssdt_refcount = RefCount((self.ssdt.rows, self.ssdt.cols))
         return self.ssdt
 
     def ssdt_write(self, cid, ei, rt=0, valid=1, mhc=None, hc=None, vca=None,
@@ -1268,7 +1280,6 @@ class Component():
                 self.ssdt = self.map.fileToStruct('ssdt', data, path=ssdt_file,
                                     core=self.core, parent=self.comp_dest,
                                     fd=f.fileno(), verbosity=self.verbosity)
-                self.ssdt_refcount = RefCount((self.ssdt.rows, self.ssdt.cols))
             else:
                 self.ssdt.set_fd(f)
             sz = ctypes.sizeof(self.ssdt.element)
@@ -1533,7 +1544,9 @@ class Component():
                                  netlink=self.nl, verbosity=self.verbosity)
                 peer_iface = Interface(comp, iface.peer_iface_num, iface)
                 iface.set_peer_iface(peer_iface)
-                dr.to_iface = peer_iface
+                # now that we have peer_iface, setup new DR that includes it
+                dr = DirectedRelay(self, ingress_iface, iface, to_iface=peer_iface)
+                comp.set_dr(dr)
                 gcid = self.fab.assign_gcid(comp)
                 if gcid is None:
                     msg += 'no GCID available in pool - ignoring component'

@@ -564,23 +564,12 @@ class Interface():
         self.conditional_update_mod_timestamp(prev_state, cur_state)
         return (self.phy_status.up_or_uplp(), prev_state != cur_state)
 
-    def compute_mhc(self, cid, rt, hc, valid):
+    def compute_mhc_hc(self, cid: int, rt: int, hc: int, valid: int):
         if self.lprt is None:
-            return (hc, rt != 0, False)
-        # Revisit: what about changes to other fields, like VCA & EI?
-        curV = self.lprt[cid][rt].V  # Revisit: not used
-        if valid:
-            cur_min = min(self.lprt[cid], key=lambda x: x.HC if x.V else MAX_HC)
-            cur_min = cur_min.HC if cur_min.V else MAX_HC
-            new_min = min(cur_min, hc)
-        else:
-            cur_min = self.lprt[cid][0].MHC
-            new_min = min((self.lprt[cid][i] for i in range(len(self.lprt[cid]))
-                          if i != rt), key=lambda x: x.HC if x.V else MAX_HC)
-            new_min = new_min.HC if new_min.V else MAX_HC
-        wr0 = new_min != cur_min and rt != 0
-        wrN = new_min < cur_min
-        return (new_min, wr0, wrN)
+            return (hc, hc, valid, rt != 0, False)
+        row = self.lprt[cid]
+        info = self.route_info[cid][rt]
+        return self.comp.compute_mhc_hc_row(row, info, cid, rt, hc, valid)
 
     def lprt_read(self):
         if self.lprt_dir is None:
@@ -594,10 +583,10 @@ class Interface():
             data = bytearray(f.read())
             self.lprt = self.comp.map.fileToStruct('lprt', data,
                                 path=lprt_file, core=self.comp.core,
-                                fd=f.fileno(), verbosity=self.comp.verbosity)
-            self.route_info = [[RouteInfo() for j in range(self.lprt.cols)]
-                               for i in range(self.lprt.rows)]
-            self.lprt_refcount = RefCount((self.lprt.rows, self.lprt.cols))
+                                fd=f.fileno(), verbosity=verbosity)
+            if self.route_info is None:
+                self.route_info = [[RouteInfo() for j in range(self.lprt.cols)]
+                                   for i in range(self.lprt.rows)]
         # end with
 
     def lprt_write(self, cid, ei, rt=0, valid=1, mhc=None, hc=None, vca=None,
@@ -615,7 +604,6 @@ class Interface():
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
                 self.route_info = [[RouteInfo() for j in range(self.lprt.cols)]
                                    for i in range(self.lprt.rows)]
-                self.lprt_refcount = RefCount((self.lprt.rows, self.lprt.cols))
             else:
                 self.lprt.set_fd(f)
             sz = ctypes.sizeof(self.lprt.element)
