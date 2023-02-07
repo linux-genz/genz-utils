@@ -339,6 +339,8 @@ class Interface():
             data = bytearray(f.read())
             iface = self.comp.map.fileToStruct('interface', data,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
+            if iface.all_ones_type_vers_size():
+                raise ValueError(f'{self}: all-ones data')
             self.send_peer_attr1(iface)
             self.peer_cstate = self.get_peer_cstate(iface)
             self.peer_gcid = self.get_peer_gcid(iface)

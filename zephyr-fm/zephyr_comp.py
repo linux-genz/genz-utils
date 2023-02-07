@@ -130,6 +130,7 @@ class Component():
         self.rsp_vcat = None
         self.rsp_page_grid_ps = 0
         self.paths_setup = False
+        self.usable = False # will be set True if comp_init() succeeds
         fab.components[self.uuid] = self
         fab.add_node(self, instance_uuid=self.uuid, cclass=self.cclass,
                      mgr_uuid=self.mgr_uuid)
@@ -368,7 +369,7 @@ class Component():
         log.debug(f'comp_init for {self}')
         if args.keyboard > 1:
             set_trace()
-        self.usable = False  # Revisit: move to __init__()
+        self.usable = True  # assume comp will be usable, until something goes wrong
         if self.local_br:
             self.br_gcid = self.gcid
         self.setup_paths(prefix)
@@ -435,9 +436,18 @@ class Component():
                 core.MGRUUIDh = int.from_bytes(self.mgr_uuid.bytes[8:16],
                                            byteorder='little')
                 self.control_write(core, genz.CoreStructure.MGRUUIDl, sz=16)
+            try:
+                rows, cols = self.ssdt_size(prefix=prefix)
+            except ValueError:
+                log.warning(f'{self}: ssdt_size returned all-ones data')
+                self.usable = False
+                return False
+            # initialize SSDT route info (required before set_ssdt())
+            from zephyr_route import RouteInfo
+            self.route_info = [[RouteInfo() for j in range(cols)]
+                               for i in range(rows)]
             # setup SSDT and RIT entries for route back to FM
             if pfm and ingress_iface is not None:
-                self.ssdt_size(prefix=prefix)
                 self.ssdt_read() # required before set_ssdt()
                 # use route elem to correctly set SSDT HC & MHC
                 elem = route[0][0]
@@ -581,13 +591,16 @@ class Component():
             core.CompNonce = self.nonce
             self.control_write(core, genz.CoreStructure.CompNonce, sz=8)
             # check that at least 1 interface can be brought Up
+            iupCnt = 0
             for ifnum in range(0, core.MaxInterface):
                 try:
                     iup = self.interfaces[ifnum].iface_init(prefix=prefix)
                     if iup:
-                        self.usable = True
+                        iupCnt += 1
                 except IndexError:
                     del self.interfaces[-1] # Revisit: why?
+            if iupCnt == 0:
+                self.usable = False
             # set LLMUTO  # Revisit: how to compute reasonable values?
             # Revisit: this should be <=20us, but orthus is timing control ops
             # with the wrong timer
@@ -615,12 +628,6 @@ class Component():
             core.MaxRequests = core.MaxREQSuppReqs
             self.control_write(core, genz.CoreStructure.MaxRequests, sz=8)
             # Revisit: set MaxPwrCtl (to NPWR?)
-            # Revisit: try/except ValueError
-            rows, cols = self.ssdt_size(prefix=prefix)
-            # initialize SSDT route info
-            from zephyr_route import RouteInfo
-            self.route_info = [[RouteInfo() for j in range(cols)]
-                               for i in range(rows)]
             # invalidate SSDT (except PFM CID written earlier)
             # Revisit: should we be doing this when reclaiming a C-Up comp?
             for cid in range(0, rows):
