@@ -216,7 +216,7 @@ class Fabric(nx.MultiGraph):
                 try:
                     br_path = mapping[br]
                 except KeyError:
-                    log.warning('local bridge {} not found'.format(br))
+                    log.warning(f'local bridge {br} not found')
                     continue
                 yield br_path
             # end for
@@ -248,7 +248,7 @@ class Fabric(nx.MultiGraph):
                                  verbosity=self.verbosity)
                 gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size(haveCore=False)[0])
                 self.set_pfm(br)
-                log.info('{}:{} bridge{} {}'.format(self.fabnum, gcid, brnum, cuuid_serial))
+                log.info(f'{self.fabnum}:{gcid} bridge{brnum} {cuuid_serial}')
                 usable = br.comp_init(self.pfm)
                 if usable:
                     self.bridges.append(br)
@@ -288,7 +288,7 @@ class Fabric(nx.MultiGraph):
                 gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size(haveCore=False)[0],
                                         proposed_gcid=cur_gcid)
                 self.set_sfm(br)
-                log.info('{}:{} bridge{} {}'.format(self.fabnum, gcid, brnum, cuuid_serial))
+                log.info(f'{self.fabnum}:{gcid} bridge{brnum} {cuuid_serial}')
                 usable = br.comp_init(None) # None: not PFM
                 if usable:
                     self.bridges.append(br)
@@ -427,7 +427,7 @@ class Fabric(nx.MultiGraph):
 
     def write_routes(self, rts: Routes, write_ssdt=True, enable=True, refcountOnly=False):
         for rt in rts:
-            log.info('writing PFM route from {} to {} via {}'.format(rt.fr, rt.to, rt))
+            log.info(f'writing PFM route from {rt.fr} to {rt.to} via {rt}')
             self.write_route(rt, write_ssdt, enable, refcountOnly=refcountOnly)
         # end for
 
@@ -440,7 +440,7 @@ class Fabric(nx.MultiGraph):
         for route in self.find_routes(fr, to, routes=routes, max_routes=max_routes,
                                       cur_routes=cur_rts):
             route.refcount.inc()
-            log.debug(f'adding route from {fr} to {to} via {route}, refcount={route.refcount.value()}')
+            log.debug(f'adding route(hc={route.hc}) from {fr} to {to} via {route}, refcount={route.refcount.value()}')
             self.write_route(route, write_ssdt, refcountOnly=(not send))
             self.routes.add(fr, to, route)
             new_rts.append(route)
@@ -488,7 +488,7 @@ class Fabric(nx.MultiGraph):
                 if not last:
                     log.debug(f'decremented route {route} refcount, refcount={route.refcount.value()}')
                     continue
-                log.debug(f'removing route from {fr} to {to} via {route}')
+                log.debug(f'removing route(hc={route.hc}) from {fr} to {to} via {route}')
                 self.write_route(route, enable=False, refcountOnly=(not send))
                 self.routes.remove(fr, to, route)
         # end for
@@ -558,8 +558,9 @@ class Fabric(nx.MultiGraph):
     def iface_error(self, key, br, sender, iface, rec):
         genz = zephyr_conf.genz
         es = genz.IErrorES(rec['ES'])
+        bitK = es.BitK
         errName = es.errName
-        log.info(f'{br}: {key}:{errName}({es.errSeverity}) UEP from {sender} on {iface}')
+        log.info(f'{br}: {key}:{errName}[{bitK}]({es.errSeverity}) UEP from {sender} on {iface}')
         # with AutoStop enabled, IfaceFCFwdProgressViolation requires peer_c_reset
         if errName == 'IfaceFCFwdProgressViolation':
             log.debug(f'attempting peer_c_reset on {iface}')
@@ -570,7 +571,7 @@ class Fabric(nx.MultiGraph):
             phyOk, phyChanged = iface.phy_init() # check PHY status (no actual init)
             istate, iChanged = iface.iface_state()
         except ValueError:  # got all-ones
-            log.warning(f'{iface.comp.gcid}: iface_error interface{iface.num} returned all-ones data')
+            log.warning(f'{iface}: iface_error interface{iface.num} returned all-ones data')
             iface.usable = False
             return { key: 'iface all-ones' }
         # Revisit: Containment and RootCause
@@ -590,7 +591,7 @@ class Fabric(nx.MultiGraph):
             phyOk, phyChanged = iface.phy_init() # check PHY status (no actual init)
             istate, iChanged = iface.iface_state()
         except ValueError:  # got all-ones
-            log.warning(f'{iface.comp.gcid}: iface_reset interface{iface.num} returned all-ones data')
+            log.warning(f'{iface}: iface_reset interface{iface.num} returned all-ones data')
             iface.usable = False
             return { key: 'iface all-ones' }
         if phyChanged or iChanged:
@@ -622,7 +623,7 @@ class Fabric(nx.MultiGraph):
         try:
             ret = getattr(self, self.events[key])(key, *args, **kwargs)
         except KeyError:
-            log.warning('no handler for UEP {}'.format(key))
+            log.warning(f'no handler for UEP {key}')
             ret = { key: 'no handler' }
         return ret
 
@@ -725,12 +726,12 @@ class Fabric(nx.MultiGraph):
             fr, to = key
             for rt in rts.get_routes(fr, to):
                 if rt not in self.get_routes(fr, to):
-                    log.info('cannot remove non-existent route {}'.format(rt))
+                    log.info(f'cannot remove non-existent route {rt}')
                 elif rt.route_entries_avail():
                     rt.route_info_update(False)
                     self.teardown_routing(fr, to, [rt], send=send)
                 else:
-                    log.warning('missing route entries removing {}'.format(rt))
+                    log.warning(f'missing route entries removing {rt}')
             # end for rt
         # end for key
         # Revisit: return correct success/failed dict
@@ -865,7 +866,7 @@ class Fabric(nx.MultiGraph):
             pfm.is_subscribed = True
             log.info(f'--- Subscribed to {url}, callbacks at {callback_endpoints}')
         else:
-            log.error('---- Failed to subscribe to FM event! {} {} ---- '.format(url, callback_endpoints))
+            log.error(f'---- Failed to subscribe to FM event! {url} {callback_endpoints} ---- ')
             if resp is not None:
                 # Revisit: log the actual status message from the response
                 log.error(f'subscription error reason [{resp.status_code}]: {resp.reason}')

@@ -77,10 +77,10 @@ class Interface():
             data = bytearray(f.read())
             iface = self.comp.map.fileToStruct('interface', data,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
-            log.debug('{}: interface{}={}'.format(self.comp.gcid, self.num, iface))
+            log.debug(f'{self}: interface{self.num}={iface}')
             self.hvs = iface.HVS  # for num_vcs()
             if iface.all_ones_type_vers_size():
-                raise ValueError
+                raise ValueError(f'{self}: all-ones data')
         # end with
         return iface
 
@@ -100,7 +100,7 @@ class Interface():
             data = bytearray(f.read())
             iface = self.comp.map.fileToStruct('interface', data,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
-            log.debug('{}: iface_init interface{}={}'.format(self.comp.gcid, self.num, iface))
+            log.debug(f'{self}: iface_init interface{self.num}={iface}')
             if iface.all_ones_type_vers_size():
                 log.warning(f'{self.comp.gcid}: iface_init interface{self.num} returned all-ones data')
                 self.usable = False
@@ -351,7 +351,7 @@ class Interface():
         icontrol = genz.IControl(iface.IControl, iface)
         icontrol.field.PeerAttr1Req = 1
         iface.IControl = icontrol.val
-        log.debug('{}: sending Peer-Attr1'.format(self))
+        log.debug(f'{self}: sending Peer-Attr1')
         self.comp.control_write(iface, genz.InterfaceStructure.IControl,
                                 sz=4, off=4)
         status = self.wait_link_ctl(iface, timeout)
@@ -416,10 +416,7 @@ class Interface():
         while not done:
             self.comp.control_read(iface, genz.InterfaceStructure.IStatus, sz=4)
             istatus.val = iface.IStatus
-            log.debug('{}: wait_link_ctl[{}]: completed={}, status={}'.format(
-                self.comp.gcid, self.num,
-                istatus.field.LinkCTLCompleted,
-                istatus.field.LinkCTLComplStatus))
+            log.debug(f'{self}: wait_link_ctl: completed={istatus.field.LinkCTLCompleted}, status={istatus.field.LinkCTLComplStatus}')
             now = time.time_ns()
             done = (((now - start) > timeout) or
                     (istatus.field.LinkCTLCompleted == 1))
@@ -462,8 +459,8 @@ class Interface():
                                sz=4, off=4)
         peer_state = genz.PeerState(iface.PeerState, iface)
         peer_cstate = CState(peer_state.field.PeerCState)
-        log.debug('{}: get_peer_c_state[{}]: PeerCState={!s}'.format(
-            self.comp.gcid, self.num, peer_cstate))
+        log.debug('{}: get_peer_c_state: PeerCState={!s}'.format(
+            self, peer_cstate))
         return peer_cstate
 
     def get_peer_gcid(self, iface):
@@ -478,8 +475,7 @@ class Interface():
             peer_gcid = GCID(sid=peer_sid, cid=peer_cid)
         except TypeError:
             peer_gcid = None
-        log.debug('{}: get_peer_gcid[{}]: PeerGCID={}'.format(
-            self.comp.gcid, self.num, peer_gcid))
+        log.debug(f'{self}: get_peer_gcid: PeerGCID={peer_gcid}')
         return peer_gcid
 
     def get_peer_iface_num(self, iface):
@@ -498,9 +494,7 @@ class Interface():
         # Revisit: should this re-read value?
         # Unlike cstate & gcid, unless there's re-cabling, this can't change
         peer_state = genz.PeerState(iface.PeerState, iface)
-        log.debug('{}: get_peer_cclass[{}]: PeerBaseCClassValid={}, PeerCClass={}'.format(
-            self.comp.gcid, self.num,
-            peer_state.field.PeerBaseCClassValid, iface.PeerBaseCClass))
+        log.debug(f'{self}: get_peer_cclass: PeerBaseCClassValid={peer_state.field.PeerBaseCClassValid}, PeerCClass={iface.PeerBaseCClass}')
         return (iface.PeerBaseCClass if peer_state.field.PeerBaseCClassValid == 1
                 else None)
 
@@ -542,7 +536,7 @@ class Interface():
                                                  verbosity=self.comp.verbosity)
                 log.debug('{}: phy{}={}'.format(self.comp.gcid, self.num, phy))
                 if phy.all_ones_type_vers_size():
-                    raise ValueError
+                    raise ValueError(f'{self}: PHY all-ones data')
                 return self.phy_status_ok(phy)
         except IndexError:
             log.debug('{}: phy{} missing - assume PHY-Up'.format(

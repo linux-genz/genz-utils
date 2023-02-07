@@ -182,7 +182,7 @@ class Component():
         ones = (1 << (sz * 8)) - 1
         val = int.from_bytes(data[off:off+sz], 'little')
         if val == ones:
-            raise ValueError # Revisit: raise better exception?
+            raise ValueError(f'{self}: all-ones data')
 
     # Revisit: the sz & off params are workarounds for ctypes bugs
     def control_read(self, struct, field, sz=None, off=0, check=False):
@@ -365,7 +365,7 @@ class Component():
     def comp_init(self, pfm, prefix='control', ingress_iface=None, route=None):
         args = zephyr_conf.args
         genz = zephyr_conf.genz
-        log.debug('comp_init for {}'.format(self))
+        log.debug(f'comp_init for {self}')
         if args.keyboard > 1:
             set_trace()
         self.usable = False  # Revisit: move to __init__()
@@ -654,7 +654,7 @@ class Component():
                     log.warning(f'{self}: prevented CControl write of all-ones')
                     self.usable = False
                     return False
-                log.info('{} transitioning to C-Up'.format(self.gcid))
+                log.info(f'{self.gcid} transitioning to C-Up')
                 # update our peer's peer-info (about us, now that we're C-Up)
                 if (ingress_iface is not None and
                     ingress_iface.peer_iface is not None):
@@ -1375,7 +1375,7 @@ class Component():
         if prev_comp:
             prev_comp.cstate = peer_cstate
         msg = '{}: exploring interface{}, peer cstate={!s}, '.format(
-            self.gcid, iface.num, peer_cstate)
+            iface, iface.num, peer_cstate)
         if iface.peer_inband_disabled:
             msg += 'peer inband management disabled - ignoring peer'
             log.info(msg)
@@ -1582,14 +1582,13 @@ class Component():
                               else self.interfaces)
         for iface in explore_ifaces:
             if iface == ingress_iface:
-                log.debug('{}: skipping ingress interface{}'.format(
-                    self.gcid, iface.num))
+                log.debug(f'{iface}: skipping ingress interface{iface.num}')
             elif iface.usable:
                 try:
                     self.config_interface(iface, pfm, ingress_iface, prev_comp,
                                           send=send, reclaim=reclaim)
                 except Exception as e:  # Revisit: not all exceptions
-                    log.warning(f'{self.gcid}: interface{iface.num} config failed with exception "{e}" - marking unusable')
+                    log.warning(f'{iface}: interface{iface.num} config failed with exception "{e}" - marking unusable')
                     iface.usable = False
             else:
                 log.info('{}: interface{} is not usable'.format(
