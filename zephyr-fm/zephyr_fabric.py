@@ -580,6 +580,10 @@ class Fabric(nx.MultiGraph):
             iface.peer_c_reset()
             iface.update_peer_info()
             iface.peer_comp.was_reset(iface)
+        elif errName == 'SwitchPktRelayFailure':
+            # log LPRT for debug
+            iface.lprt_read(force=True, verbosity=4)
+            log.debug(iface.lprt)
         try:
             phyOk, phyChanged = iface.phy_init() # check PHY status (no actual init)
             istate, iChanged = iface.iface_state()

@@ -571,11 +571,13 @@ class Interface():
         info = self.route_info[cid][rt]
         return self.comp.compute_mhc_hc_row(row, info, cid, rt, hc, valid)
 
-    def lprt_read(self):
+    def lprt_read(self, force: bool = False, verbosity: int = None):
         if self.lprt_dir is None:
             return
-        if self.lprt is not None:
+        if self.lprt is not None and not force:
             return
+        if verbosity is None:
+            verbosity = self.comp.verbosity
         from zephyr_route import RouteInfo
         # Revisit: avoid open/close (via "with") on every read?
         lprt_file = self.lprt_dir / 'lprt'
