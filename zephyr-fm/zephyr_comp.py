@@ -124,6 +124,7 @@ class Component():
         self.comp_dest = None
         self.ssdt = None
         self.ssdt_dir = None # needed by rt.invert() early on
+        self.ces_dir = None  # needed if comp_init() fails and usable is False
         self.rit = None
         self.route_info = None
         self.req_vcat = None
@@ -223,9 +224,9 @@ class Component():
         return ret
 
     def remove_fab_comp(self, force=False):
-        log.debug(f'remove_fab_comp for {self}, paths_setup={self.paths_setup}')
         if not (force or self.paths_setup):
             return None
+        log.debug(f'remove_fab_comp for {self}, paths_setup={self.paths_setup}, force={force}')
         cmd_name = self.nl.cfg.get('REMOVE_FAB_COMP')
         data = {'gcid':     self.gcid.val,
                 'br_gcid':  self.br_gcid.val,
@@ -254,9 +255,9 @@ class Component():
         return ret
 
     def remove_fab_dr_comp(self):
-        log.debug(f'remove_fab_dr_comp for {self}, paths_setup={self.paths_setup}')
         if not self.paths_setup:
             return None
+        log.debug(f'remove_fab_dr_comp for {self}, paths_setup={self.paths_setup}')
         cmd_name = self.nl.cfg.get('REMOVE_FAB_DR_COMP')
         data = {'gcid':     self.gcid.val,
                 'br_gcid':  self.br_gcid.val,
@@ -600,6 +601,7 @@ class Component():
                     del self.interfaces[-1] # Revisit: why?
             if iupCnt == 0:
                 self.usable = False
+                return False
             # set LLMUTO  # Revisit: how to compute reasonable values?
             # Revisit: this should be <=20us, but orthus is timing control ops
             # with the wrong timer
@@ -943,6 +945,8 @@ class Component():
                     genz.ComponentErrorSignalStructure.PMUEPMask, sz=8)
 
     def pfm_uep_update(self, pfm, valid=True):
+        if self.ces_dir is None:
+            return
         ces_file = self.ces_dir / 'component_error_and_signal_event'
         with ces_file.open(mode='rb+') as f:
             data = bytearray(f.read())
@@ -982,6 +986,8 @@ class Component():
                     genz.ComponentErrorSignalStructure.PMUEPMask, sz=8)
 
     def sfm_uep_update(self, sfm, valid=True):
+        if self.ces_dir is None:
+            return
         ces_file = self.ces_dir / 'component_error_and_signal_event'
         with ces_file.open(mode='rb+') as f:
             data = bytearray(f.read())
@@ -1604,8 +1610,8 @@ class Component():
         # end if CUp
         if peer_cstate is CState.CCFG: # Note: not 'elif'
             from zephyr_route import DirectedRelay
-            dr = DirectedRelay(self, ingress_iface, iface)
             if prev_comp is None:
+                dr = DirectedRelay(self, ingress_iface, iface) # temporary dr
                 comp = Component(iface.peer_cclass, self.fab, self.map, dr.path,
                                  self.mgr_uuid, dr=dr, br_gcid=self.br_gcid,
                                  netlink=self.nl, verbosity=self.verbosity)
@@ -1624,8 +1630,9 @@ class Component():
                 self.fab.add_link(iface, peer_iface)
             else: # have a prev_comp
                 comp = prev_comp
-                comp.set_dr(dr)
                 peer_iface = iface.peer_iface
+                dr = DirectedRelay(self, ingress_iface, iface, to_iface=peer_iface)
+                comp.set_dr(dr)
                 gcid = comp.gcid
                 op = 'change'
                 msg += 'reusing previously-assigned gcid={}'.format(gcid)
@@ -1695,10 +1702,9 @@ class Component():
             if forceTimestamp or (self.cstate != prev_cstate):
                 self.fab.update_mod_timestamp(comp=self)
 
-    def unreachable_comp(self, to, iface, route):
+    def unreachable_comp(self, to, iface):
         log.warning(f'{self}: unreachable component {to} due to interface {iface} failure')
-        # tear down route from "self" to "to"'
-        self.fab.teardown_routing(self, to, [route])
+
 
     def is_unreachable(self, fr: 'Component'):
         return not self.usable or (self is not fr and
@@ -1738,7 +1744,7 @@ class Component():
         if peer_iface is None:
             peer_iface = self.nearest_iface_to(fab.pfm).peer_iface
         # mark all interfaces as unusable (and teardown all routes using them)
-        log.info(f'{self} was reset - teardown all routes')
+        log.info(f'{self} was reset - teardown all routes using it')
         for iface in self.interfaces:
             fab.iface_unusable(iface)
         # revert comp back to DR
@@ -1905,8 +1911,8 @@ class MultiClass(Component):
 class Bridge(Component):
     cclasses = (0x14, 0x15)
 
-    def unreachable_comp(self, to, iface, route):
-        super().unreachable_comp(to, iface, route)
+    def unreachable_comp(self, to, iface):
+        super().unreachable_comp(to, iface)
         # Revisit: finish this - notify llamas instance about
         # unreachable resources
 
@@ -1942,8 +1948,8 @@ class LocalBridge(Bridge):
             # end for br_path
         # end for fab_path
 
-    def unreachable_comp(self, to, iface, route):
-        super().unreachable_comp(to, iface, route)
+    def unreachable_comp(self, to, iface):
+        super().unreachable_comp(to, iface)
         # remove "to" from /sys fabric
         if to.dr is not None:
             to.remove_fab_dr_comp()

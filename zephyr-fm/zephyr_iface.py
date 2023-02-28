@@ -102,13 +102,12 @@ class Interface():
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
             log.debug(f'{self}: iface_init interface{self.num}={iface}')
             if iface.all_ones_type_vers_size():
-                log.warning(f'{self.comp.gcid}: iface_init interface{self.num} returned all-ones data')
+                log.warning(f'{self}: iface_init interface{self.num} returned all-ones data')
                 self.usable = False
                 return False
             self.hvs = iface.HVS
             if not self.phy_init()[0]:
-                log.info('{}: interface{} is not PHY-Up'.format(
-                    self.comp.gcid, self.num))
+                log.info(f'{self}: interface{self.num} is not PHY-Up')
                 self.usable = False
                 # Revisit: should config iface even if not PHY-Up
                 return False
@@ -123,7 +122,7 @@ class Interface():
             icap1ctl.field.LPRTEnb = is_switch
             icap1ctl.field.IErrFaultInjEnb = 1 # Revisit: Always?
             iface.ICAP1Control = icap1ctl.val
-            log.debug('{}: writing ICAP1Control'.format(self))
+            log.debug(f'{self}: writing ICAP1Control')
             self.comp.control_write(iface,
                             genz.InterfaceStructure.ICAP1Control, sz=4, off=4)
             # set LinkCTLControl (depending on local_br, is_switch)
@@ -144,20 +143,20 @@ class Interface():
             lctl.field.RecvPeerEnterLinkLPEnb = recv
             lctl.field.RecvLinkResetEnb = recv
             iface.LinkCTLControl = lctl.val
-            log.debug('{}: writing LinkCTLControl'.format(self))
+            log.debug(f'{self}: writing LinkCTLControl')
             self.comp.control_write(iface,
                             genz.InterfaceStructure.LinkCTLControl, sz=4, off=4)
             # send Peer-Attribute 1 Link CTL - HW did this at link-up time,
             # but we don't know when that was, and things may have changed
             status = self.send_peer_attr1(iface, timeout=100000)
             if status == 0:
-                log.warning('{}: send_peer_attr1 timeout on interface{}'.format(
-                    self.comp.gcid, self.num))
+                log.warning(f'{self}: send_peer_attr1 timeout on interface{self.num}')
+                self.usable = False
+                return False
             # send Path Time Link CTL
             status = self.send_path_time(iface, timeout=100000)
             if status == 0:
-                log.warning('{}: send_path_time timeout on interface{}'.format(
-                    self.comp.gcid, self.num))
+                log.warning(f'{self}: send_path_time timeout on interface{self.num}')
             # save PeerInterfaceID
             self.peer_iface_num = self.get_peer_iface_num(iface)
             ictl = genz.IControl(iface.IControl, iface)
@@ -455,12 +454,11 @@ class Interface():
         done = False
         while not done:
             if do_read:
-                self.comp.control_read(iface,
-                                       genz.InterfaceStructure.IStatus, sz=4)
+                self.comp.control_read(iface, genz.InterfaceStructure.IStatus,
+                                       sz=4, check=True)
             istatus.val = iface.IStatus
             istate = IState(istatus.field.IState)
-            log.debug('{}: check_i_state[{}]: state={}'.format(
-                self.comp.gcid, self.num, istate))
+            log.debug(f'{self}: check_i_state: state={istate}')
             now = time.time_ns()
             done = ((not do_read) or ((now - start) > timeout) or
                     (istate in expected))
@@ -507,9 +505,7 @@ class Interface():
         # Revisit: should this re-read value?
         # Unlike cstate & gcid, unless there's re-cabling, this can't change
         peer_state = genz.PeerState(iface.PeerState, iface)
-        log.debug('{}: get_peer_iface_num[{}]: PeerIfaceIDValid={}, PeerInterfaceID={}'.format(
-            self.comp.gcid, self.num,
-            peer_state.field.PeerIfaceIDValid, iface.PeerInterfaceID))
+        log.debug(f'{self}: get_peer_iface_num: PeerIfaceIDValid={peer_state.field.PeerIfaceIDValid}, PeerInterfaceID={iface.PeerInterfaceID}')
         return (iface.PeerInterfaceID if peer_state.field.PeerIfaceIDValid == 1
                 else None)
 

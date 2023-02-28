@@ -41,6 +41,7 @@ from base64 import b64encode, b64decode
 from heapq import nlargest
 from zeroconf import Zeroconf, ServiceInfo, ServiceBrowser
 from threading import Thread
+from collections import defaultdict
 import zephyr_conf
 from zephyr_conf import log, INVALID_GCID
 from zephyr_iface import Interface
@@ -74,6 +75,17 @@ def register(dispatcher, *names):
             dispatcher[name] = m_name
         return f
     return dec
+
+# Categorize a sequence
+# from https://stackoverflow.com/questions/949098/how-can-i-partition-split-up-divide-a-list-based-on-a-condition
+def categorize(func, seq):
+    """Return mapping from categories to lists
+    of categorized items.
+    """
+    d = defaultdict(list)
+    for item in seq:
+        d[func(item)].append(item)
+    return d
 
 class Fabric(nx.MultiGraph):
     events = {} # UEP events dispatch dict
@@ -510,6 +522,9 @@ class Fabric(nx.MultiGraph):
         # Revisit: this is O(n**2) during crawl-out, worse later
         # Revisit: can we make use of iface1/2 to do better?
         for fr, to in self.routes.fr_to.keys():
+            if not fr.usable or not to.usable:
+                log.debug(f'skipping recompute routes for unusable {fr}, {to}')
+                continue
             log.debug(f'recompute routes: {fr}, {to}')
             self.setup_routing(fr, to)
 
@@ -560,15 +575,19 @@ class Fabric(nx.MultiGraph):
         iface.usable = False
         # lookup impacted routes
         impacted = self.routes.impacted(iface)
-        for rt in impacted:
-            log.info(f'route {rt} impacted by unusable {iface}')
+        # split the impacted list by (rt.fr, rt.to)
+        fr_to = categorize(lambda x: (x.fr, x.to), impacted)
+        # Revisit: do 1 send_mgrs for impacted, not 1 per (rt.fr, rt.to)
+        log.info(f'{len(impacted)} routes impacted by unusable {iface}: {impacted}')
+        for (fr, to), rts in fr_to.items():
+            self.teardown_routing(fr, to, rts)
+        for fr, to in fr_to.keys():
             # route around failed link (if possible)
             try:
-                self.teardown_routing(rt.fr, rt.to, [rt])
-                self.setup_routing(rt.fr, rt.to)
+                self.setup_routing(fr, to)
             except nx.exception.NetworkXNoPath:
                 # no valid route anymore, remove unreachable comp
-                rt.fr.unreachable_comp(rt.to, iface, rt)
+                fr.unreachable_comp(to, iface)
         # end for
 
     def uep_reason_name(self, esVal):
