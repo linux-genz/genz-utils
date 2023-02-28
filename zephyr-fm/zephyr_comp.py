@@ -22,7 +22,7 @@
 # SOFTWARE.
 
 import ctypes
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, CReset, HostMgrUUID, genzUUID, RefCount, MAX_HC
+from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, CReset, HostMgrUUID, genzUUID, RefCount, MAX_HC, AllOnesData
 import os
 import re
 import time
@@ -183,7 +183,7 @@ class Component():
         ones = (1 << (sz * 8)) - 1
         val = int.from_bytes(data[off:off+sz], 'little')
         if val == ones:
-            raise ValueError(f'{self}: all-ones data')
+            raise AllOnesData(f'{self}: all-ones data')
 
     # Revisit: the sz & off params are workarounds for ctypes bugs
     def control_read(self, struct, field, sz=None, off=0, check=False):
@@ -415,7 +415,7 @@ class Component():
                 # end if ifnum
                 try:
                     self.interfaces[ifnum].iface_read(prefix=prefix)
-                except ValueError:
+                except AllOnesData:
                     log.warning(f'{self.interfaces[ifnum]}: iface_read returned all-ones data')
                 except IndexError:
                     pass
@@ -438,7 +438,7 @@ class Component():
                 self.control_write(core, genz.CoreStructure.MGRUUIDl, sz=16)
             try:
                 rows, cols = self.ssdt_size(prefix=prefix)
-            except ValueError:
+            except AllOnesData:
                 log.warning(f'{self}: ssdt_size returned all-ones data')
                 self.usable = False
                 return False
@@ -491,7 +491,7 @@ class Component():
                 try:
                     self.control_read(core, genz.CoreStructure.CV,
                                       sz=8, check=True)
-                except ValueError:
+                except AllOnesData:
                     log.warning(f'{self}: CV/CID0 returned all-ones data')
                     self.usable = False
                     return False
@@ -545,7 +545,7 @@ class Component():
             try:
                 self.control_read(core, genz.CoreStructure.MGRUUIDl,
                                   sz=16, check=True)
-            except ValueError:
+            except AllOnesData:
                 log.warning(f'{self}: all-ones MGRUUID - component not owned')
                 self.usable = False
                 return False
@@ -656,7 +656,7 @@ class Component():
                 core.CControl = cctl.val
                 try:
                     self.control_write(core, genz.CoreStructure.CControl, sz=8)
-                except ValueError:
+                except AllOnesData:
                     log.warning(f'{self}: prevented CControl write of all-ones')
                     self.usable = False
                     return False
@@ -1607,7 +1607,7 @@ class Component():
                 try:
                     self.config_interface(iface, pfm, ingress_iface, prev_comp,
                                           send=send, reclaim=reclaim)
-                except Exception as e:  # Revisit: not all exceptions
+                except AllOnesData as e:
                     log.warning(f'{iface}: interface{iface.num} config failed with exception "{e}" - marking unusable')
                     iface.usable = False
             else:
@@ -1650,7 +1650,7 @@ class Component():
                 core.CControl = cctl.val
                 try:
                     self.control_write(core, genz.CoreStructure.CControl, sz=8)
-                except ValueError:
+                except AllOnesData:
                     log.warning(f'{self}: prevented CControl write of all-ones')
                     return None
             # end with

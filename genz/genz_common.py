@@ -134,6 +134,11 @@ class HostMgrUUID(IntEnum):
     Vdef = 2
     Rv   = 3
 
+class AllOnesData(ValueError):
+    '''Custom ValueError for HW returning all-ones data
+    '''
+    pass
+
 class GCID():
     def __init__(self, val=None, sid=0, cid=None, str=None):
         if val is not None:

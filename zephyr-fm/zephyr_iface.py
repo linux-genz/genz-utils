@@ -24,7 +24,7 @@
 import ctypes
 import time
 from typing import List, Tuple, Iterator
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount, MAX_HC
+from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount, MAX_HC, AllOnesData
 from pdb import set_trace
 import zephyr_conf
 from zephyr_conf import log
@@ -80,7 +80,7 @@ class Interface():
             log.debug(f'{self}: interface{self.num}={iface}')
             self.hvs = iface.HVS  # for num_vcs()
             if iface.all_ones_type_vers_size():
-                raise ValueError(f'{self}: all-ones data')
+                raise AllOnesData(f'{self}: all-ones data')
         # end with
         return iface
 
@@ -176,7 +176,7 @@ class Interface():
             try:
                 self.comp.control_write(iface, genz.InterfaceStructure.IControl,
                                         sz=4, off=4, check=True)
-            except ValueError:
+            except AllOnesData:
                 log.warning(f'{self}: prevented IControl write of all-ones')
                 self.usable = False
                 return False
@@ -194,7 +194,12 @@ class Interface():
             self.comp.control_write(iface,
                             genz.InterfaceStructure.IStatus, sz=4, off=0)
             # verify I-Up
-            state = self.check_i_state(iface)[0]
+            try:
+                state = self.check_i_state(iface)[0]
+            except AllOnesData:
+                log.warning(f'{self}: check_i_state all-ones')
+                self.usable = False
+                return False
             self.usable = (state is IState.IUp)
             # Revisit: orthus goes I-Down if we do this earlier
             # set LinkRFCDisable (depending on local_br)
@@ -245,7 +250,7 @@ class Interface():
             #                        sz=6, check=True)
             self.comp.control_write(iface, genz.InterfaceStructure.IErrorSigTgt,
                                     sz=8, check=True)
-        except ValueError:
+        except AllOnesData:
             log.warning(f'{self}: prevented IErrorSigTgt write of all-ones')
             self.usable = False
             return
@@ -269,7 +274,7 @@ class Interface():
         try:
             self.comp.control_write(iface, genz.InterfaceStructure.IErrorStatus,
                                     sz=8, check=True)
-        except ValueError:
+        except AllOnesData:
             log.warning(f'{self}: prevented IErrorStatus write of all-ones')
             self.usable = False
             return
@@ -340,7 +345,7 @@ class Interface():
             iface = self.comp.map.fileToStruct('interface', data,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
             if iface.all_ones_type_vers_size():
-                raise ValueError(f'{self}: all-ones data')
+                raise AllOnesData(f'{self}: all-ones data')
             self.send_peer_attr1(iface)
             self.peer_cstate = self.get_peer_cstate(iface)
             self.peer_gcid = self.get_peer_gcid(iface)
@@ -538,7 +543,7 @@ class Interface():
                                                  verbosity=self.comp.verbosity)
                 log.debug('{}: phy{}={}'.format(self.comp.gcid, self.num, phy))
                 if phy.all_ones_type_vers_size():
-                    raise ValueError(f'{self}: PHY all-ones data')
+                    raise AllOnesData(f'{self}: PHY all-ones data')
                 return self.phy_status_ok(phy)
         except IndexError:
             log.debug('{}: phy{} missing - assume PHY-Up'.format(

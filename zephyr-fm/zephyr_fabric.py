@@ -24,7 +24,7 @@
 import ctypes
 import json
 from typing import List, Tuple, Iterator
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount
+from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount, AllOnesData
 import itertools
 import random
 import posixpath
@@ -577,9 +577,14 @@ class Fabric(nx.MultiGraph):
         # with AutoStop enabled, IfaceFCFwdProgressViolation requires peer_c_reset
         if errName == 'IfaceFCFwdProgressViolation':
             log.debug(f'attempting peer_c_reset on {iface}')
-            iface.peer_c_reset()
-            iface.update_peer_info()
-            iface.peer_comp.was_reset(iface)
+            try:
+                iface.peer_c_reset()
+                iface.update_peer_info()
+                iface.peer_comp.was_reset(iface)
+            except AllOnesData:
+                log.warning(f'{iface}: IfaceFCFwdProgressViolation returned all-ones data')
+                iface.usable = False
+                return { key: 'iface_error all-ones' }
         elif errName == 'SwitchPktRelayFailure':
             # log LPRT for debug
             iface.lprt_read(force=True, verbosity=4)
@@ -587,7 +592,7 @@ class Fabric(nx.MultiGraph):
         try:
             phyOk, phyChanged = iface.phy_init() # check PHY status (no actual init)
             istate, iChanged = iface.iface_state()
-        except ValueError:  # got all-ones
+        except AllOnesData:  # got all-ones
             log.warning(f'{iface}: iface_error interface{iface.num} returned all-ones data')
             iface.usable = False
             return { key: 'iface all-ones' }
@@ -607,7 +612,7 @@ class Fabric(nx.MultiGraph):
         try:
             phyOk, phyChanged = iface.phy_init() # check PHY status (no actual init)
             istate, iChanged = iface.iface_state()
-        except ValueError:  # got all-ones
+        except AllOnesData:  # got all-ones
             log.warning(f'{iface}: iface_reset interface{iface.num} returned all-ones data')
             iface.usable = False
             return { key: 'iface all-ones' }
