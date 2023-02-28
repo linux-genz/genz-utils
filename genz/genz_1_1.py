@@ -1375,7 +1375,8 @@ class PHYType(SpecialField, Union):
 
     _anonymous_ = ('field',)
     _fields_    = [('field', PHYTypeFields), ('val', c_u8)]
-    _phy_type = ['25GFabric', '25GLocal', 'PCIe']
+    _phy_type = ['25GFabric', '25GLocal', 'PCIe', '50GFabric', '50GLocal',
+                 'NullPHY']
     _special = {'PHYType': _phy_type}
 
     def __init__(self, value, parent, verbosity=0):
