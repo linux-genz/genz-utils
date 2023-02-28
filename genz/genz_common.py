@@ -121,6 +121,13 @@ class ErrSeverity(Enum):
     Caution = auto(),
     Critical = auto()
 
+class ReasonClass(Enum):
+    NE = auto(),
+    TE = auto(),
+    NTE = auto(),
+    TC = auto(),
+    NTC = auto()
+
 class CReset(Enum):
     NoReset = 0
     FullReset = 1
@@ -246,11 +253,11 @@ class RKey():
         return '{:03x}:{:05x}'.format(self.rkd, self.os)
 
 class SpecialField():
-    def __init__(self, value, parent, verbosity=0):
+    def __init__(self, value, parent=None, verbosity=0):
         self.value = value
         self.parent = parent
         self.verbosity = verbosity
-        super().__init__()
+        super().__init__(val=value)
 
     def __repr__(self):
         return '{}({:#x})'.format(type(self).__name__, self.value)
@@ -296,7 +303,7 @@ class SpecialField():
         # end for field
         return r
 
-class Opcodes(SpecialField):
+class Opcodes(SpecialField, Union):
     _subfield_name = ['', 'Req', 'Rsp', 'ReqRsp']
 
     def opCode(self, name):

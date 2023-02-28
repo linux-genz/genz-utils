@@ -279,6 +279,23 @@ class Interface():
             self.usable = False
             return
 
+    def clear_ierror_status(self, bitNum: int) -> None:
+        iface_file = self.iface_dir / 'interface'
+        with iface_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            iface = self.comp.map.fileToStruct('interface', data,
+                                fd=f.fileno(), verbosity=self.comp.verbosity)
+            if iface.all_ones_type_vers_size():
+                raise AllOnesData(f'{self}: all-ones data')
+            genz = zephyr_conf.genz
+            ierror_status = genz.IErrorStatus(iface.IErrorStatus, iface)
+            iface.IErrorStatus = (1 << bitNum)  # bits are RW1CS
+            log.debug(f'{self}: writing IErrorStatus={iface.IErrorStatus:#x}, was {ierror_status.val:#x}')
+            # Revisit: really want sz=2, but that doesn't work on orthus
+            self.comp.control_write(iface, genz.InterfaceStructure.IErrorStatus,
+                                    sz=4)
+        # end with
+
     def nonce_exchange(self, iface) -> bool:
         args = zephyr_conf.args
         try:

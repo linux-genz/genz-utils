@@ -817,7 +817,7 @@ class Component():
         self.control_write(ces,
                     genz.ComponentErrorSignalStructure.CEventDetect, sz=8)
 
-    def ievent_init(self, ces):
+    def ievent_init(self, ces, newPeerComp=False):
         genz = zephyr_conf.genz
         # Set IEventSigTgt
         ievt_tgt = genz.IEventSigTgt([ces.IEventSigTgtl,
@@ -838,12 +838,79 @@ class Component():
         ievt_det = genz.IEventDetect(ces.IEventDetect, ces)
         ievt_det.field.FullIfaceReset = 1
         ievt_det.field.WarmIfaceReset = 1
-        ievt_det.field.NewPeerComp = 1
+        ievt_det.field.NewPeerComp = newPeerComp
         ievt_det.field.ExceededTransientErrThresh = 1
         ievt_det.field.IfacePerfDegradation = 1
         ces.IEventDetect = ievt_det.val
         self.control_write(ces,
                     genz.ComponentErrorSignalStructure.IEventDetect, sz=8)
+
+    def ievent_update(self, newPeerComp=False):
+        if self.ces_dir is None:
+            return
+        if self.cstate is not CState.CUp:
+            return
+        ces_file = self.ces_dir / 'component_error_and_signal_event'
+        with ces_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            ces = self.map.fileToStruct('component_error_and_signal_event',
+                                        data, fd=f.fileno(),
+                                        verbosity=self.verbosity)
+            if ces.all_ones_type_vers_size():
+                raise AllOnesData(f'{self}: all-ones data')
+            self.ievent_init(ces, newPeerComp=newPeerComp)
+        # end with
+
+    def clear_cerror_status(self, bitNum):
+        ces_file = self.ces_dir / 'component_error_and_signal_event'
+        with ces_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            ces = self.map.fileToStruct('component_error_and_signal_event',
+                                        data, fd=f.fileno(),
+                                        verbosity=self.verbosity)
+            if ces.all_ones_type_vers_size():
+                raise AllOnesData(f'{self}: all-ones data')
+            genz = zephyr_conf.genz
+            cerror_status = genz.CErrorStatus(ces.CErrorStatus, ces)
+            ces.CErrorStatus = (1 << bitNum)  # bits are RW1CS
+            log.debug(f'{self}: writing CErrorStatus={ces.CErrorStatus:#x}, was {cerror_status.val:#x}')
+            self.control_write(ces, genz.ComponentErrorSignalStructure.CErrorStatus,
+                               sz=8)
+        # end with
+
+    def clear_cevent_status(self, bitNum):
+        ces_file = self.ces_dir / 'component_error_and_signal_event'
+        with ces_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            ces = self.map.fileToStruct('component_error_and_signal_event',
+                                        data, fd=f.fileno(),
+                                        verbosity=self.verbosity)
+            if ces.all_ones_type_vers_size():
+                raise AllOnesData(f'{self}: all-ones data')
+            genz = zephyr_conf.genz
+            cevent_status = genz.CEventStatus(ces.CEventStatus, ces)
+            ces.CEventStatus = (1 << bitNum)  # bits are RW1CS
+            log.debug(f'{self}: writing CEventStatus={ces.CEventStatus:#x}, was {cevent_status.val:#x}')
+            self.control_write(ces, genz.ComponentErrorSignalStructure.CEventStatus,
+                               sz=8)
+        # end with
+
+    def clear_ievent_status(self, bitNum):
+        ces_file = self.ces_dir / 'component_error_and_signal_event'
+        with ces_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            ces = self.map.fileToStruct('component_error_and_signal_event',
+                                        data, fd=f.fileno(),
+                                        verbosity=self.verbosity)
+            if ces.all_ones_type_vers_size():
+                raise AllOnesData(f'{self}: all-ones data')
+            genz = zephyr_conf.genz
+            ievent_status = genz.IEventStatus(ces.IEventStatus, ces)
+            ces.IEventStatus = (1 << bitNum)  # bits are RW1CS
+            log.debug(f'{self}: writing IEventStatus={ces.IEventStatus:#x}, was {ievent_status.val:#x}')
+            self.control_write(ces, genz.ComponentErrorSignalStructure.IEventStatus,
+                               sz=8)
+        # end with
 
     def pfm_uep_init(self, ces, pfm, valid=True):
         genz = zephyr_conf.genz

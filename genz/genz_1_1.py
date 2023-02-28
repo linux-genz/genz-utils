@@ -62,65 +62,100 @@ cclass_name_to_classes = {
     'lph': (0x17,),
 }
 
-eventName = { 0x00: 'RecovProtocolErr',
-              0x01: 'UnrecovProtocolErr',
-              0x02: 'PossibleMaliciousPkt',
-              0x03: 'IfaceErr',
-              0x04: 'CompContainment',
-              0x07: 'FullIfaceReset',
-              0x08: 'WarmIfaceReset',
-              0x09: 'NewPeerComp',
-              0x0a: 'UnableToCommunicate',
-              0x0b: 'ExcessiveRNRNAK',
-              0x0c: 'BufferOverflow',
-              0x0d: 'FatalMediaContainment',
-              0x0e: 'PrimaryMediaLog',
-              0x0f: 'SecondaryMediaLog',
-              0x10: 'InvalidCompImage',
-              0x11: 'CompThermShutdown',
-              0x12: 'PeerCompC-DLP/C-LPExit',
-              0x13: 'PowerFault',
-              0x14: 'AuxPower',
-              0x15: 'CompFWErr',
-              0x16: 'CompLowPower',
-              0x17: 'PeerCompC-DLP/C-LPEntry',
-              0x18: 'EmergencyPowerReduction',
-              0x19: 'CompPowerOffTransition',
-              0x1a: 'CompPowerRestoration',
-              0x1b: 'IfacePerfDegradation',
-              0x1d: 'MediaMaintRequired',
-              0x1e: 'MediaMaintOverride',
-              0x1f: 'ExceededTransientErrThresh',
-              0x20: 'VdefC-Event',
-              0x21: 'VdefI-Event',
-              0x22: 'NonFatalInternalCompErr',
-              0x23: 'FatalInternalCompErr',
-              0x24: 'CompThermPerfThrottle',
-              0x25: 'CompThermThrottleRestore',
-              0x26: 'PrimaryMediaMaint',
-              0x27: 'SecondaryMediaMaint',
-              0x28: 'Mechanical',
-              0x29: 'ExcessiveE2ERetry',
-              0x2a: 'BISTFailure',
-              0x2b: 'P2PNonTransient',
-              0xf0: 'VdefC-Error0',
-              0xf1: 'VdefC-Error1',
-              0xf2: 'VdefC-Error2',
-              0xf3: 'VdefC-Error3',
-              0xf4: 'Vdef0',
-              0xf5: 'Vdef1',
-              0xf6: 'Vdef2',
-              0xf7: 'Vdef3',
-              0xf8: 'Vdef4',
-              0xf9: 'Vdef5',
-              0xfa: 'Vdef6',
-              0xfb: 'Vdef7',
-              0xfc: 'Vdef8',
-              0xfd: 'Vdef9',
-              0xfe: 'VdefA',
-              0xff: 'VdefB' }
+def reason(esVal: int) -> int:
+    es = ProtocolErrorES(esVal)
+    rsn = es.ReasonCode
+    # Revisit: multicast needs to use a different mapping
+    bit = reasonData[rsn][2]
+    return bit
 
-eventType = { val: key for key, val in eventName.items() }
+def mechFW(esVal:int) -> int:
+    es = MechFWErrorES(esVal)
+    return es.BitK
+
+def mediaMaint(esVal:int) -> int:
+    es = MediaMaintEventES(esVal)
+    return 18 if es.Secondary else 16
+
+def mediaOvr(esVal:int) -> int:
+    es = MediaOverrideEventES(esVal)
+    return 19 if es.Secondary else 17
+
+def dlpLpEntry(esVal:int) -> int:
+    es = DlpLpEventES(esVal)
+    return 23 if es.LP else 11
+
+def dlpLpExit(esVal:int) -> int:
+    es = DlpLpEventES(esVal)
+    return 24 if es.LP else 3
+
+def auxPwr(esVal:int) -> int:
+    es = AuxPwrEventES(esVal)
+    return 12 if es.Off else 11
+
+def lowPwr(esVal:int) -> int:
+    es = LowPwrEventES(esVal)
+    return 7 + es.BitK
+
+#                     Name                         bit (num, None, or func)
+eventData = { 0x00: ('RecovProtocolErr',           reason),
+              0x01: ('UnrecovProtocolErr',         reason),
+              0x02: ('PossibleMaliciousPkt',       5),
+              0x03: ('IfaceErr',                   None),
+              0x04: ('CompContainment',            0),
+              0x07: ('FullIfaceReset',             0),
+              0x08: ('WarmIfaceReset',             1),
+              0x09: ('NewPeerComp',                2),
+              0x0a: ('UnableToCommunicate',        1),
+              0x0b: ('ExcessiveRNRNAK',            2),
+              0x0d: ('FatalMediaContainment',      12),
+              0x0e: ('PrimaryMediaLog',            None),
+              0x0f: ('SecondaryMediaLog',          None),
+              0x10: ('InvalidCompImage',           6),
+              0x11: ('CompThermShutdown',          4),
+              0x12: ('PeerCompC-DLP/C-LPExit',     dlpLpExit),
+              0x13: ('PowerFault',                 10),
+              0x14: ('AuxPower',                   auxPwr),
+              0x15: ('CompFWErr',                  mechFW),
+              0x16: ('CompLowPower',               lowPwr),
+              0x17: ('PeerCompC-DLP/C-LPEntry',    dlpLpEntry),
+              0x18: ('EmergencyPowerReduction',    12),
+              0x19: ('CompPowerOffTransition',     14),
+              0x1a: ('CompPowerRestoration',       15),
+              0x1b: ('IfacePerfDegradation',       5),
+              0x1d: ('MediaMaintRequired',         mediaMaint),
+              0x1e: ('MediaMaintOverride',         mediaOvr),
+              0x1f: ('ExceededTransientErrThresh', 3),
+              0x20: ('VdefC-Event',                None), # Revisit
+              0x21: ('VdefI-Event',                None), # Revisit
+              0x22: ('NonFatalInternalCompErr',    1),
+              0x23: ('FatalInternalCompErr',       2),
+              0x24: ('CompThermPerfThrottle',      20),
+              0x25: ('CompThermThrottleRestore',   21),
+              0x28: ('Mechanical',                 mechFW),
+              0x29: ('ExcessiveE2ERetry',          None), # Revisit
+              0x2a: ('BISTFailure',                0),
+              0x2b: ('P2PNonTransient',            22),
+              0xf0: ('VdefC-Error0',               None), # Revisit
+              0xf1: ('VdefC-Error1',               None), # Revisit
+              0xf2: ('VdefC-Error2',               None), # Revisit
+              0xf3: ('VdefC-Error3',               None), # Revisit
+              0xf4: ('Vdef0',                      None), # Revisit
+              0xf5: ('Vdef1',                      None), # Revisit
+              0xf6: ('Vdef2',                      None), # Revisit
+              0xf7: ('Vdef3',                      None), # Revisit
+              0xf8: ('Vdef4',                      None), # Revisit
+              0xf9: ('Vdef5',                      None), # Revisit
+              0xfa: ('Vdef6',                      None), # Revisit
+              0xfb: ('Vdef7',                      None), # Revisit
+              0xfc: ('Vdef8',                      None), # Revisit
+              0xfd: ('Vdef9',                      None), # Revisit
+              0xfe: ('VdefA',                      None), # Revisit
+              0xff: ('VdefB',                      None), # Revisit
+}
+
+eventName = { key: val[0] for key, val in eventData.items() }
+eventType = { val[0]: key for key, val in eventData.items() }
 
 def ceil_div(num: int, denom: int) -> int:
     return -(-num // denom)
@@ -198,6 +233,52 @@ class Reason(IntEnum):
     def __repr__(self):
         return '<{}.{}: {:#x}>'.format(
             self.__class__.__name__, self._name_, self._value_)
+
+#              Reason  Name                   Class            Bit
+reasonData = { 0x00: ('NoError',              ReasonClass.NE,  None),
+               0x01: ('UnexpPkt',             ReasonClass.NTE, 7),
+               0x02: ('UnsupReq',             ReasonClass.NTE, 3),
+               0x03: ('MalformedPkt',         ReasonClass.NTE, 4),
+               0x04: ('PktExeNonFatal',       ReasonClass.TE,  5),
+               0x05: ('PktExeFatal',          ReasonClass.NTE, 6),
+               0x06: ('InvAKey',              ReasonClass.NTE, 8),
+               0x07: ('InvAccPerm',           ReasonClass.NTE, 9),
+               0x08: ('CompContain',          ReasonClass.NTC, 0),
+               0x09: ('PktExeAbort',          ReasonClass.NTE, 10),
+               0x0a: ('RNR0',                 ReasonClass.NE,  None),
+               0x0b: ('RNR1',                 ReasonClass.NE,  None),
+               0x0c: ('DataCorr',             ReasonClass.TC,  5),
+               0x0d: ('DataUncorr',           ReasonClass.NTC, 5),
+               0x0e: ('PoisonDet',            ReasonClass.NTC, 5),
+               0x0f: ('PoisonFail',           ReasonClass.NTE, 5),
+               0x10: ('InProgressSE',         ReasonClass.TC,  5),
+               0x11: ('FatalMediaContain',    ReasonClass.NTE, 6),
+               0x12: ('EmergPwrReduct',       ReasonClass.TC,  6),
+               0x13: ('InsufSpace',           ReasonClass.NTC, 21),
+               0x14: ('AbortTransition',      ReasonClass.NTC, None),
+               0x15: ('UnsupServAddrRes',     ReasonClass.NTE, 22),
+               0x16: ('InsufRespRes',         ReasonClass.TC,  23),
+               0x17: ('ExclusiveGranted',     ReasonClass.NE,  None),
+               0x18: ('UnableGrantExclShare', ReasonClass.NE,  None),
+               0x19: ('WakeFailure',          ReasonClass.NE,  None),
+               0x1a: ('SODTransErr',          ReasonClass.NE,  None),
+               0x1b: ('InvalidCapabilities',  ReasonClass.NTE, 5),
+               0x1c: ('PrimBackupOp',         ReasonClass.TC,  5),
+               0x1d: ('CompPwrOffTrans',      ReasonClass.NTC, 6),
+               0x1e: ('NoErrorWriteMSG',      ReasonClass.NE,  None),
+               0x1f: ('MediaEndurance',       ReasonClass.NTC, 6),
+               0x20: ('NoErrorHomeAgent',     ReasonClass.NE,  None),
+               0x21: ('PersFlushUpdateFail',  ReasonClass.NTC, 25),
+               0x22: ('MaxReqPktRetrans',     ReasonClass.NTE, 11),
+               0x23: ('T10DIPI',              ReasonClass.NTE, 6),
+               0x24: ('BufferAEADFail',       ReasonClass.NTE, 27),
+               0x25: ('SecSessionFail',       ReasonClass.NTE, 28),
+               0x26: ('SecurityErr',          ReasonClass.NTE, 13),
+               0x27: ('NoErrorEnqueue',       ReasonClass.NE,  None),
+               0x28: ('SecEncryptKeyFail',    ReasonClass.NTE, 29),
+               0x29: ('NoErrorWriteMSGCompl', ReasonClass.NE,  None),
+               0x2a: ('RAR',                  ReasonClass.NE,  None),
+}
 
 class QD():
     # Revisit: _map[7] should be "> 87.5%"
@@ -636,6 +717,90 @@ class ErrSigCAP1Control(SpecialField, Union):
         super().__init__(value, parent, verbosity=verbosity)
         self.val = value
 
+class IntCompErrorES(SpecialField, Union):
+    class IntCompErrorESFields(Structure):
+        _fields_ = [('InvalidIndex',               c_u32,  1),
+                    ('LogEntryIndex',              c_u32, 16),
+                    ('Rv',                         c_u32, 15),
+                    ]
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', IntCompErrorESFields), ('val', c_u32)]
+
+class ProtocolErrorES(SpecialField, Union):
+    class ProtocolErrorESFields(Structure):
+        _fields_ = [('ReasonCode',                 c_u32,  6),
+                    ('Rv',                         c_u32, 26),
+                    ]
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', ProtocolErrorESFields), ('val', c_u32)]
+
+class MechFWErrorES(SpecialField, Union):
+    class MechFWErrorESFields(Structure):
+        _fields_ = [('BitK',                       c_u32,  5),
+                    ('Rv',                         c_u32, 27),
+                    ]
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', MechFWErrorESFields), ('val', c_u32)]
+
+class MediaMaintEventES(SpecialField, Union):
+    class MediaMaintEventESFields(Structure):
+        _fields_ = [('Secondary',                  c_u32,  1),
+                    ('NumberUsec',                 c_u32, 17),
+                    ('Rv',                         c_u32, 14),
+                    ]
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', MediaMaintEventESFields), ('val', c_u32)]
+
+class MediaOverrideEventES(SpecialField, Union):
+    class MediaOverrideEventESFields(Structure):
+        _fields_ = [('Secondary',                  c_u32,  1),
+                    ('Rv',                         c_u32, 31),
+                    ]
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', MediaOverrideEventESFields), ('val', c_u32)]
+
+class DlpLpEventES(SpecialField, Union):
+    class DlpLpEventESFields(Structure):
+        _fields_ = [('LP',                         c_u32,  1),
+                    ('Rv',                         c_u32, 31),
+                    ]
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', DlpLpEventESFields), ('val', c_u32)]
+
+class AuxPwrEventES(SpecialField, Union):
+    class AuxPwrEventESFields(Structure):
+        _fields_ = [('Off',                        c_u32,  1),
+                    ('Rv',                         c_u32, 31),
+                    ]
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', AuxPwrEventESFields), ('val', c_u32)]
+
+class LowPwrEventES(SpecialField, Union):
+    class LowPwrEventESFields(Structure):
+        _fields_ = [('BitK',                       c_u32,  3),
+                    ('Rv',                         c_u32, 29),
+                    ]
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', LowPwrEventESFields), ('val', c_u32)]
+
+class OpcodeEventES(SpecialField, Union):
+    class OpcodeEventESFields(Structure):
+        _fields_ = [('OpClass',                    c_u32,  5),
+                    ('OpCode',                     c_u32,  5),
+                    ('Rv',                         c_u32, 22),
+                    ]
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', OpcodeEventESFields), ('val', c_u32)]
+
 # Base class for CError{Status,Detect,Trig,FaultInj}
 class CError(SpecialField, Union):
     class CErrorFields(Structure):
@@ -679,6 +844,14 @@ class CError(SpecialField, Union):
     def __init__(self, value, parent, verbosity=0):
         super().__init__(value, parent, verbosity=verbosity)
         self.val = value
+
+    @staticmethod
+    def uep_map(key, esVal):
+        # Revisit: bit 26 IfaceContainOE has no UEP Event code
+        val = eventData[key][1]
+        if val is None or isinstance(val, int):
+            return val
+        return val(esVal)
 
 class CErrorStatus(CError):
     pass # All bits: RW1CS
@@ -879,6 +1052,10 @@ class IEvent(SpecialField, Union):
     def __init__(self, value, parent, verbosity=0):
         super().__init__(value, parent, verbosity=verbosity)
         self.val = value
+
+    @staticmethod
+    def uep_map(key):
+        return eventData[key][1]
 
 class IEventStatus(IEvent):
     pass

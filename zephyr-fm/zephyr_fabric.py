@@ -268,6 +268,11 @@ class Fabric(nx.MultiGraph):
                 log.info('{}:{} bridge{} {} alternate bridge to fabric{0}'.format(self.fabnum, gcid, brnum, cuuid_serial))
                 self.bridges.append(br)
         # end for br_path
+        # While doing crawl-out, we were not prepared for NewPeerComp UEPs;
+        # now we are, so enable them.
+        log.debug('enabling NewPeerComp UEPs')
+        for comp in self.components.values():
+            comp.ievent_update(newPeerComp=True)
 
     def sfm_init(self):
         zephyr_conf.is_sfm = True
@@ -566,9 +571,16 @@ class Fabric(nx.MultiGraph):
                 rt.fr.unreachable_comp(rt.to, iface, rt)
         # end for
 
+    def uep_reason_name(self, esVal):
+        genz = zephyr_conf.genz
+        es = genz.ProtocolErrorES(esVal)
+        rsn = es.ReasonCode
+        return genz.reasonData[rsn][0]
+
     # UEP dispatch handlers
+    # I-Error UEPs
     @register(events, 'IfaceErr')
-    def iface_error(self, key, br, sender, iface, rec):
+    def iface_error(self, key, br, sender, iface, rc, rec):
         genz = zephyr_conf.genz
         es = genz.IErrorES(rec['ES'])
         bitK = es.BitK
@@ -590,6 +602,8 @@ class Fabric(nx.MultiGraph):
             iface.lprt_read(force=True, verbosity=4)
             log.debug(iface.lprt)
         try:
+            # clear IErrorStatus bitK
+            iface.clear_ierror_status(bitK)
             phyOk, phyChanged = iface.phy_init() # check PHY status (no actual init)
             istate, iChanged = iface.iface_state()
         except AllOnesData:  # got all-ones
@@ -605,11 +619,15 @@ class Fabric(nx.MultiGraph):
             self.iface_unusable(iface)
         return { key: 'ok' }
 
+    # I-Event UEPs
     @register(events, 'WarmIfaceReset', 'FullIfaceReset')
-    def iface_reset(self, key, br, sender, iface, rec):
-        log.info(f'{br}: {key} UEP from {sender} on {iface}')
-        # Revisit: refactor - same as iface_error()
+    def iface_reset(self, key, br, sender, iface, rc, rec):
+        genz = zephyr_conf.genz
+        bit = genz.IEvent.uep_map(rec['Event'])
+        log.info(f'{br}: {key}[{bit}] UEP from {sender} on {iface}')
         try:
+            # clear IEventStatus bit
+            sender.clear_ievent_status(bit)
             phyOk, phyChanged = iface.phy_init() # check PHY status (no actual init)
             istate, iChanged = iface.iface_state()
         except AllOnesData:  # got all-ones
@@ -625,20 +643,106 @@ class Fabric(nx.MultiGraph):
         return { key: 'ok' }
 
     @register(events, 'NewPeerComp')
-    def new_peer_comp(self, key, br, sender, iface, rec):
-        log.info(f'{br}: {key} UEP from {sender} on {iface}')
+    def new_peer_comp(self, key, br, sender, iface, rc, rec):
+        genz = zephyr_conf.genz
+        bit = genz.IEvent.uep_map(rec['Event'])
+        log.info(f'{br}: {key}[{bit}] UEP from {sender} on {iface}')
         iup = iface.iface_init()
-        # Revisit: check iup
+        if not iup:
+            log.warning(f'{br}: new_peer_comp: unable to bring up interface {iface}')
+            return { key: f'{iface} not I-Up' }
         # find previous Component (if there is one)
         prev_comp = iface.peer_comp
         sender.explore_interfaces(self.pfm, ingress_iface=None, explore_ifaces=[iface],
                                   prev_comp=prev_comp, reclaim=True, send=True)
+        try:
+            # clear IEventStatus bit
+            sender.clear_ievent_status(bit)
+        except AllOnesData:  # got all-ones
+            log.warning(f'{iface}: new_peer_comp interface{iface.num} returned all-ones data')
+            iface.usable = False
+            return { key: 'ievent_status all-ones' }
         return { key: 'ok' }
 
     @register(events, 'ExceededTransientErrThresh')
-    def trans_err_thresh(self, key, br, sender, iface, rec):
-        log.info(f'{br}: {key} UEP from {sender} on {iface}')
+    def trans_err_thresh(self, key, br, sender, iface, rc, rec):
+        genz = zephyr_conf.genz
+        bit = genz.IEvent.uep_map(rec['Event'])
+        log.info(f'{br}: {key}[{bit}] UEP from {sender} on {iface}')
         # Revisit: do something useful
+        try:
+            # clear IEventStatus bit
+            sender.clear_ievent_status(bit)
+        except AllOnesData:  # got all-ones
+            log.warning(f'{iface}: trans_err_thresh interface{iface.num} returned all-ones data')
+            iface.usable = False
+            return { key: 'ievent_status all-ones' }
+        return { key: 'ok' }
+
+    @register(events, 'IfacePerfDegradation')
+    def iface_perf_degradation(self, key, br, sender, iface, rc, rec):
+        genz = zephyr_conf.genz
+        bit = genz.IEvent.uep_map(rec['Event'])
+        log.info(f'{br}: {key}[{bit}] UEP from {sender} on {iface}')
+        # Revisit: do something useful
+        try:
+            # clear IEventStatus bit
+            sender.clear_ievent_status(bit)
+        except AllOnesData:  # got all-ones
+            log.warning(f'{iface}: iface_perf_degradation interface{iface.num} returned all-ones data')
+            iface.usable = False
+            return { key: 'ievent_status all-ones' }
+        return { key: 'ok' }
+
+    # C-Error UEPs
+    @register(events, 'RecovProtocolErr')
+    def recov_protocol_err(self, key, br, sender, iface, rc, rec):
+        genz = zephyr_conf.genz
+        esVal = rec['ES']
+        rsnName = self.uep_reason_name(esVal)
+        bit = genz.CError.uep_map(rec['Event'], esVal)
+        log.info(f'{br}: {key}:{rsnName}[{bit}] UEP from {sender}, rc {rc}') # no iface
+        # Revisit: do something useful
+        try:
+            # clear CErrorStatus bit
+            sender.clear_cerror_status(bit)
+        except AllOnesData:  # got all-ones
+            log.warning(f'{sender}: recov_protocol_err returned all-ones data')
+            return { key: 'cerror_status all-ones' }
+        return { key: 'ok' }
+
+    @register(events, 'UnrecovProtocolErr')
+    def unrecov_protocol_err(self, key, br, sender, iface, rc, rec):
+        genz = zephyr_conf.genz
+        esVal = rec['ES']
+        rsnName = self.uep_reason_name(esVal)
+        bit = genz.CError.uep_map(rec['Event'], esVal)
+        log.info(f'{br}: {key}:{rsnName}[{bit}] UEP from {sender}, rc {rc}') # no iface
+        # Revisit: do something useful
+        try:
+            # clear CErrorStatus bit
+            sender.clear_cerror_status(bit)
+        except AllOnesData:  # got all-ones
+            log.warning(f'{sender}: unrecov_protocol_err returned all-ones data')
+            return { key: 'cerror_status all-ones' }
+        return { key: 'ok' }
+
+    # C-Event UEPs
+    @register(events, 'ExcessiveRNRNAK')
+    def excessive_rnr_nak(self, key, br, sender, iface, rc, rec):
+        genz = zephyr_conf.genz
+        esVal = rec['ES']
+        es = genz.OpcodeEventES(esVal)
+        pktName = genz.Packet.className(es.OpClass, es.OpCode)
+        bit = genz.CEvent.uep_map(rec['Event'], esVal)
+        log.info(f'{br}: {key}[{bit}] UEP from {sender}, rc {rc}, pkt {pktName}') # no iface
+        # Revisit: do something useful
+        try:
+            # clear CEventStatus bit
+            sender.clear_cevent_status(bit)
+        except AllOnesData:  # got all-ones
+            log.warning(f'{sender}: excessive_rnr_nak_err returned all-ones data')
+            return { key: 'cevent_status all-ones' }
         return { key: 'ok' }
 
     def dispatch(self, key, *args, **kwargs):
@@ -686,14 +790,25 @@ class Fabric(nx.MultiGraph):
             try:
                 iface = sender.interfaces[ifnum]
             except IndexError:
-                log.warning(f'unknown sender interface: {sender_gcid}.{ifnum}')
+                log.warning(f'unknown UEP sender interface: {sender_gcid}.{ifnum}')
                 return None
         else:
             iface = None
+        if rec['CV']:
+            rc_cid = rec['RCCID']
+            sv = rec['SV']
+            rc_gcid = GCID(cid=rc_cid, sid=(rec['RCSID'] if sv else br.gcid.sid))
+            try:
+                rc = self.comp_gcids[rc_gcid]
+            except KeyError:
+                log.warning(f'unknown UEP rc GCID: {rc_gcid}')
+                return None
+        else:
+            rc = None
         if zephyr_conf.args.keyboard > 2:
             set_trace()
         # dispatch to event handler based on EventName
-        return self.dispatch(rec['EventName'], br, sender, iface, rec)
+        return self.dispatch(rec['EventName'], br, sender, iface, rc, rec)
 
     def unreachable_comps(self, fr: Component):
         '''Return list of unreachable components from @fr'''
