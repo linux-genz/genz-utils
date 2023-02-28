@@ -1475,7 +1475,7 @@ class Component():
                     msg += ', retaining gcid={}'.format(gcid)
                     log.info(msg)
                 if path.exists():
-                    comp.remove_fab_comp()
+                    comp.remove_fab_comp(force=True)
                 if not reset_required:
                     self.fab.add_link(iface, peer_iface)
                     route = self.fab.setup_bidirectional_routing(
@@ -1569,7 +1569,7 @@ class Component():
                                      path, self.mgr_uuid,
                                      gcid=gcid, br_gcid=self.br_gcid,
                                      netlink=self.nl, verbosity=self.verbosity)
-                leftover.remove_fab_comp()
+                leftover.remove_fab_comp(force=True)
                 self.fab.remove_node(leftover)
                 del self.fab.components[leftover.uuid]
             log.info(msg)
