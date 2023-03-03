@@ -109,7 +109,9 @@ class Fabric(nx.MultiGraph):
         self.path = path
         self.fabnum = component_num(path)
         self.fab_uuid = fab_uuid
-        self.mgr_uuid = uuid4() if mgr_uuid is None and not zephyr_conf.args.sfm else mgr_uuid
+        new_mgr_uuid = mgr_uuid is None and not zephyr_conf.args.sfm
+        self.mgr_uuid = uuid4() if new_mgr_uuid else mgr_uuid
+        self.instance_uuid = self.mgr_uuid if new_mgr_uuid else uuid4()
         self.random_cids = random_cids
         self.accept_cids = accept_cids
         self.conf = conf
@@ -1357,6 +1359,7 @@ class FM():
         if info.properties:
             self.fab_uuid = UUID(bytes=info.properties[b'fab_uuid'])
             self.mgr_uuid = UUID(bytes=info.properties[b'mgr_uuid'])
+            self.instance_uuid = UUID(bytes=info.properties[b'instance_uuid'])
             self.pfm = bool(int(info.properties[b'pfm']))
         self.bridges = []
 

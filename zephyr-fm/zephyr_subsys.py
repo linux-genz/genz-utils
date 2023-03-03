@@ -208,6 +208,7 @@ def cmd_add(url, **args):
 def zeroconf_register(fab, mainapp):
     desc = {'mgr_uuid': fab.mgr_uuid.bytes,
             'fab_uuid': fab.fab_uuid.bytes,
+            'instance_uuid': fab.instance_uuid.bytes,
             'pfm': int(not zephyr_conf.is_sfm)}
     info = ServiceInfo(
         '_genz-fm._tcp.local.',
