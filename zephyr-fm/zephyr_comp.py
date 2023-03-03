@@ -542,12 +542,16 @@ class Component():
                                            byteorder='little')
                 self.control_write(core, genz.CoreStructure.MGRUUIDl, sz=16)
             # read back MGRUUID, to confirm we own component by verifying
-            # not all-ones
+            # not all-ones and that it matches ours
             try:
                 self.control_read(core, genz.CoreStructure.MGRUUIDl,
                                   sz=16, check=True)
             except AllOnesData:
                 log.warning(f'{self}: all-ones MGRUUID - component not owned')
+                self.usable = False
+                return False
+            if core.MGRUUID != self.mgr_uuid:
+                log.warning(f'{self}: component MGRUUID {core.MGRUUID} != PFM MGRUUID {self.mgr_uuid} - component not owned')
                 self.usable = False
                 return False
             # set PFMSID/PFMCID (must be before PrimaryFabMgrRole = 1)

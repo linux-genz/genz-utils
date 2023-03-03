@@ -2686,6 +2686,10 @@ class CoreStructure(ControlStructure):
         return self.uuid(('CUUIDh', 'CUUIDl'))
 
     @property
+    def MGRUUID(self): # Revisit: generate this (and others) from _uuid_fields
+        return self.uuid(('MGRUUIDh', 'MGRUUIDl'))
+
+    @property
     def ZUUID(self): # Revisit: generate this (and others) from _uuid_fields
         return self.uuid(('ZUUIDh', 'ZUUIDl'))
 
