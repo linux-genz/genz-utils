@@ -46,9 +46,11 @@ from middleware.netlink_mngr import NetlinkManager
 from typing import List, Tuple
 from threading import Thread
 import multiprocessing as mp
+import atexit
 import socket
 import os
 import sys
+import signal
 from datetime import datetime
 from zeroconf import IPVersion, ServiceInfo, Zeroconf
 from setproctitle import getproctitle, setproctitle
@@ -67,6 +69,46 @@ json.JSONEncoder.default = _default
 def uuid_to_json(self):
     return str(self)
 UUID.to_json = uuid_to_json
+
+# Enhanced version of https://stackoverflow.com/questions/18499497/how-to-process-sigterm-signal-gracefully
+class TerminateProtected:
+    """Protect a piece of code from being killed by SIGINT or SIGTERM.
+    It can still be killed by a force kill.
+
+    Example:
+        with TerminateProtected():
+            run_func_1()
+            run_func_2()
+
+    Both functions will be executed even if a sigterm or sigkill has
+    been received, unless @immediate is True, in which case the exit
+    is immediate.
+
+    """
+    killed = False
+
+    def __init__(self, immediate=False):
+        self._imm = immediate
+
+    def _handler(self, signum, frame):
+        self.killed = True
+        self.signum = signum
+        if self._imm:
+            log.error("Received SIGINT or SIGTERM! Exiting immediately.")
+            sys.exit(128 + self.signum)
+        else:
+            log.error("Received SIGINT or SIGTERM! Finishing this block, then exiting.")
+
+    def __enter__(self):
+        self.old_sigint = signal.signal(signal.SIGINT, self._handler)
+        self.old_sigterm = signal.signal(signal.SIGTERM, self._handler)
+
+    def __exit__(self, type, value, traceback):
+        if self.killed:
+            sys.exit(128 + self.signum)
+        signal.signal(signal.SIGINT, self.old_sigint)
+        signal.signal(signal.SIGTERM, self.old_sigterm)
+
 
 class Callbacks():
     def __init__(self, ts=None):
@@ -227,6 +269,20 @@ def zeroconf_register(fab, mainapp):
     return zeroconf
 
 
+def atexit_handler(mainapp, uep_proc):
+    if zephyr_conf.is_sfm:
+        log.info('unsubscribe SFM endpoints')
+        mainapp.conf.fab.unsubscribe_sfm(mainapp.conf.fab.pfm_fm)
+    else: # PFM
+        mainapp.conf.fab.set_pfm(None)
+    log.info('zeroconf unregister service')
+    mainapp.zeroconf.unregister_service(mainapp.zeroconfInfo)
+    mainapp.zeroconf.close()
+    log.info('terminate UEP process')
+    uep_proc.terminate()
+    uep_proc.join()
+
+
 def main():
     global args
     global cols
@@ -323,6 +379,7 @@ def main():
                  'verbosity':    args.verbosity,
                  'url':          f'http://localhost:{mainapp.port}/fabric/uep' }
     uep_proc = mp.Process(target=netlink_reader, kwargs=uep_args)
+    atexit.register(atexit_handler, mainapp, uep_proc)
     uep_proc.start()
     sys_devices = Path('/sys/devices')
     fab_paths = sys_devices.glob('genz*')
@@ -364,24 +421,8 @@ def main():
     if args.keyboard > 0:
         set_trace()
 
-    try:
+    with TerminateProtected(immediate=True):
         thread.join()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        if zephyr_conf.is_sfm:
-            log.info('unsubscribe SFM endpoints')
-            mainapp.conf.fab.unsubscribe_sfm(mainapp.conf.fab.pfm_fm)
-        else: # PFM
-            mainapp.conf.fab.set_pfm(None)
-        log.info('zeroconf unregister service')
-        mainapp.zeroconf.unregister_service(mainapp.zeroconfInfo)
-        mainapp.zeroconf.close()
-        log.info('terminate UEP process')
-        uep_proc.terminate()
-        uep_proc.join()
-        log.info('sys.exit')
-        sys.exit()
 
 if __name__ == '__main__':
     try:
