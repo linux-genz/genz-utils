@@ -672,10 +672,8 @@ class Fabric(nx.MultiGraph):
         if not iup:
             log.warning(f'{br}: new_peer_comp: unable to bring up interface {iface}')
             return { key: f'{iface} not I-Up' }
-        # find previous Component (if there is one)
-        prev_comp = iface.peer_comp
         sender.explore_interfaces(self.pfm, ingress_iface=None, explore_ifaces=[iface],
-                                  prev_comp=prev_comp, reclaim=True, send=True)
+                                  reclaim=True, send=True)
         try:
             # clear IEventStatus bit
             sender.clear_ievent_status(bit)

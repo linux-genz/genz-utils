@@ -1461,14 +1461,19 @@ class Component():
     def has_switch(self):
         return self.switch_dir is not None
 
-    def config_interface(self, iface, pfm, ingress_iface, prev_comp,
-                         send=False, reclaim=False):
+    def explore_interface(self, iface, pfm, ingress_iface,
+                          send=False, reclaim=False):
+        '''Explore one interface, @iface, on this component and initialize
+        the peer Component connected to it. Recurse if the component has a
+        switch.
+        '''
         args = zephyr_conf.args
         iface.update_peer_info()
         # get peer CState
         peer_cstate = iface.peer_cstate
-        if prev_comp:
-            prev_comp.cstate = peer_cstate
+        peer_comp = iface.peer_comp
+        if peer_comp:
+            peer_comp.cstate = peer_cstate
         msg = '{}: exploring interface{}, peer cstate={!s}, '.format(
             iface, iface.num, peer_cstate)
         if iface.peer_inband_disabled:
@@ -1577,7 +1582,7 @@ class Component():
                         log.warning(f'unable to reset - ignoring component {comp} on {iface}')
                         return
             elif args.accept_cids: # Revisit: mostly duplicate of reclaim
-                # Revisit: add prev_comp handling
+                # Revisit: add peer_comp handling
                 path = self.fab.make_path(peer_gcid)
                 comp = Component(iface.peer_cclass, self.fab, self.map, path,
                                  self.mgr_uuid, br_gcid=self.br_gcid,
@@ -1614,7 +1619,7 @@ class Component():
         # end if CUp
         if peer_cstate is CState.CCFG: # Note: not 'elif'
             from zephyr_route import DirectedRelay
-            if prev_comp is None:
+            if peer_comp is None:
                 dr = DirectedRelay(self, ingress_iface, iface) # temporary dr
                 comp = Component(iface.peer_cclass, self.fab, self.map, dr.path,
                                  self.mgr_uuid, dr=dr, br_gcid=self.br_gcid,
@@ -1632,8 +1637,8 @@ class Component():
                 op = 'add'
                 msg += 'assigned gcid={}'.format(gcid)
                 self.fab.add_link(iface, peer_iface)
-            else: # have a prev_comp
-                comp = prev_comp
+            else: # have a known peer_comp
+                comp = peer_comp
                 peer_iface = iface.peer_iface
                 dr = DirectedRelay(self, ingress_iface, iface, to_iface=peer_iface)
                 comp.set_dr(dr)
@@ -1672,7 +1677,11 @@ class Component():
         # end if peer_cstate
 
     def explore_interfaces(self, pfm, ingress_iface=None, explore_ifaces=None,
-                           prev_comp=None, send=False, reclaim=False):
+                           send=False, reclaim=False):
+        '''Explore all interfaces on this component, or just those passed
+        in @explore_ifaces, skipping the @ingress_iface and any that are
+        not usable.
+        '''
         if explore_ifaces is None:
             # examine all interfaces (except ingress) & init those components
             args = zephyr_conf.args
@@ -1683,14 +1692,13 @@ class Component():
                 log.debug(f'{iface}: skipping ingress interface{iface.num}')
             elif iface.usable:
                 try:
-                    self.config_interface(iface, pfm, ingress_iface, prev_comp,
-                                          send=send, reclaim=reclaim)
+                    self.explore_interface(iface, pfm, ingress_iface,
+                                           send=send, reclaim=reclaim)
                 except AllOnesData as e:
                     log.warning(f'{iface}: interface{iface.num} config failed with exception "{e}" - marking unusable')
                     iface.usable = False
             else:
-                log.info('{}: interface{} is not usable'.format(
-                    self.gcid, iface.num))
+                log.info(f'{iface}: interface{iface.num} is not usable')
 
     def update_cstate(self, prefix='control', forceTimestamp=False):
         prev_cstate = self.cstate
