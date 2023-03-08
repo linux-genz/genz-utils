@@ -539,6 +539,9 @@ class Fabric(nx.MultiGraph):
                 dr_rt.route_info_update(False)
                 self.routes.add(fr, to, rt)       # add new
                 rt.route_info_update(True)
+            else:
+                log.warning(f'cannot replace DR route {dr_rt}')
+        # end for
 
     def has_link(self, fr_iface: Interface, to_iface: Interface) -> bool:
         fr = fr_iface.comp

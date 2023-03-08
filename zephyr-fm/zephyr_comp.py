@@ -1580,6 +1580,7 @@ class Component():
                                             peer_c_reset_only=peer_c_reset_only)
                     if peer_cstate is not CState.CCFG:
                         log.warning(f'unable to reset - ignoring component {comp} on {iface}')
+                        self.fab.teardown_routing(pfm, comp, route[0] + route[1])
                         return
             elif args.accept_cids: # Revisit: mostly duplicate of reclaim
                 # Revisit: add peer_comp handling
@@ -1662,6 +1663,7 @@ class Component():
                 comp.add_fab_dr_comp()
             except Exception as e:
                 log.error(f'add_fab_dr_comp(gcid={comp.gcid}, dr_gcid={comp.dr.gcid}, dr_iface={comp.dr.egress_iface}) failed with exception {e}')
+                self.fab.teardown_routing(pfm, comp, route[0] + route[1])
                 return
             usable = comp.comp_init(pfm, prefix='dr', ingress_iface=peer_iface,
                                     route=route[1])
@@ -1674,6 +1676,7 @@ class Component():
                                         send=send, reclaim=reclaim)
             elif not usable:
                 log.warning(f'{comp} is not usable')
+                self.fab.teardown_routing(pfm, comp, route[0] + route[1])
         # end if peer_cstate
 
     def explore_interfaces(self, pfm, ingress_iface=None, explore_ifaces=None,
@@ -1771,6 +1774,7 @@ class Component():
             self.add_fab_dr_comp()
         except Exception as e:
             log.error(f'add_fab_dr_comp(gcid={self.gcid}, dr_gcid={self.dr.gcid}, dr_iface={self.dr.egress_iface}) failed with exception {e}')
+            fab.teardown_routing(fab.pfm, self, route[0] + route[1])
 
     def nearest_iface_to(self, to: 'Component'):
         rts = self.fab.get_routes(self, to)
