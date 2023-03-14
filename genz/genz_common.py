@@ -146,16 +146,16 @@ class AllOnesData(ValueError):
     '''
     pass
 
-class GCID():
-    def __init__(self, val=None, sid=0, cid=None, str=None):
+class GCID(int):
+    def __new__(cls, val=None, sid=0, cid=None, str=None):
         if val is not None:
-            self.val = val
+            pass
         elif cid is not None:
             if cid < 0 or cid >= 1<<12:
-                raise(ValueError)
+                raise ValueError(f'cid {cid} is out of range')
             if sid < 0 or sid >= 1<<16:
-                raise(ValueError)
-            self.val = (sid << 12) | cid
+                raise ValueError(f'sid {sid} is out of range')
+            val = (sid << 12) | cid
         elif str is not None:
             gcid_str = str.split(':')
             if len(gcid_str) == 1:
@@ -164,34 +164,25 @@ class GCID():
                 sid = int(gcid_str[0], 16)
                 cid = int(gcid_str[1], 16)
             else:
-                raise(TypeError)
-            self.val = (sid << 12) | cid
+                raise TypeError(f'invalid GCID str {str}')
+            val = (sid << 12) | cid
         else:
             raise(TypeError)
-        # Revisit: this doesn't allow INVALID_GCID
-        #if self.val < 0 or self.val >= 1<<28:
-        #    raise(ValueError)
+        if not (val == 0xffffffff or (val >= 0 and val < 1<<28)):
+            raise ValueError(f'value {val} is out of range')
+        return int.__new__(cls, val)
 
     @property
     def sid(self):
-        return self.val >> 12
+        return self >> 12
 
     @property
     def cid(self):
-        return self.val & 0xfff
+        return self & 0xfff
 
-    def __eq__(self, other):
-        if type(self) != type(other):
-            return NotImplemented
-        return self.val == other.val
-
-    def __lt__(self, other):
-        if type(self) != type(other):
-            return NotImplemented
-        return self.val < other.val
-
-    def __hash__(self):
-        return hash(self.val)
+    @property
+    def val(self):
+        return int(self)
 
     def __repr__(self):
         return '{:04x}:{:03x}'.format(self.sid, self.cid)

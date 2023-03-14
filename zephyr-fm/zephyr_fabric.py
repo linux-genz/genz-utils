@@ -120,7 +120,7 @@ class Fabric(nx.MultiGraph):
         self.components = {}   # key: comp.uuid
         self.cuuid_serial = {} # key: cuuid:serial
         self.comp_gcids = {}   # key: comp.gcid
-        self.assigned_gcids = []
+        self.assigned_gcids = self.conf.get_assigned_cids()
         self.refill_gcids = True
         self.nonce_list = [ 0 ]
         self.routes = Routes(fab_uuid=fab_uuid)
@@ -138,7 +138,8 @@ class Fabric(nx.MultiGraph):
                          cur_timestamp=ns, mod_timestamp=ns)
         log.info(f'fabric: {path}, num={self.fabnum}, fab_uuid={self.fab_uuid}, mgr_uuid={self.mgr_uuid}, cur_timestamp={ns}')
 
-    def assign_gcid(self, comp, ssdt_sz=4096, proposed_gcid=None):
+    def assign_gcid(self, comp, ssdt_sz=4096, proposed_gcid=None, reclaim=False,
+                    cstate=CState.CUp):
         # Revisit: subnets
         # Revisit: CID conficts between accepted & assigned are possible
         random_cids = self.random_cids
@@ -146,26 +147,49 @@ class Fabric(nx.MultiGraph):
             default_range = (1, ssdt_sz-1)
             cid_range = self.conf.data.get('cid_range', default_range)
             min_cid, max_cid = cid_range if len(cid_range) == 2 else default_range
-            self.avail_gcids = (
+            self.avail_cids = (
                 random.sample(range(min_cid, max_cid+1), max_cid-min_cid+1)
                 if random_cids else list(range(min_cid, max_cid+1)))
             self.refill_gcids = False
         if proposed_gcid is not None:
             try:
-                self.avail_gcids.remove(proposed_gcid.cid)
+                self.avail_cids.remove(proposed_gcid)
                 comp.gcid = proposed_gcid
             except ValueError:
                 comp.gcid = None
         else:
             try:
-                cid = self.avail_gcids.pop(0)
+                availLen = len(self.avail_cids)
+                cid = self.avail_cids.pop(0)
+                if reclaim and cstate == CState.CCFG:
+                    done = False
+                    while not done:
+                        if cid not in self.assigned_gcids:
+                            done = True
+                        else:
+                            self.avail_cids.append(cid)
+                            availLen -= 1
+                            if availLen <= 0:
+                                raise IndexError
+                            cid = self.avail_cids.pop(0)
+                    # end while
+                # end if reclaim
                 comp.gcid = GCID(cid=cid)
             except IndexError:
                 comp.gcid = None
         if comp.gcid is not None:
-            self.assigned_gcids.append(comp.gcid)
-            self.nodes[comp]['gcids'] = [ comp.gcid ]
+            self.assigned_gcids.add(comp.gcid)
+            self.nodes[comp]['gcids'] = [ str(comp.gcid) ]
         return comp.gcid
+
+    def free_gcid(self, comp):
+        gcid = comp.gcid
+        comp.gcid = None
+        if gcid is None or gcid not in self.assigned_gcids:
+            return
+        self.assigned_gcids.remove(gcid)
+        self.avail_cids.append(gcid.cid) # Revisit: random_cids
+        self.nodes[comp]['gcids'].remove(str(gcid))
 
     def add_comp(self, comp):
         self.cuuid_serial[comp.cuuid_serial] = comp
@@ -260,7 +284,8 @@ class Fabric(nx.MultiGraph):
                                  local_br=True, brnum=brnum, dr=None,
                                  tmp_gcid=tmp_gcid, netlink=self.nl,
                                  verbosity=self.verbosity)
-                gcid = self.assign_gcid(br, ssdt_sz=br.ssdt_size(haveCore=False)[0])
+                gcid = self.assign_gcid(br, reclaim=reclaim,
+                                        ssdt_sz=br.ssdt_size(haveCore=False)[0])
                 self.set_pfm(br)
                 log.info(f'{self.fabnum}:{gcid} bridge{brnum} {cuuid_serial}')
                 usable = br.comp_init(self.pfm)
@@ -1105,7 +1130,7 @@ class Fabric(nx.MultiGraph):
                                    local_br=True, brnum=brnum,
                                    gcid=gcid, uuid=uuid,
                                    verbosity=self.verbosity)
-                self.nodes[comp]['gcids'] = [ comp.gcid ]
+                self.nodes[comp]['gcids'] = [ str(comp.gcid) ]
                 self.bridges[brnum] = comp
                 self.set_sfm(comp)
             else:
@@ -1275,6 +1300,8 @@ class Fabric(nx.MultiGraph):
             comp.promote_sfm_to_pfm(self.sfm, self.pfm)
         # update zeroconf
         self.zeroconf_update()
+        # save assigned CIDs
+        self.conf.save_assigned_cids()
         # Revisit: ask llamas on former-PFM to remove all fabric components?
         self.pfm, self.sfm = self.sfm, None
         self.graph['pfm'], self.graph['sfm'] = self.pfm, self.sfm

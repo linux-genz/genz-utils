@@ -275,6 +275,7 @@ def atexit_handler(mainapp, uep_proc):
         mainapp.conf.fab.unsubscribe_sfm(mainapp.conf.fab.pfm_fm)
     else: # PFM
         mainapp.conf.fab.set_pfm(None)
+        mainapp.conf.save_assigned_cids()
     log.info('zeroconf unregister service')
     mainapp.zeroconf.unregister_service(mainapp.zeroconfInfo)
     mainapp.zeroconf.close()
@@ -361,6 +362,7 @@ def main():
         data['add_resources'] = []
         data['boundary_interfaces'] = []
         data['cid_range'] = []
+        data['assigned_cids'] = []
         data['local_bridges'] = []
         # Revisit: use pub/priv keys to establish a session key
         data['aesgcm_key'] = b64encode(key).decode('ascii')
@@ -407,7 +409,7 @@ def main():
     if not args.sfm:
         if args.keyboard > 3:
             set_trace()
-
+        conf.save_assigned_cids()
         conf.add_resources()
 
     if args.keyboard > 3:

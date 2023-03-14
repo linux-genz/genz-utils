@@ -132,6 +132,7 @@ class Component():
         self.rsp_page_grid_ps = 0
         self.paths_setup = False
         self.usable = False # will be set True if comp_init() succeeds
+        self.cstate = CState.CDown # will be updated by comp_init()
         fab.components[self.uuid] = self
         fab.add_node(self, instance_uuid=self.uuid, cclass=self.cclass,
                      mgr_uuid=self.mgr_uuid)
@@ -148,7 +149,7 @@ class Component():
         js = { 'cclass': self.cclass,
                'cstate': str(self.cstate),
                'fru_uuid': self.fru_uuid,
-               'gcids': [ self.gcid ],
+               'gcids': [ str(self.gcid) ],
                'id': self.cuuid_serial,
                'instance_uuid': self.uuid,
                'max_data': self.max_data,
@@ -1547,7 +1548,8 @@ class Component():
                 peer_iface = Interface(comp, iface.peer_iface_num, iface,
                                        usable=True)
                 iface.set_peer_iface(peer_iface)
-                gcid = self.fab.assign_gcid(comp, proposed_gcid=peer_gcid)
+                gcid = self.fab.assign_gcid(comp, proposed_gcid=peer_gcid,
+                                            reclaim=reclaim)
                 if gcid is None:
                     msg += ', gcid conflict, reset required'
                     log.warning(msg)
@@ -1630,7 +1632,8 @@ class Component():
                 # now that we have peer_iface, setup new DR that includes it
                 dr = DirectedRelay(self, ingress_iface, iface, to_iface=peer_iface)
                 comp.set_dr(dr)
-                gcid = self.fab.assign_gcid(comp)
+                gcid = self.fab.assign_gcid(comp, reclaim=reclaim,
+                                            cstate=peer_cstate)
                 if gcid is None:
                     msg += 'no GCID available in pool - ignoring component'
                     log.warning(msg)

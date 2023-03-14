@@ -29,7 +29,7 @@ import json
 import time
 from uuid import UUID
 from pdb import set_trace
-from genz.genz_common import GCID
+from genz.genz_common import GCID, CState
 
 INVALID_GCID = GCID(val=0xffffffff)
 
@@ -77,6 +77,26 @@ class Conf():
         with open(self.file, 'w') as f:
             json.dump(self.data, f, indent=2)
             print('', file=f) # add a newline
+
+    def get_assigned_cids(self):
+        try:
+            return { GCID(str=cid) for cid in self.data['assigned_cids'] }
+        except KeyError:
+            return set()
+
+    def save_assigned_cids(self, writeConf=True):
+        '''Save the list of assigned_cids whose Components are CUp.
+        Used by a subsequent --reclaim to avoid (most) CID conflicts.
+        '''
+        fab = self.fab
+        if fab is None:
+            return
+        cUps = { c.gcid for c in fab.components.values()
+                 if c.cstate == CState.CUp }
+        assigned = cUps.intersection(fab.assigned_gcids)
+        self.data['assigned_cids'] = [str(gcid) for gcid in assigned]
+        if writeConf:
+            self.write_conf_file(self.data)
 
     def add_resource(self, conf_add, send=True, op=None) -> dict:
         from zephyr_res import ResourceList, Resource
