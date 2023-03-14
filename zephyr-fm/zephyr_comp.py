@@ -1584,36 +1584,6 @@ class Component():
                         log.warning(f'unable to reset - ignoring component {comp} on {iface}')
                         self.fab.teardown_routing(pfm, comp, route[0] + route[1])
                         return
-            elif args.accept_cids: # Revisit: mostly duplicate of reclaim
-                # Revisit: add peer_comp handling
-                path = self.fab.make_path(peer_gcid)
-                comp = Component(iface.peer_cclass, self.fab, self.map, path,
-                                 self.mgr_uuid, br_gcid=self.br_gcid,
-                                 netlink=self.nl, verbosity=self.verbosity)
-                peer_iface = Interface(comp, iface.peer_iface_num, iface)
-                iface.set_peer_iface(peer_iface)
-                gcid = self.fab.assign_gcid(comp, proposed_gcid=peer_gcid)
-                if gcid is None:
-                    msg += ' gcid conflict, ignoring component'
-                    log.warning(msg)
-                    return
-                msg += ' retaining gcid={}'.format(gcid)
-                log.info(msg)
-                self.fab.add_link(iface, peer_iface)
-                route = self.fab.setup_bidirectional_routing(
-                    pfm, comp, write_to_ssdt=False)
-                try:
-                    comp.add_fab_comp(setup=True)
-                except Exception as e:
-                    log.error('add_fab_comp failed with exception {}'.format(e))
-                    return
-                usable = comp.comp_init(pfm, ingress_iface=peer_iface, route=route[1])
-                if usable and comp.has_switch:  # if switch, recurse
-                    comp.explore_interfaces(pfm, ingress_iface=peer_iface,
-                                            reclaim=reclaim)
-                elif not usable:
-                    log.warning(f'{comp} is not usable')
-                    return
             else:
                 msg += ' ignoring unknown component'
                 log.warning(msg)

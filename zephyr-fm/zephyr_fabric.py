@@ -101,8 +101,7 @@ class Fabric(nx.MultiGraph):
         return 1 if usable else None
 
     def __init__(self, nl, mainapp, map, path, fab_uuid=None, grand_plan=None,
-                 random_cids=False, accept_cids=False, conf=None,
-                 mgr_uuid=None, verbosity=0):
+                 random_cids=False, conf=None, mgr_uuid=None, verbosity=0):
         self.nl = nl
         self.mainapp = mainapp
         self.map = map
@@ -113,7 +112,6 @@ class Fabric(nx.MultiGraph):
         self.mgr_uuid = uuid4() if new_mgr_uuid else mgr_uuid
         self.instance_uuid = self.mgr_uuid if new_mgr_uuid else uuid4()
         self.random_cids = random_cids
-        self.accept_cids = accept_cids
         self.conf = conf
         self.verbosity = verbosity
         self.bridges = []      # indexed by bridge number

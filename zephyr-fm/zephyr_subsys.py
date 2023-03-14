@@ -298,8 +298,6 @@ def main():
                         help='break to interactive keyboard at certain points')
     parser.add_argument('-v', '--verbosity', action='count', default=0,
                         help='increase output verbosity')
-    parser.add_argument('-A', '--accept-cids', action='store_true',
-                        help='accept pre-existing HW CIDs for all components')
     parser.add_argument('--cfg', default=None,
                         help='cfg file')
     parser.add_argument('-r', '--reclaim', action='store_true',
@@ -387,7 +385,7 @@ def main():
     fab_paths = sys_devices.glob('genz*')
     for fab_path in sorted(fab_paths):
         fab = Fabric(nl, mainapp, map, fab_path, random_cids=args.random_cids,
-                     accept_cids=args.accept_cids, fab_uuid=fab_uuid,
+                     fab_uuid=fab_uuid,
                      conf=conf, mgr_uuid=mgr_uuid, verbosity=args.verbosity)
         fabrics[fab_path] = fab
         conf.set_fab(fab, writeConf=(not args.sfm))
