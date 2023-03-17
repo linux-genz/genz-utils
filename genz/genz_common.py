@@ -278,12 +278,12 @@ class SpecialField():
                 except IndexError:
                     state = 'Rv'
                 if width == 1:
-                    r += '{0}{{{2}}}={1} '.format(name, state, lowBit)
+                    r += '{0}{{{2}}}={1}({3}) '.format(name, state, lowBit, val)
                 else:
-                    r += '{0}{{{2}:{3}}}={1} '.format(name, state, highBit, lowBit)
+                    r += '{0}{{{2}:{3}}}={1}({4}) '.format(name, state, highBit, lowBit, val)
             else:
                 if (self.verbosity < 4 and
-                    (name == 'Rv' or width == 1) and val == 0):
+                    (name[:2] == 'Rv' or width == 1) and val == 0):
                     bitOffset += width
                     continue
                 if width == 1:
