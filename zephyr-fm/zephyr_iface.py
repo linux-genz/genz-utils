@@ -77,10 +77,10 @@ class Interface():
             data = bytearray(f.read())
             iface = self.comp.map.fileToStruct('interface', data,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
+            if iface.all_ones_type_vers_size():
+                raise AllOnesData('interface structure returned all-ones data')
             log.debug(f'{self}: interface{self.num}={iface}')
             self.hvs = iface.HVS  # for num_vcs()
-            if iface.all_ones_type_vers_size():
-                raise AllOnesData(f'{self}: all-ones data')
         # end with
         return iface
 
@@ -89,6 +89,11 @@ class Interface():
         state, changed = self.check_i_state(iface, do_read=False, ts=ts)
         self.usable = (state is IState.IUp)
         return (state, changed)
+
+    def warn_unusable(self, msg: str) -> bool:
+        log.warning(f'{self}: {msg}')
+        self.usable = False
+        return False
 
     # Returns True if interface is usable - is I-Up, not I-Down/I-CFG/I-LP
     def iface_init(self, prefix='control'):
@@ -100,11 +105,10 @@ class Interface():
             data = bytearray(f.read())
             iface = self.comp.map.fileToStruct('interface', data,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
-            log.debug(f'{self}: iface_init interface{self.num}={iface}')
             if iface.all_ones_type_vers_size():
-                log.warning(f'{self}: iface_init interface{self.num} returned all-ones data')
-                self.usable = False
-                return False
+                return self.warn_unusable(
+                    f'iface_init interface{self.num} returned all-ones data')
+            log.debug(f'{self}: iface_init interface{self.num}={iface}')
             self.hvs = iface.HVS
             if not self.phy_init()[0]:
                 log.info(f'{self}: interface{self.num} is not PHY-Up')
@@ -117,16 +121,22 @@ class Interface():
             # Revisit: select compatible LLR/P2PNextHdr/P2PEncrypt settings
             # Revisit: set CtlOpClassPktFiltEnb, if Switch (for now)
             # enable Explicit OpCodes, LPRT (if Switch), and IErrFaultInjEnb
-            icap1ctl = genz.ICAP1Control(iface.ICAP1Control, iface)
+            try:
+                icap1ctl = genz.ICAP1Control(iface.ICAP1Control, iface, check=True)
+            except AllOnesData:
+                return self.warn_unusable('ICAP1Control is all-ones')
             icap1ctl.field.OpClassSelect = 0x1
             icap1ctl.field.LPRTEnb = is_switch
             icap1ctl.field.IErrFaultInjEnb = 1 # Revisit: Always?
             iface.ICAP1Control = icap1ctl.val
-            log.debug(f'{self}: writing ICAP1Control')
+            log.debug(f'{self}: writing ICAP1Control={icap1ctl.val:#x}')
             self.comp.control_write(iface,
                             genz.InterfaceStructure.ICAP1Control, sz=4, off=4)
             # set LinkCTLControl (depending on local_br, is_switch)
-            lctl = genz.LinkCTLControl(iface.LinkCTLControl, iface)
+            try:
+                lctl = genz.LinkCTLControl(iface.LinkCTLControl, iface, check=True)
+            except AllOnesData:
+                return self.warn_unusable('LinkCTLControl is all-ones')
             # xmit bits set on local_br and all switch ports
             xmit = 1 if (self.comp.local_br or is_switch) else 0
             lctl.field.XmitPeerCUpEnb = xmit
@@ -143,23 +153,25 @@ class Interface():
             lctl.field.RecvPeerEnterLinkLPEnb = recv
             lctl.field.RecvLinkResetEnb = recv
             iface.LinkCTLControl = lctl.val
-            log.debug(f'{self}: writing LinkCTLControl')
+            log.debug(f'{self}: writing LinkCTLControl={lctl.val:#x}')
             self.comp.control_write(iface,
                             genz.InterfaceStructure.LinkCTLControl, sz=4, off=4)
             # send Peer-Attribute 1 Link CTL - HW did this at link-up time,
             # but we don't know when that was, and things may have changed
             status = self.send_peer_attr1(iface, timeout=100000)
             if status == 0:
-                log.warning(f'{self}: send_peer_attr1 timeout on interface{self.num}')
-                self.usable = False
-                return False
+                return self.warn_unusable(
+                    f'send_peer_attr1 timeout on interface{self.num}')
             # send Path Time Link CTL
             status = self.send_path_time(iface, timeout=100000)
             if status == 0:
                 log.warning(f'{self}: send_path_time timeout on interface{self.num}')
             # save PeerInterfaceID
             self.peer_iface_num = self.get_peer_iface_num(iface)
-            ictl = genz.IControl(iface.IControl, iface)
+            try:
+                ictl = genz.IControl(iface.IControl, iface, check=True)
+            except AllOnesData:
+                return self.warn_unusable('IControl is all-ones')
             # set IfaceAKeyValidationEnb (if supported)
             ictl.field.IfaceAKeyValidationEnb = (1 if
                                     icap1.field.IfaceAKeyValidationSup else 0)
@@ -171,14 +183,9 @@ class Interface():
             # enable interface
             ictl.field.IfaceEnb = 1
             iface.IControl = ictl.val
-            log.debug(f'{self}: writing IControl IfaceEnb/IngressDREnb/AutoStop')
-            try:
-                self.comp.control_write(iface, genz.InterfaceStructure.IControl,
-                                        sz=4, off=4, check=True)
-            except AllOnesData:
-                log.warning(f'{self}: prevented IControl write of all-ones')
-                self.usable = False
-                return False
+            log.debug(f'{self}: writing IControl IfaceEnb/IngressDREnb/AutoStop={ictl.val:#x}')
+            self.comp.control_write(iface, genz.InterfaceStructure.IControl,
+                                    sz=4, off=4, check=True)
             # clear IStatus RW1C bits that we might care about later
             istatus = genz.IStatus(0, iface) # all 0 IStatus
             istatus.field.FullIfaceReset = 1
@@ -189,22 +196,20 @@ class Interface():
             istatus.field.LUpToLLPTransitionFailed = 1
             istatus.field.IfaceContainment = 1
             iface.IStatus = istatus.val
-            log.debug('{}: writing IStatus, val={:#x}'.format(self, istatus.val))
+            log.debug(f'{self}: writing IStatus={istatus.val:#x}')
             self.comp.control_write(iface,
                             genz.InterfaceStructure.IStatus, sz=4, off=0)
             # verify I-Up
             try:
                 state = self.check_i_state(iface)[0]
             except AllOnesData:
-                log.warning(f'{self}: check_i_state all-ones')
-                self.usable = False
-                return False
+                return self.warn_unusable('check_i_state all-ones')
             self.usable = (state is IState.IUp)
             # Revisit: orthus goes I-Down if we do this earlier
             # set LinkRFCDisable (depending on local_br)
             ictl.field.LinkRFCDisable = 1 if self.comp.local_br else 0
             iface.IControl = ictl.val
-            log.debug('{}: writing IControl LinkRFCDisable'.format(self))
+            log.debug(f'{self}: writing IControl LinkRFCDisable={ictl.val:#x}')
             self.comp.control_write(iface,
                             genz.InterfaceStructure.IControl, sz=4, off=4)
             # save PeerCState & PeerGCID
@@ -227,56 +232,56 @@ class Interface():
         return self.usable
 
     def ierror_init(self, iface, icap1):
-        if icap1.field.IfaceErrFieldsSup == 0:
+        if icap1.IfaceErrFieldsSup == 0:
             return
         genz = zephyr_conf.genz
         # Set IErrorSigTgt
-        ierr_tgt = genz.IErrorSigTgt(iface.IErrorSigTgt, iface)
+        try:
+            ierr_tgt = genz.IErrorSigTgt(iface.IErrorSigTgt, iface, check=True)
+        except AllOnesData:
+            return self.warn_unusable('IErrorSigTgt is all-ones')
         sig_tgt = genz.SigTgt.TgtIntr1 if self.comp.local_br else genz.SigTgt.TgtUEP
-        ierr_tgt.field.ExcessivePHYRetraining = sig_tgt
-        ierr_tgt.field.NonTransientLinkErr = sig_tgt
-        ierr_tgt.field.IfaceContainment = sig_tgt
-        ierr_tgt.field.IfaceFCFwdProgressViolation = sig_tgt
-        ierr_tgt.field.UnexpectedPHYFailure = sig_tgt
-        ierr_tgt.field.IfaceAE = sig_tgt
-        ierr_tgt.field.SwitchPktRelayFailure = sig_tgt
+        tgt_none = genz.SigTgt.TgtNone
+        ierr_tgt.ExcessivePHYRetraining = sig_tgt
+        ierr_tgt.NonTransientLinkErr = sig_tgt
+        ierr_tgt.IfaceContainment = sig_tgt
+        ierr_tgt.IfaceAKEYViolation = tgt_none # Revisit: AKeys
+        ierr_tgt.IfaceFCFwdProgressViolation = sig_tgt
+        ierr_tgt.UnexpectedPHYFailure = sig_tgt
+        ierr_tgt.P2PSECE = tgt_none
+        ierr_tgt.IfaceAE = sig_tgt
+        ierr_tgt.SwitchPktRelayFailure = sig_tgt
         iface.IErrorSigTgt = ((ierr_tgt.val[2] << 32) |
                               (ierr_tgt.val[1] << 16) | ierr_tgt.val[0])
         log.debug('{}: writing IErrorSigTgt'.format(self))
-        try:
-            # Revisit: sz=6 on orthus causes it to clear TETH/TETE/FCFWDProgress
-            #self.comp.control_write(iface, genz.InterfaceStructure.IErrorSigTgt,
-            #                        sz=6, check=True)
-            self.comp.control_write(iface, genz.InterfaceStructure.IErrorSigTgt,
-                                    sz=8, check=True)
-        except AllOnesData:
-            log.warning(f'{self}: prevented IErrorSigTgt write of all-ones')
-            self.usable = False
-            return
+        # Revisit: sz=6 on orthus causes it to clear TETH/TETE/FCFWDProgress
+        #self.comp.control_write(iface, genz.InterfaceStructure.IErrorSigTgt,
+        #                        sz=6)
+        self.comp.control_write(iface, genz.InterfaceStructure.IErrorSigTgt,
+                                sz=8)
         # Set IErrorDetect - last, after other IError fields setup
-        ierr_det = genz.IErrorDetect(iface.IErrorDetect, iface)
-        ierr_det.field.ExcessivePHYRetraining = 1
-        ierr_det.field.NonTransientLinkErr = 1
-        ierr_det.field.IfaceContainment = 1
-        ierr_det.field.IfaceFCFwdProgressViolation = 1
-        ierr_det.field.UnexpectedPHYFailure = 1
-        ierr_det.field.IfaceAE = 1
-        ierr_det.field.SwitchPktRelayFailure = 1
-        # Revisit: other interface errors
+        try:
+            ierr_det = genz.IErrorDetect(iface.IErrorDetect, iface, check=True)
+        except AllOnesData:
+            return self.warn_unusable('IErrorDetect is all-ones')
+        ierr_det.ExcessivePHYRetraining = 1
+        ierr_det.NonTransientLinkErr = 1
+        ierr_det.IfaceContainment = 1
+        ierr_det.IfaceAKEYViolation = 0 # Revisit: AKeys
+        ierr_det.IfaceFCFwdProgressViolation = 1
+        ierr_det.UnexpectedPHYFailure = 1
+        ierr_det.P2PSECE = 0
+        ierr_det.IfaceAE = 1
+        ierr_det.SwitchPktRelayFailure = 1
         iface.IErrorDetect = ierr_det.val
-        log.debug('{}: writing IErrorDetect'.format(self))
+        log.debug(f'{self}: writing IErrorDetect={ierr_det.val:#x}')
         # Revisit: switch doesn't like sz=2, off=2, because at least on orthus
         # that turns into a 4-byte ControlWrite to a 2-byte-aligned addr
         #self.comp.control_write(iface,
         #                    genz.InterfaceStructure.IErrorDetect, sz=2, off=2)
         # Revisit: major side-effect - IErrorStatus is cleared (bits are RW1CS)
-        try:
-            self.comp.control_write(iface, genz.InterfaceStructure.IErrorStatus,
-                                    sz=8, check=True)
-        except AllOnesData:
-            log.warning(f'{self}: prevented IErrorStatus write of all-ones')
-            self.usable = False
-            return
+        self.comp.control_write(iface, genz.InterfaceStructure.IErrorStatus,
+                                sz=4)
 
     def clear_ierror_status(self, bitNum: int) -> None:
         iface_file = self.iface_dir / 'interface'
@@ -287,7 +292,8 @@ class Interface():
             if iface.all_ones_type_vers_size():
                 raise AllOnesData(f'{self}: all-ones data')
             genz = zephyr_conf.genz
-            ierror_status = genz.IErrorStatus(iface.IErrorStatus, iface)
+            ierror_status = genz.IErrorStatus(iface.IErrorStatus, iface,
+                                              check=True)
             iface.IErrorStatus = (1 << bitNum)  # bits are RW1CS
             log.debug(f'{self}: writing IErrorStatus={iface.IErrorStatus:#x}, was {ierror_status.val:#x}')
             # Revisit: really want sz=2, but that doesn't work on orthus
@@ -296,23 +302,43 @@ class Interface():
         # end with
 
     def nonce_exchange(self, iface) -> bool:
+        '''Do nonce exchange between this interface and its peer, where
+        this interface has already been opened & read.
+        '''
         args = zephyr_conf.args
+        # do nonce init of peer
         try:
-            # do nonce init of peer
             self.peer_iface.do_nonce_init(sendNonce=False, noNonce=args.no_nonce)
-        except:  # Revisit: restrict to specific exceptions
+        except Exception as e:  # Revisit: restrict to specific exceptions
             # unable to talk to peer interface from PFM
+            log.warning(f'{self}: exception during nonce init of peer {self.peer_iface} - {e}')
             return False
         # do nonce init and exchange
-        nonce_valid = self.nonce_init(iface, sendNonce=True, noNonce=args.no_nonce)
+        try:
+            nonce_valid = self.nonce_init(iface, sendNonce=True,
+                                          noNonce=args.no_nonce)
+        except AllOnesData as e:
+            log.warning(f'{self}: exception during nonce init - {e}')
+            return False
         return nonce_valid
 
     def do_nonce_exchange(self) -> bool:
+        '''Do nonce exchange between this interface and its peer, where
+        neither interface has been opened & read.
+        '''
         args = zephyr_conf.args
         # do nonce init of peer
-        self.peer_iface.do_nonce_init(sendNonce=False, noNonce=args.no_nonce)
+        try:
+            self.peer_iface.do_nonce_init(sendNonce=False, noNonce=args.no_nonce)
+        except AllOnesData as e:
+            log.warning(f'{self}: exception during nonce init of peer {self.peer_iface} - {e}')
+            return False
         # do nonce init and exchange
-        nonce_valid = self.do_nonce_init(sendNonce=True, noNonce=args.no_nonce)
+        try:
+            nonce_valid = self.do_nonce_init(sendNonce=True, noNonce=args.no_nonce)
+        except AllOnesData as e:
+            log.warning(f'{self}: exception during nonce init - {e}')
+            return False
         return nonce_valid
 
     def do_nonce_init(self, sendNonce=True, noNonce=False) -> bool:
@@ -321,6 +347,8 @@ class Interface():
             data = bytearray(f.read())
             iface = self.comp.map.fileToStruct('interface', data,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
+            if iface.all_ones_type_vers_size():
+                raise AllOnesData('interface structure returned all-ones data')
             status = self.nonce_init(iface, sendNonce=sendNonce, noNonce=noNonce)
         return status
 
@@ -329,10 +357,10 @@ class Interface():
         try:
             self.peer_nonce = self.peer_comp.nonce
         except AttributeError:
-            log.debug('{}: no peer_comp yet'.format(self))
+            log.debug(f'{self}: no peer_comp yet')
             return False
         genz = zephyr_conf.genz
-        icap1ctl = genz.ICAP1Control(iface.ICAP1Control, iface)
+        icap1ctl = genz.ICAP1Control(iface.ICAP1Control, iface, check=True)
         # (temporarily) disable PeerNonceValidationEnb
         icap1ctl.PeerNonceValidationEnb = 0
         iface.ICAP1Control = icap1ctl.val
@@ -388,6 +416,8 @@ class Interface():
             data = bytearray(f.read())
             iface = self.comp.map.fileToStruct('interface', data,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
+            if iface.all_ones_type_vers_size():
+                raise AllOnesData('interface structure returned all-ones data')
             status = self.send_peer_c_reset(iface)
         return status
 
@@ -554,13 +584,12 @@ class Interface():
                 data = bytearray(f.read())
                 phy = self.comp.map.fileToStruct('interface_phy', data, fd=f.fileno(),
                                                  verbosity=self.comp.verbosity)
-                log.debug('{}: phy{}={}'.format(self.comp.gcid, self.num, phy))
                 if phy.all_ones_type_vers_size():
                     raise AllOnesData(f'{self}: PHY all-ones data')
+                log.debug(f'{self}: phy={phy}')
                 return self.phy_status_ok(phy)
         except IndexError:
-            log.debug('{}: phy{} missing - assume PHY-Up'.format(
-                self.comp.gcid, self.num))
+            log.debug(f'{self}: phy missing - assume PHY-Up')
             self.phy_status = PHYOpStatus.PHYUp
             self.phy_tx_lwr = 0
             self.phy_rx_lwr = 0
@@ -669,10 +698,13 @@ class Interface():
                 self.istats = self.comp.map.fileToStruct('interface_statistics',
                                 data, path=istats_file, core=self.comp.core,
                                 fd=f.fileno(), verbosity=self.comp.verbosity)
+                if self.istats.all_ones_type_vers_size():
+                    raise AllOnesData(f'{self}: interface stats all-ones data')
             else:
                 self.istats.set_fd(f)
             genz = zephyr_conf.genz
-            istat_ctl = genz.IStatControl(self.istats.IStatControl, self.istats)
+            istat_ctl = genz.IStatControl(self.istats.IStatControl, self.istats,
+                                          check=True)
             istat_ctl.StatsEnb = int(enb)
             istat_ctl.StatsReset = int(reset)
             istat_ctl.InitiateStatsSnapshot = int(snapshot)

@@ -277,9 +277,12 @@ class Component():
         gcid = None
         core_file = self.path / prefix / 'core@0x0/core'
         with core_file.open(mode='rb+') as f:
+            # Revisit: optimize this to avoid reading entire Core struct
             data = bytearray(f.read())
             core = self.map.fileToStruct('core', data, fd=f.fileno(),
                                          verbosity=self.verbosity)
+            if core.all_ones_type_vers_size():
+                raise AllOnesData(f'{self}: core structure all-ones data')
             if core.CV:
                 gcid = GCID(val=core.CID0)  # Revisit: Subnets
         return gcid
@@ -294,7 +297,7 @@ class Component():
                 pg = self.map.fileToStruct('component_page_grid', data,
                                            fd=f.fileno(),
                                            verbosity=self.verbosity)
-                cap1 = genz.PGZMMUCAP1(pg.PGZMMUCAP1, pg)
+                cap1 = genz.PGZMMUCAP1(pg.PGZMMUCAP1, pg, check=True)
                 if cap1.field.ZMMUType == genz.ZMMUType.RspZMMU:
                     return pg_dir
             # end with
@@ -364,6 +367,11 @@ class Component():
         return (self.cstate == CState.CUp or self.cstate == CState.CLP or
                 self.cstate == CState.CDLP)
 
+    def warn_unusable(self, msg: str) -> bool:
+        log.warning(f'{self}: {msg}')
+        self.usable = False
+        return False
+
     # Returns True if component is usable - is C-Up/C-LP/C-DLP, not C-Down
     def comp_init(self, pfm, prefix='control', ingress_iface=None, route=None):
         args = zephyr_conf.args
@@ -384,19 +392,21 @@ class Component():
             self.core = core
             # verify good data, at structure start
             if core.all_ones_type_vers_size():
-                log.warning(f'{self}: core structure returned all-ones data')
-                self.usable = False
-                return False
+                return self.warn_unusable('core structure returned all-ones data')
             # verify good data near structure end (check ZUUID)
             if core.ZUUID != genzUUID:
-                log.warning(f'{self}: invalid core structure ZUUID {core.ZUUID}')
-                self.usable = False
-                return False
+                return self.warn_unusable(f'invalid core structure ZUUID {core.ZUUID}')
             # save cstate and use below to control writes (e.g., CID0)
-            cstatus = genz.CStatus(core.CStatus, core)
+            try:
+                cstatus = genz.CStatus(core.CStatus, core, check=True)
+            except AllOnesData:
+                return self.warn_unusable('CStatus is all-ones')
             self.cstate = CState(cstatus.field.CState)
             # save some other key values
-            cap1 = genz.CAP1(core.CAP1, core)
+            try:
+                cap1 = genz.CAP1(core.CAP1, core, check=True)
+            except AllOnesData:
+                return self.warn_unusable('CAP1 is all-ones')
             self.timer_unit = cap1.field.TimerUnit
             self.ctl_timer_unit = cap1.field.CtlTimerUnit
             self.cclass = core.BaseCClass
@@ -441,9 +451,7 @@ class Component():
             try:
                 rows, cols = self.ssdt_size(prefix=prefix)
             except AllOnesData:
-                log.warning(f'{self}: ssdt_size returned all-ones data')
-                self.usable = False
-                return False
+                return self.warn_unusable('ssdt_size returned all-ones data')
             # initialize SSDT route info (required before set_ssdt())
             from zephyr_route import RouteInfo
             self.route_info = [[RouteInfo() for j in range(cols)]
@@ -494,14 +502,10 @@ class Component():
                     self.control_read(core, genz.CoreStructure.CV,
                                       sz=8, check=True)
                 except AllOnesData:
-                    log.warning(f'{self}: CV/CID0 returned all-ones data')
-                    self.usable = False
-                    return False
+                    return self.warn_unusable('CV/CID0 returned all-ones data')
                 # Revisit: retry if CCTO expired?
                 if core.CV == 0 and core.CID0 == 0:
-                    log.warning(f'{self}: CV/CID0 is 0 - CCTO expired')
-                    self.usable = False
-                    return False
+                    return self.warn_unusable('CV/CID0 is 0 - CCTO expired')
                 # we have set up just enough for "normal" responses to work -
                 # tell the kernel about the new/changed component and stop DR
                 try:
@@ -511,9 +515,7 @@ class Component():
                         self.dr = None
                         prefix = 'control'
                 except Exception as e:
-                    log.error(f'add_fab_comp(gcid={self.gcid},tmp_gcid={self.tmp_gcid},dr={self.dr}) failed with exception {e}')
-                    self.usable = False
-                    return self.usable
+                    return self.warn_unusable(f'add_fab_comp(gcid={self.gcid},tmp_gcid={self.tmp_gcid},dr={self.dr}) failed with exception {e}')
                 # replace DR routes from PFM with non-DR versions
                 self.fab.replace_dr_routes(pfm, self)
             # end if pfm
@@ -548,13 +550,9 @@ class Component():
                 self.control_read(core, genz.CoreStructure.MGRUUIDl,
                                   sz=16, check=True)
             except AllOnesData:
-                log.warning(f'{self}: all-ones MGRUUID - component not owned')
-                self.usable = False
-                return False
+                return self.warn_unusable('all-ones MGRUUID - component not owned')
             if core.MGRUUID != self.mgr_uuid:
-                log.warning(f'{self}: component MGRUUID {core.MGRUUID} != PFM MGRUUID {self.mgr_uuid} - component not owned')
-                self.usable = False
-                return False
+                return self.warn_unusable(f'component MGRUUID {core.MGRUUID} != PFM MGRUUID {self.mgr_uuid} - component not owned')
             # set PFMSID/PFMCID (must be before PrimaryFabMgrRole = 1)
             # Revisit: subnets
             core.PFMCID = pfm.gcid.cid
@@ -658,15 +656,13 @@ class Component():
             if self.usable:
                 # Revisit: before setting ComponentEnb, once again check that
                 # CCTO never expired
-                cctl = genz.CControl(core.CControl, core)
+                try:
+                    cctl = genz.CControl(core.CControl, core, check=True)
+                except AllOnesData:
+                    return self.warn_unusable('CControl is all-ones')
                 cctl.field.ComponentEnb = 1
                 core.CControl = cctl.val
-                try:
-                    self.control_write(core, genz.CoreStructure.CControl, sz=8)
-                except AllOnesData:
-                    log.warning(f'{self}: prevented CControl write of all-ones')
-                    self.usable = False
-                    return False
+                self.control_write(core, genz.CoreStructure.CControl, sz=8)
                 log.info(f'{self.gcid} transitioning to C-Up')
                 # update our peer's peer-info (about us, now that we're C-Up)
                 if (ingress_iface is not None and
@@ -679,7 +675,10 @@ class Component():
                 log.info('{} has no usable interfaces'.format(self.path))
         # end with
         if self.has_switch:
-            self.switch_init(core)
+            try:
+                self.switch_init(core)
+            except AllOnesData:
+                return self.warn_unusable('switch_init returned all-ones data')
         self.comp_err_signal_init(core)
         self.fab.update_comp(self, forceTimestamp=True)
         return self.usable
@@ -693,10 +692,12 @@ class Component():
             data = bytearray(f.read())
             opcode_set = self.map.fileToStruct('opcode_set', data, fd=f.fileno(),
                                                verbosity=self.verbosity)
+            if opcode_set.all_ones_type_vers_size():
+                raise AllOnesData(f'{self}: opcode set all-ones data')
             log.debug('{}: {}'.format(self.gcid, opcode_set))
-            cap1 = genz.OpCodeSetCAP1(opcode_set.CAP1, opcode_set)
+            cap1 = genz.OpCodeSetCAP1(opcode_set.CAP1, opcode_set, check=True)
             cap1ctl = genz.OpCodeSetCAP1Control(opcode_set.CAP1Control,
-                                                opcode_set)
+                                                opcode_set, check=True)
             # Revisit: set cap1ctl.EnbCacheLineSz
             if cap1.field.UniformOpClassSup:
                 # set Uniform Explicit OpClasses
@@ -958,6 +959,8 @@ class Component():
             ces = self.map.fileToStruct('component_error_and_signal_event',
                                         data, fd=f.fileno(),
                                         verbosity=self.verbosity)
+            if ces.all_ones_type_vers_size():
+                raise AllOnesData(f'{self}: all-ones data')
             self.pfm_uep_init(ces, pfm, valid=valid)
 
     def sfm_uep_init(self, ces, sfm, valid=True):
@@ -999,6 +1002,8 @@ class Component():
             ces = self.map.fileToStruct('component_error_and_signal_event',
                                         data, fd=f.fileno(),
                                         verbosity=self.verbosity)
+            if ces.all_ones_type_vers_size():
+                raise AllOnesData(f'{self}: all-ones data')
             self.sfm_uep_init(ces, sfm, valid=valid)
 
     def comp_err_signal_init(self, core):
@@ -1011,6 +1016,8 @@ class Component():
             ces = self.map.fileToStruct('component_error_and_signal_event',
                                         data, fd=f.fileno(),
                                         verbosity=self.verbosity)
+            if ces.all_ones_type_vers_size():
+                raise AllOnesData(f'{self}: all-ones data')
             log.debug('{}: {}'.format(self.gcid, ces))
             # Set EControl UEP Target fields
             ectl = genz.EControl(ces.EControl, ces)
@@ -1061,18 +1068,20 @@ class Component():
             self.pfm_uep_init(ces, self.fab.pfm)
         # end with
 
-    def switch_init(self, core):
+    def switch_init(self, core) -> None:
         genz = zephyr_conf.genz
         switch_file = self.switch_dir / 'component_switch'
         with switch_file.open(mode='rb+') as f:
             data = bytearray(f.read())
             switch = self.map.fileToStruct('component_switch', data, fd=f.fileno(),
                                            verbosity=self.verbosity)
+            if switch.all_ones_type_vers_size():
+                raise AllOnesData('switch structure returned all-ones data')
             log.debug('{}: {}'.format(self.gcid, switch))
             # Revisit: write MV/MGMT VC/MGMT Iface ID
             # Revisit: write MCPRTEnb, MSMCPRTEnb, Default MC Pkt Relay
             # Enable Packet Relay
-            sw_op_ctl = genz.SwitchOpCTL(switch.SwitchOpCTL, core)
+            sw_op_ctl = genz.SwitchOpCTL(switch.SwitchOpCTL, core, check=True)
             sw_op_ctl.field.PktRelayEnb = 1
             switch.SwitchOpCTL = sw_op_ctl.val
             self.control_write(
@@ -1093,6 +1102,8 @@ class Component():
             pg = self.map.fileToStruct('component_page_grid', data,
                                        fd=f.fileno(),
                                        verbosity=self.verbosity)
+            if pg.all_ones_type_vers_size():
+                raise AllOnesData(f'{self}: component page grid all-ones data')
             log.debug('{}: {}'.format(self.gcid, pg))
             # Revisit: verify the PG-PTE-UUID
         # end with
@@ -1160,6 +1171,8 @@ class Component():
             comp_dest = self.map.fileToStruct(
                 'component_destination_table',
                 data, fd=f.fileno(), verbosity=self.verbosity)
+            if comp_dest.all_ones_type_vers_size():
+                raise AllOnesData('comp dest structure returned all-ones data')
         # end with
         if haveCore:
             self.comp_dest = comp_dest
@@ -1182,7 +1195,7 @@ class Component():
                                 parent=self.core.sw, core=self.core,
                                 fd=f.fileno(), verbosity=self.verbosity)
                 self.core.route_control = rc
-                cap1 = genz.RCCAP1(rc.RCCAP1, rc)
+                cap1 = genz.RCCAP1(rc.RCCAP1, rc, check=True)
                 hcs = cap1.field.HCS
             # end with
         else:  # Route Control is missing - assume HCS=0
@@ -1199,6 +1212,8 @@ class Component():
             data = bytearray(f.read())
             self.core.sw = self.map.fileToStruct('component_switch',
                                 data, fd=f.fileno(), verbosity=self.verbosity)
+            if self.core.sw.all_ones_type_vers_size():
+                raise AllOnesData('switch structure returned all-ones data')
         # end with
         self.core.sw.HCS = self.route_control_read(prefix=prefix)
         return self.core.sw
@@ -1685,7 +1700,7 @@ class Component():
             data = bytearray(f.read())
             core = self.map.fileToStruct('core', data, fd=f.fileno(),
                                          verbosity=self.verbosity)
-            cstatus = genz.CStatus(core.CStatus, core)
+            cstatus = genz.CStatus(core.CStatus, core, check=True)
             self.cstate = CState(cstatus.field.CState)
             if forceTimestamp or (self.cstate != prev_cstate):
                 self.fab.update_mod_timestamp(comp=self)
@@ -1706,14 +1721,14 @@ class Component():
                 data = bytearray(f.read())
                 core = self.map.fileToStruct('core', data, fd=f.fileno(),
                                              verbosity=self.verbosity)
-                cctl = genz.CControl(core.CControl, core)
-                cctl.field.ComponentReset = CReset.WarmReset
-                core.CControl = cctl.val
                 try:
-                    self.control_write(core, genz.CoreStructure.CControl, sz=8)
+                    cctl = genz.CControl(core.CControl, core, check=True)
                 except AllOnesData:
-                    log.warning(f'{self}: prevented CControl write of all-ones')
+                    log.warning(f'{self}: CControl is all-ones')
                     return None
+                cctl.ComponentReset = CReset.WarmReset
+                core.CControl = cctl.val
+                self.control_write(core, genz.CoreStructure.CControl, sz=8)
             # end with
         # end if
         iface.update_peer_info()

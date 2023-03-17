@@ -244,11 +244,17 @@ class RKey():
         return '{:03x}:{:05x}'.format(self.rkd, self.os)
 
 class SpecialField():
-    def __init__(self, value, parent=None, verbosity=0):
+    def __init__(self, value, parent=None, verbosity=0, check=False):
         self.value = value
         self.parent = parent
         self.verbosity = verbosity
         super().__init__(val=value)
+        if check:
+            sz = sizeof(self)
+            if sz <= 8: # Revisit: sz > 8, like CErrorSigTgt
+                ones = (1 << (sz * 8)) - 1
+                if value == ones:
+                    raise AllOnesData(f'{repr(self)}: all-ones data')
 
     def __repr__(self):
         return '{}({:#x})'.format(type(self).__name__, self.value)

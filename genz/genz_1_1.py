@@ -340,8 +340,8 @@ class CStatus(SpecialField, Union):
     _therm   = ['Nominal', 'Caution', 'Exceeded', 'Shutdown']
     _special = {'CState': _c_state, 'ThermStatus': _therm}
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class CControl(SpecialField, Union):
@@ -369,8 +369,8 @@ class CControl(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', CControlFields), ('val', c_u64)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class CAP1(SpecialField, Union):
@@ -443,8 +443,8 @@ class CAP1(SpecialField, Union):
                 'TimerUnit': _tu, 'MaxCID': _max_cid
     }
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class CAP1Control(SpecialField, Union):
@@ -504,8 +504,8 @@ class CAP1Control(SpecialField, Union):
                 'HostMgrMGRUUIDEnb': _mgr_uuid
     }
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class CAP2(SpecialField, Union):
@@ -552,8 +552,8 @@ class CAP2(SpecialField, Union):
                 'MetaRdWrSup': _meta, 'DIPIBlockSzSup': _di_pi_sz
     }
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class CAP2Control(SpecialField, Union):
@@ -587,8 +587,8 @@ class CAP2Control(SpecialField, Union):
     _special = {'DIPIBlockSize': _di_pi_sz
     }
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class DestTableCAP1(SpecialField, Union):
@@ -603,8 +603,8 @@ class DestTableCAP1(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', DestTableCAP1Fields), ('val', c_u32)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class DestTableControl(SpecialField, Union):
@@ -617,8 +617,8 @@ class DestTableControl(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', DestTableControlFields), ('val', c_u32)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class EControl(SpecialField, Union):
@@ -645,8 +645,8 @@ class EControl(SpecialField, Union):
                 'MediaUEPTgt': _media_tgt,
     }
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class EControl2(SpecialField, Union):
@@ -661,8 +661,8 @@ class EControl2(SpecialField, Union):
     _special = {'PwrUEPTgt': _pwr_tgt,
     }
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class EStatus(SpecialField, Union):
@@ -675,8 +675,8 @@ class EStatus(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', EStatusFields), ('val', c_u16)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class ErrSigCAP1(SpecialField, Union):
@@ -697,8 +697,8 @@ class ErrSigCAP1(SpecialField, Union):
     _special = {'VdefErrLogUUID': _vdef_err,
     }
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class ErrSigCAP1Control(SpecialField, Union):
@@ -713,8 +713,8 @@ class ErrSigCAP1Control(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', ErrSigCAP1ControlFields), ('val', c_u16)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class IntCompErrorES(SpecialField, Union):
@@ -841,8 +841,8 @@ class CError(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', CErrorFields), ('val', c_u64)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
     @staticmethod
@@ -964,8 +964,8 @@ class CEvent(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', CEventFields), ('val', c_u64)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class CEventStatus(CEvent):
@@ -1049,8 +1049,8 @@ class IEvent(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', IEventFields), ('val', c_u64)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
     @staticmethod
@@ -1121,8 +1121,8 @@ class OpCodeSetCAP1(SpecialField, Union):
                 'InterruptRole': _role,
     }
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class OpCodeSetCAP1Control(SpecialField, Union):
@@ -1139,8 +1139,8 @@ class OpCodeSetCAP1Control(SpecialField, Union):
     _special = {'EnbCacheLineSz': _cache_sz, 'IfaceUniformOpClass': _uniform,
     }
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class OpCodeSetIDControl1(SpecialField, Union):
@@ -1152,8 +1152,8 @@ class OpCodeSetIDControl1(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_     = [('field', Control1Fields), ('val', c_u16)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class IStatus(SpecialField, Union):
@@ -1184,8 +1184,8 @@ class IStatus(SpecialField, Union):
                    'UnsupPHYStateReq', 'UnableToCompleteLUpLLP']
     _special = {'IState': _i_state, 'LinkCTLComplStatus': _ctl_stat}
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
     @property
@@ -1225,8 +1225,8 @@ class IControl(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', IControlFields), ('val', c_u32)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class ICAP1(SpecialField, Union):
@@ -1268,8 +1268,8 @@ class ICAP1(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', ICAP1Fields), ('val', c_u32)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class ICAP1Control(SpecialField, Union):
@@ -1311,8 +1311,8 @@ class ICAP1Control(SpecialField, Union):
     _agg_iface  = ['Independent', 'NAI', 'SAI', 'Rv']
     _special = {'OpClassSelect': _opclass, 'AggIfaceCtl': _agg_iface}
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class ICAP2(SpecialField, Union):
@@ -1327,8 +1327,8 @@ class ICAP2(SpecialField, Union):
     _te_hist_sz = ['256', '512', '1024']
     _special = {'TEHistSize': _te_hist_sz}
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class ICAP2Control(SpecialField, Union):
@@ -1341,8 +1341,8 @@ class ICAP2Control(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', ICAP2ControlFields), ('val', c_u32)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 # Base class for IError{Status,Detect,Trig,FaultInj}
@@ -1363,8 +1363,8 @@ class IError(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', IErrorFields), ('val', c_u16)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class IErrorStatus(IError):
@@ -1403,8 +1403,8 @@ class IErrorES(SpecialField, Union):
                    8: ('SwitchPktRelayFailure',       ErrSeverity.Caution),
                   }
 
-    def __init__(self, value, parent=None, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent=None, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
     @property
@@ -1445,10 +1445,13 @@ class IErrorSigTgt(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', IErrorSigTgtFields), ('val', c_u16 * 3)]
 
-    def __init__(self, value, parent, verbosity=0):
+    def __init__(self, value, parent, verbosity=0, check=False):
         v_list = [((value >> (i*16)) & 0xffff) for i in range(3)]
         arr_val = (c_u16 * 3)(*v_list)
         super().__init__(arr_val, parent, verbosity=verbosity)
+        if check:
+            if value == 0xffffffffffff:
+                raise AllOnesData(f'{type(self).__name__}: all-ones data')
         self.val = arr_val
 
 class PeerState(SpecialField, Union):
@@ -1489,8 +1492,8 @@ class PeerState(SpecialField, Union):
                 'PeerIfaceFCSup': _fc_sup,
                 'PeerUniformOpClassSelected': _opclass}
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class LinkCTLControl(SpecialField, Union):
@@ -1512,8 +1515,8 @@ class LinkCTLControl(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', LinkCTLControlFields), ('val', c_u32)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class PHYStatus(SpecialField, Union):
@@ -1542,8 +1545,8 @@ class PHYStatus(SpecialField, Union):
                 'PHYLayerRetrainingStatus': _phy_retrain_status,
     }
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class PHYType(SpecialField, Union):
@@ -1556,8 +1559,8 @@ class PHYType(SpecialField, Union):
                  'NullPHY']
     _special = {'PHYType': _phy_type}
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class IStatStatus(SpecialField, Union):
@@ -1570,8 +1573,8 @@ class IStatStatus(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', IStatStatusFields), ('val', c_u8)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class IStatControl(SpecialField, Union):
@@ -1585,8 +1588,8 @@ class IStatControl(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', IStatControlFields), ('val', c_u8)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class IStatCAP1(SpecialField, Union):
@@ -1604,8 +1607,8 @@ class IStatCAP1(SpecialField, Union):
                 'MaxSnapshotTime': _snap_time,
                 }
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class PACAP1(SpecialField, Union):
@@ -1627,8 +1630,8 @@ class PACAP1(SpecialField, Union):
     _pa_ent_sz = ['16bits']
     _special = {'PAIdxSz': _pa_idx_sz, 'PAEntrySz': _pa_ent_sz}
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class PACAP1Control(SpecialField, Union):
@@ -1640,8 +1643,8 @@ class PACAP1Control(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', PACAP1ControlFields), ('val', c_u32)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class CPageSz(SpecialField, Union):
@@ -1654,7 +1657,7 @@ class CPageSz(SpecialField, Union):
     _special = {'CPageSz': _cpage_sz}
 
     def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class CAccessCAP1(SpecialField, Union):
@@ -1685,8 +1688,8 @@ class CAccessCTL(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', CAccessCTLFields), ('val', c_u8)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class PGZMMUCAP1(SpecialField, Union):
@@ -1704,8 +1707,8 @@ class PGZMMUCAP1(SpecialField, Union):
     _type    = ['ReqZMMU', 'RspZMMU']
     _special = {'ZMMUType': _type}
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class PTZMMUCAP1(SpecialField, Union):
@@ -1723,8 +1726,8 @@ class PTZMMUCAP1(SpecialField, Union):
     _type    = ['ReqZMMU', 'RspZMMU']
     _special = {'ZMMUType': _type}
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class PTEATTRl(SpecialField, Union):
@@ -1779,11 +1782,11 @@ class PTEATTRl(SpecialField, Union):
     _tc_sz   = ['None', '4bits']
     _special = {'TCSz': _tc_sz}
 
-    def __init__(self, value, parent, verbosity=0):
+    def __init__(self, value, parent, verbosity=0, check=False):
         # Revisit: PG vs PT
         cap1 = PGZMMUCAP1(parent.PGZMMUCAP1, parent)
         self.zmmuType = cap1.field.ZMMUType
-        super().__init__(value, parent, verbosity=verbosity)
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
     @property
@@ -1803,8 +1806,8 @@ class RCCAP1(SpecialField, Union):
     _tbl_sz     = ['48B']
     _special = {'RtCtlTableSz': _tbl_sz}
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class RKDCAP1(SpecialField, Union):
@@ -1818,8 +1821,8 @@ class RKDCAP1(SpecialField, Union):
     _tbl_type   = ['Fixed4096bit']
     _special = {'RKDTableType': _tbl_type}
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class RKDControl1(SpecialField, Union):
@@ -1832,8 +1835,8 @@ class RKDControl1(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', RKDControl1Fields), ('val', c_u16)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class SwitchCAP1(SpecialField, Union):
@@ -1852,8 +1855,8 @@ class SwitchCAP1(SpecialField, Union):
     _scale   = ['ps', 'ns']
     _special = {'ULATScale': _scale, 'MLATScale': _scale}
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class SwitchCAP1Control(SpecialField, Union):
@@ -1868,8 +1871,8 @@ class SwitchCAP1Control(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', SwitchCAP1ControlFields), ('val', c_u32)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class SwitchOpCTL(SpecialField, Union):
@@ -1881,8 +1884,8 @@ class SwitchOpCTL(SpecialField, Union):
     _anonymous_ = ('field',)
     _fields_    = [('field', SwitchOpCTLFields), ('val', c_u16)]
 
-    def __init__(self, value, parent, verbosity=0):
-        super().__init__(value, parent, verbosity=verbosity)
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
 class OpClasses():
