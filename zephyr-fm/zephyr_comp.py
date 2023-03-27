@@ -1122,12 +1122,14 @@ class Component():
                                              fd=f.fileno(), parent=pg,
                                              verbosity=self.verbosity)
             log.debug('{}: {}'.format(self.gcid, pg_table))
+            # Direct-mapped pages start at zaddr 0
             pg_table[0].PGBaseAddr = 0
             pg_table[0].PageSz = ps
             pg_table[0].RES = 0
             pg_table[0].PageCount = pte_cnt
             pg_table[0].BasePTEIdx = 0
-            pg_table[1].PGBaseAddr = 1 << (63 - 12)
+            # Interleaved pages start at zaddr 0x8000000000000000
+            pg_table[1].PGBaseAddr = 1 << (63 - 12) # base addr is 52-bit field
             pg_table[1].PageSz = ps
             pg_table[1].RES = 0
             pg_table[1].PageCount = pte_cnt

@@ -101,10 +101,14 @@ class PHYOpStatus(IntEnum):
                  self.value <= PHYOpStatus.PHYUpLP4))
 
 class SigTgt(IntEnum):
-    TgtNone  = 0
-    TgtIntr0 = 0x1
-    TgtIntr1 = 0x2
-    TgtUEP   = 0x4
+    TgtNone      = 0
+    TgtIntr0     = 0x1
+    TgtIntr1     = 0x2
+    TgtIntr01    = 0x3
+    TgtUEP       = 0x4
+    TgtIntr0UEP  = 0x5
+    TgtIntr1UEP  = 0x6
+    TgtIntr01UEP = 0x7
 
 class UEPTgt(IntEnum):
     TgtPM      = 0

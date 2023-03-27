@@ -433,7 +433,7 @@ class Fabric(nx.MultiGraph):
         dr_comp = dr.comp
         if dr_comp == fr:  # special case for direct attach
             rt = Route([fr, to], [dr])
-            if rt.route_entries_avail():
+            if rt not in cur_routes and rt.route_entries_avail():
                 rt.route_info_update(True)
                 yield rt
             return
@@ -550,7 +550,14 @@ class Fabric(nx.MultiGraph):
         return (to_routes, fr_routes)
 
     def teardown_routing(self, fr: Component, to: Component,
-                         routes: List[Route] = None, send=True) -> None:
+                         routes: List[Route] = None, send=True,
+                         iface: Interface = None) -> None:
+        '''Teardown routes from @fr to @to.
+        If @routes is None, then teardown all current routes. Otherwise, @routes
+        is a list of the routes to tear down.
+        If @iface is not None, then it is the interface that has become
+        unusable, forcing the teardown.
+        '''
         # Revisit: when tearing down HW routes from "fr" to "to",
         # Revisit: some of the components may not be reachable from PFM
         cur_rts = self.get_routes(fr, to)
@@ -560,10 +567,11 @@ class Fabric(nx.MultiGraph):
             if route not in cur_rts:
                 log.debug(f'skipping missing route {route}')
             else:
-                last = route.refcount.dec()
-                if not last:
-                    log.debug(f'decremented route {route} refcount, refcount={route.refcount.value()}')
-                    continue
+                if iface is None: # teardown due to resource removal
+                    last = route.refcount.dec()
+                    if not last:
+                        log.debug(f'decremented route {route} refcount, refcount={route.refcount.value()}')
+                        continue
                 log.debug(f'removing route(hc={route.hc}) from {fr} to {to} via {route}')
                 route.route_info_update(False) # remove route_info
                 self.write_route(route, enable=False, refcountOnly=(not send))
@@ -640,7 +648,7 @@ class Fabric(nx.MultiGraph):
         # Revisit: do 1 send_mgrs for impacted, not 1 per (rt.fr, rt.to)
         log.info(f'{len(impacted)} routes impacted by unusable {iface}: {impacted}')
         for (fr, to), rts in fr_to.items():
-            self.teardown_routing(fr, to, rts)
+            self.teardown_routing(fr, to, rts, iface=iface)
         for fr, to in fr_to.keys():
             # route around failed link (if possible)
             try:

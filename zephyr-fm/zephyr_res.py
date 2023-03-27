@@ -29,6 +29,7 @@ from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverit
 from copy import deepcopy
 from pdb import set_trace
 from typing import List
+from collections import defaultdict
 from zephyr_conf import log
 
 class Resource():
@@ -152,8 +153,8 @@ class ResourceList():
 class Resources():
     def __init__(self, fab: 'Fabric', resources: List[Resource] = []):
         self.fab = fab
-        self.by_producer = {} # key: producer Component, val: ResourceList set
-        self.by_consumer = {} # key: consumer Component, val: ResourceList set
+        self.by_producer = defaultdict(set) # key: producer Component, val: ResourceList set
+        self.by_consumer = defaultdict(set) # key: consumer Component, val: ResourceList set
         self.by_instance_uuid = {} # key: instance UUID, val: Resource
         self.mod_timestamp = time.time_ns()
         for res in resources:
@@ -163,15 +164,9 @@ class Resources():
         self.by_instance_uuid[res.instance_uuid] = res
         res_list = res.res_list
         res_list.set_parent(self, ts=ts)
-        try:
-            self.by_producer[res.producer].add(res_list)
-        except KeyError:
-            self.by_producer[res.producer] = set([res_list])
+        self.by_producer[res.producer].add(res_list)
         for cons in res.consumers:
-            try:
-                self.by_consumer[cons].add(res_list)
-            except KeyError:
-                self.by_consumer[cons] = set([res_list])
+            self.by_consumer[cons].add(res_list)
         # end for
 
     def remove(self, res: Resource, ts=None) -> None:

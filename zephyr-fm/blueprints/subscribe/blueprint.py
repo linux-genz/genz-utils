@@ -108,7 +108,7 @@ def send_move_local_bridge(fab, br_cuuid_serial, endpoint):
         resp = msg.json()
         fab.set_comp_name(br, resp['name'])
         if not msg.ok:
-            log.warning(f'send_move_local_bridge HTTP status {msg.status_code}')
+            log.warning(f'send_move_local_bridge {br} HTTP status {msg.status_code}')
         return resp
     except Exception as err:
         return None
