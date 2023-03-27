@@ -224,21 +224,22 @@ class Component():
             self.update_path()
         return ret
 
-    def remove_fab_comp(self, force=False):
+    def remove_fab_comp(self, force=False, useDR=True, useTMP=True, rm_paths=True):
         if not (force or self.paths_setup):
             return None
         log.debug(f'remove_fab_comp for {self}, paths_setup={self.paths_setup}, force={force}')
         cmd_name = self.nl.cfg.get('REMOVE_FAB_COMP')
         data = {'gcid':     self.gcid.val,
                 'br_gcid':  self.br_gcid.val,
-                'tmp_gcid': self.tmp_gcid.val if self.tmp_gcid else INVALID_GCID.val,
-                'dr_gcid':  self.dr.gcid.val if self.dr else INVALID_GCID.val,
-                'dr_iface': self.dr.egress_iface.num if self.dr else 0,
+                'tmp_gcid': self.tmp_gcid.val if (self.tmp_gcid and useTMP) else INVALID_GCID.val,
+                'dr_gcid':  self.dr.gcid.val if (self.dr and useDR) else INVALID_GCID.val,
+                'dr_iface': self.dr.egress_iface.num if (self.dr and useDR) else 0,
                 'mgr_uuid': self.mgr_uuid,
         }
         msg = self.nl.build_msg(cmd=cmd_name, data=data)
         ret = self.nl.sendmsg(msg)
-        self.remove_paths()
+        if rm_paths:
+            self.remove_paths()
         return ret
 
     def add_fab_dr_comp(self):
@@ -413,6 +414,8 @@ class Component():
             self.max_data = core.MaxData
             self.max_iface = core.MaxInterface
             self.cuuid = core.CUUID
+            self.serial = core.SerialNumber
+            self.cuuid_serial = f'{self.cuuid}:{self.serial:#018x}'
             # create and read (but do not HW init) the switch struct
             self.switch_read(prefix=prefix)
             # create and read (but do not HW init) all interfaces
@@ -433,6 +436,8 @@ class Component():
                     pass
             # end for
             if pfm and self.cstate is CState.CCFG:
+                # lookup cuuid_serial and potentially adjust GCID
+                self.fab.reassign_gcid(self)
                 # set CV/CID0/SID0 - first Gen-Z control write if !local_br
                 # Revisit: support subnets and multiple CIDs
                 core.CID0 = self.gcid.cid
@@ -520,13 +525,9 @@ class Component():
                 self.fab.replace_dr_routes(pfm, self)
             # end if pfm
         # end with
-        cuuid = get_cuuid(self.path)
-        serial = get_serial(self.path)
-        self.cuuid = cuuid
-        self.serial = int(serial, base=0)
-        self.cuuid_serial = str(cuuid) + ':' + serial
         self.fru_uuid = get_fru_uuid(self.path)
         self.fab.add_comp(self)
+        self.fab.update_assigned_gcids(self)
         if not pfm:
             return self.check_usable()
         # re-open core file at (potential) new location set by add_fab_comp()
@@ -1163,9 +1164,9 @@ class Component():
     def comp_dest_read(self, prefix='control', haveCore=True):
         if self.comp_dest is not None:
             return self.comp_dest
-        comp_dest_dir = list((self.path / prefix).glob(
+        self.comp_dest_dir = list((self.path / prefix).glob(
             'component_destination_table@*'))[0]
-        comp_dest_file = comp_dest_dir / 'component_destination_table'
+        comp_dest_file = self.comp_dest_dir / 'component_destination_table'
         with comp_dest_file.open(mode='rb') as f:
             data = bytearray(f.read())
             comp_dest = self.map.fileToStruct(
@@ -1183,9 +1184,16 @@ class Component():
     # returns route_control.HCS
     def route_control_read(self, prefix='control'):
         genz = zephyr_conf.genz
-        try:  # Revisit: route control is required, but missing in current HW
-            rc_dir = list(self.switch_dir.glob('route_control@*'))[0]
-        except IndexError:
+        # route control can be found either in comp_dest_dir or switch_dir
+        if self.comp_dest_dir is not None:
+            parent_dir = self.comp_dest_dir
+        elif self.switch_dir is not None:
+            parent_dir = self.switch_dir
+        else:
+            parent_dir = None
+        try:  # Revisit: route control is required, but missing in some HW
+            rc_dir = list(parent_dir.glob('route_control@*'))[0]
+        except (AttributeError, IndexError):
             rc_dir = None
         if rc_dir is not None:
             rc_path = rc_dir / 'route_control'
@@ -1527,8 +1535,8 @@ class Component():
         # 3. cstate is C-LP/C-DLP:
         #    Revisit: handle these power states
         # Note: C-Down is handled in explore_interfaces() - we never get here.
+        reset_required = False
         if peer_cstate is CState.CUp:
-            reset_required = False
             peer_c_reset_only = False
             # get PeerGCID
             peer_gcid = iface.peer_gcid
@@ -1562,6 +1570,7 @@ class Component():
                                  netlink=self.nl, verbosity=self.verbosity)
                 peer_iface = Interface(comp, iface.peer_iface_num, iface,
                                        usable=True)
+                comp.found_cstate = peer_cstate
                 iface.set_peer_iface(peer_iface)
                 gcid = self.fab.assign_gcid(comp, proposed_gcid=peer_gcid,
                                             reclaim=reclaim)
@@ -1634,6 +1643,8 @@ class Component():
                 gcid = comp.gcid
                 op = 'change'
                 msg += 'reusing previously-assigned gcid={}'.format(gcid)
+            if not reset_required:
+                comp.found_cstate = peer_cstate
             # deal with "leftover" comp path from previous zephyr run
             path = self.fab.make_path(gcid)
             if path.exists():

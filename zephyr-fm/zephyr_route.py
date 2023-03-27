@@ -144,6 +144,8 @@ class RouteElement():
         comp = self.comp
         if comp.ssdt is None:
             return
+        dcid = (to.tmp_gcid.cid if (not valid and to.tmp_gcid is not None)
+                else to.gcid.cid)
         if updateRtNum:
             self.route_entries_avail(comp, to)
             self.route_info_update(to, valid)
@@ -152,19 +154,21 @@ class RouteElement():
         if comp.is_unreachable(comp.fab.pfm):
             log.debug(f'set_ssdt: {comp} is unreachable from PFM') # Revisit: debug
             return
-        mhc, hc, v, wr0, wrN = comp.compute_mhc_hc(to.gcid.cid, self.rt_num,
+        mhc, hc, v, wr0, wrN = comp.compute_mhc_hc(dcid, self.rt_num,
                                                    self.hc, valid)
         # Revisit: vca
         if wrN:
-            comp.ssdt_write(to.gcid.cid, self.egress_iface.num,
+            comp.ssdt_write(dcid, self.egress_iface.num,
                             rt=self.rt_num, valid=v, mhc=mhc, hc=hc)
         if wr0:
-            comp.ssdt_write(to.gcid.cid, 0, mhc=mhc, mhcOnly=True)
+            comp.ssdt_write(dcid, 0, mhc=mhc, mhcOnly=True)
 
     def set_lprt(self, to: Component, valid=1, updateRtNum=False,
                  refcountOnly=False):
         comp = self.comp
         iface = self.ingress_iface
+        dcid = (to.tmp_gcid.cid if (not valid and to.tmp_gcid is not None)
+                else to.gcid.cid)
         if updateRtNum:
             self.route_entries_avail(comp, to)
             self.route_info_update(to, valid)
@@ -173,14 +177,14 @@ class RouteElement():
         if comp.is_unreachable(comp.fab.pfm):
             log.debug(f'set_lprt: {comp} is unreachable from PFM') # Revisit: debug
             return
-        mhc, hc, v, wr0, wrN = iface.compute_mhc_hc(to.gcid.cid, self.rt_num,
+        mhc, hc, v, wr0, wrN = iface.compute_mhc_hc(dcid, self.rt_num,
                                                     self.hc, valid)
         # Revisit: vca
         if wrN:
-            iface.lprt_write(to.gcid.cid, self.egress_iface.num,
+            iface.lprt_write(dcid, self.egress_iface.num,
                              rt=self.rt_num, valid=v, mhc=mhc, hc=hc)
         if wr0:
-            iface.lprt_write(to.gcid.cid, 0, mhc=mhc, mhcOnly=True)
+            iface.lprt_write(dcid, 0, mhc=mhc, mhcOnly=True)
 
     def to_json(self):
         return str(self)

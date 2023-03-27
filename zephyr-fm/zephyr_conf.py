@@ -80,21 +80,23 @@ class Conf():
 
     def get_assigned_cids(self):
         try:
-            return { GCID(str=cid) for cid in self.data['assigned_cids'] }
+            return { cuuid_serial: GCID(str=cid) for cuuid_serial, cid in
+                     self.data['assigned_cids'].items() }
         except KeyError:
-            return set()
+            return {}
 
     def save_assigned_cids(self, writeConf=True):
-        '''Save the list of assigned_cids whose Components are CUp.
+        '''Save a dict of cuuid_serial:assigned_cid whose Components are CUp.
         Used by a subsequent --reclaim to avoid (most) CID conflicts.
         '''
         fab = self.fab
         if fab is None:
             return
-        cUps = { c.gcid for c in fab.components.values()
+        cUps = { c.gcid for c in fab.cuuid_serial.values()
                  if c.cstate == CState.CUp }
-        assigned = cUps.intersection(fab.assigned_gcids)
-        self.data['assigned_cids'] = [str(gcid) for gcid in assigned]
+        assigned = cUps.intersection(fab.assigned_gcids.values())
+        self.data['assigned_cids'] = {
+            fab.comp_gcids[gcid].cuuid_serial: str(gcid) for gcid in assigned }
         if writeConf:
             self.write_conf_file(self.data)
 

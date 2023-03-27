@@ -23,7 +23,7 @@
 
 import ctypes
 import json
-from typing import List, Tuple, Iterator
+from typing import List, Tuple, Iterator, Optional
 from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount, AllOnesData
 import itertools
 import random
@@ -137,7 +137,7 @@ class Fabric(nx.MultiGraph):
         log.info(f'fabric: {path}, num={self.fabnum}, fab_uuid={self.fab_uuid}, mgr_uuid={self.mgr_uuid}, cur_timestamp={ns}')
 
     def assign_gcid(self, comp, ssdt_sz=4096, proposed_gcid=None, reclaim=False,
-                    cstate=CState.CUp):
+                    cstate=CState.CUp) -> Optional[GCID]:
         # Revisit: subnets
         # Revisit: CID conficts between accepted & assigned are possible
         random_cids = self.random_cids
@@ -162,7 +162,7 @@ class Fabric(nx.MultiGraph):
                 if reclaim and cstate == CState.CCFG:
                     done = False
                     while not done:
-                        if cid not in self.assigned_gcids:
+                        if cid not in self.assigned_gcids.values():
                             done = True
                         else:
                             self.avail_cids.append(cid)
@@ -176,18 +176,48 @@ class Fabric(nx.MultiGraph):
             except IndexError:
                 comp.gcid = None
         if comp.gcid is not None:
-            self.assigned_gcids.add(comp.gcid)
+            # Cannot update assigned_gcids here because cuuid_serial is
+            # not available yet - must defer to update_assigned_gcids()
+            # called later in comp_init()
             self.nodes[comp]['gcids'] = [ str(comp.gcid) ]
         return comp.gcid
 
-    def free_gcid(self, comp):
+    def update_assigned_gcids(self, comp: Component) -> None:
+        self.assigned_gcids[comp.cuuid_serial] = comp.gcid
+
+    def free_gcid(self, comp: Component) -> None:
         gcid = comp.gcid
         comp.gcid = None
-        if gcid is None or gcid not in self.assigned_gcids:
+        if gcid is None or gcid not in self.assigned_gcids.values():
             return
-        self.assigned_gcids.remove(gcid)
+        del self.assigned_gcids[comp.cuuid_serial]
         self.avail_cids.append(gcid.cid) # Revisit: random_cids
         self.nodes[comp]['gcids'].remove(str(gcid))
+
+    def reassign_gcid(self, comp: Component) -> bool:
+        cur_gcid = comp.gcid
+        try:
+            prev_gcid = self.assigned_gcids[comp.cuuid_serial]
+        except KeyError:
+            prev_gcid = cur_gcid
+        if cur_gcid == prev_gcid: # no change - done
+            return False
+        gcid = self.assign_gcid(comp, proposed_gcid=prev_gcid)
+        if gcid is None:
+            log.debug(f'{comp}: unable to reassign GCID to {prev_gcid}')
+            return False
+        comp.tmp_gcid = cur_gcid # for teardown_routing & add_fab_comp scenario3
+        # fix up routes - teardown old routes to comp & setup new
+        # routes back to PFM are unaffected
+        self.teardown_routing(self.pfm, comp)
+        route = self.setup_routing(self.pfm, comp)
+        # remove any leftover /sys tree for the new GCID
+        path = self.make_path(gcid)
+        if path.exists():
+            comp.remove_fab_comp(force=True, useDR=False, useTMP=False,
+                                 rm_paths=False)
+        log.info(f'{comp}: reassignd GCID from {cur_gcid} to {gcid}')
+        return True
 
     def add_comp(self, comp):
         self.cuuid_serial[comp.cuuid_serial] = comp
@@ -520,10 +550,12 @@ class Fabric(nx.MultiGraph):
         return (to_routes, fr_routes)
 
     def teardown_routing(self, fr: Component, to: Component,
-                         routes: List[Route], send=True) -> None:
+                         routes: List[Route] = None, send=True) -> None:
         # Revisit: when tearing down HW routes from "fr" to "to",
         # Revisit: some of the components may not be reachable from PFM
         cur_rts = self.get_routes(fr, to)
+        if routes is None:
+            routes = cur_rts
         for route in routes:
             if route not in cur_rts:
                 log.debug(f'skipping missing route {route}')

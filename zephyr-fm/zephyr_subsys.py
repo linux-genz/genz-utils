@@ -277,8 +277,11 @@ def atexit_handler(mainapp, uep_proc):
         mainapp.conf.fab.set_pfm(None)
         mainapp.conf.save_assigned_cids()
     log.info('zeroconf unregister service')
-    mainapp.zeroconf.unregister_service(mainapp.zeroconfInfo)
-    mainapp.zeroconf.close()
+    try:
+        mainapp.zeroconf.unregister_service(mainapp.zeroconfInfo)
+        mainapp.zeroconf.close()
+    except AttributeError:
+        pass
     log.info('terminate UEP process')
     uep_proc.terminate()
     uep_proc.join()
@@ -301,7 +304,7 @@ def main():
     parser.add_argument('--cfg', default=None,
                         help='cfg file')
     parser.add_argument('-r', '--reclaim', action='store_true',
-                        help='reclaim C-Up components via reset')
+                        help='reclaim fabric components using previous MGR-UUID')
     parser.add_argument('-s', '--sfm', action='store_true',
                         help='run as Secondary Fabric Manager')
     parser.add_argument('-H', '--sfm-heartbeat', default=5, type=float,
@@ -360,7 +363,7 @@ def main():
         data['add_resources'] = []
         data['boundary_interfaces'] = []
         data['cid_range'] = []
-        data['assigned_cids'] = []
+        data['assigned_cids'] = {}
         data['local_bridges'] = []
         # Revisit: use pub/priv keys to establish a session key
         data['aesgcm_key'] = b64encode(key).decode('ascii')
