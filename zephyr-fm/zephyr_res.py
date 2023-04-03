@@ -28,9 +28,11 @@ from uuid import UUID, uuid4
 from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
 from copy import deepcopy
 from pdb import set_trace
-from typing import List
+from typing import List, NamedTuple
 from collections import defaultdict
 from zephyr_conf import log
+from zephyr_comp import Component
+from zephyr_route import RoutesTuple
 
 class Resource():
     def __init__(self, res_list: 'ResourceList', res_dict: dict):
@@ -63,6 +65,7 @@ class ResourceList():
         self.consumers = set()     # set of Components
         self.resources = resources # list of Resources
         self.res_dict = {}         # dict for to_json()
+        self.res_routes = ResourceRoutes(self)
         self.parent = None
         # Revisit: exception handling
         try:
@@ -107,8 +110,7 @@ class ResourceList():
             try:
                 cons_comp = self.fab.cuuid_serial[cons]
             except KeyError:
-                log.warning('consumer component {} not found in fabric{}'.format(
-                    cons, self.fab.fabnum))
+                log.warning(f'consumer component {cons} not found in fabric{self.fab.fabnum}')
                 continue
             if cons_comp not in self.consumers:
                 self.res_dict['consumers'].append(cons_comp.cuuid_serial)
@@ -117,7 +119,7 @@ class ResourceList():
                 if not readOnly:
                     routes = self.fab.setup_bidirectional_routing(
                         cons_comp, self.producer)
-                # Revisit: save routes for later teardown requests?
+                    self.res_routes.add(cons_comp, routes)
         # end for cons
 
     def remove_consumers(self, res: Resource, consumers, ts=None):
@@ -125,21 +127,15 @@ class ResourceList():
             try:
                 cons_comp = self.fab.cuuid_serial[cons]
             except KeyError:
-                log.warning('consumer component {} not found in fabric{}'.format(
-                    cons, self.fab.fabnum))
+                log.warning(f'consumer component {cons} not found in fabric{self.fab.fabnum}')
                 continue
             if cons_comp in self.consumers:
                 self.res_dict['consumers'].remove(cons_comp.cuuid_serial)
                 self.consumers.discard(cons_comp)
                 self.update_mod_timestamp(ts=ts)
-                # Revisit: fix this
-                # Routes need reference counting (per resource)
-                #routes = self.fab.setup_bidirectional_routing(
-                #    cons_comp, self.producer)
-                # Revisit: use saved routes?
+                self.res_routes.remove(cons_comp)
             else:
-                log.warning('component {} not a consumer of resource {}'.format(
-                    cons, res))
+                log.warning(f'component {cons} not a consumer of resource {res}')
         # end for cons
 
     def to_json(self):
@@ -184,3 +180,29 @@ class Resources():
                      'fab_resources': [ res.to_json() for prod in self.by_producer.values() for res in prod ]
                     }
         return res_dict
+
+class ToFr(NamedTuple):
+    to: set
+    fr: set
+
+class ResourceRoutes():
+    '''Track the Routes used by a ResourceList
+    '''
+    def __init__(self, rl: ResourceList):
+        self.rl = rl
+        # key: consumer Component, val: ToFr[to: Route set, fr: Route set]
+        self.by_consumer = defaultdict(lambda: ToFr(set(), set()))
+
+    def add(self, cons: Component, rts: RoutesTuple):
+        set_trace()
+        for rt in rts.all_to:
+            self.by_consumer[cons].to.add(rt)
+        for rt in rts.all_from:
+            self.by_consumer[cons].fr.add(rt)
+
+    def remove(self, cons: Component): # Revisit: import Component?
+        set_trace()
+        fab = cons.fab
+        routes = self.by_consumer[cons]
+        fab.teardown_routing(cons, self.rl.producer, routes=routes.to)
+        fab.teardown_routing(self.rl.producer, cons, routes=routes.fr)

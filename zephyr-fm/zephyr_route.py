@@ -401,6 +401,12 @@ class Route():
     def __repr__(self):
         return '(' + ','.join('{}'.format(e) for e in self._elems) + ')'
 
+class RoutesTuple(NamedTuple):
+    new_to:   List[Route]
+    new_from: List[Route]
+    all_to:   List[Route]
+    all_from: List[Route]
+
 class Routes():
     def __init__(self, fab_uuid=None, routes=None):
         self.fab_uuid = fab_uuid

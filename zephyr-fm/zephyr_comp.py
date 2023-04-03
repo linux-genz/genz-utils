@@ -1588,7 +1588,7 @@ class Component():
                     comp.remove_fab_comp(force=True)
                 if not reset_required:
                     self.fab.add_link(iface, peer_iface)
-                    route = self.fab.setup_bidirectional_routing(
+                    routes = self.fab.setup_bidirectional_routing(
                         pfm, comp, write_to_ssdt=False)
                     try:
                         comp.add_fab_comp(setup=True)
@@ -1598,7 +1598,7 @@ class Component():
                         peer_c_reset_only = True
                 if not reset_required:
                     usable = comp.comp_init(pfm, ingress_iface=peer_iface,
-                                            route=route[1])
+                                            route=routes[1])
                     reset_required = not usable
                     if usable and comp.has_switch:  # if switch, recurse
                         comp.explore_interfaces(pfm, ingress_iface=peer_iface,
@@ -1608,7 +1608,7 @@ class Component():
                                             peer_c_reset_only=peer_c_reset_only)
                     if peer_cstate is not CState.CCFG:
                         log.warning(f'unable to reset - ignoring component {comp} on {iface}')
-                        self.fab.teardown_routing(pfm, comp, route[0] + route[1])
+                        self.fab.teardown_routing(pfm, comp, routes[0] + routes[1])
                         return
             else:
                 msg += ' ignoring unknown component'
@@ -1658,16 +1658,16 @@ class Component():
                 self.fab.remove_node(leftover)
                 del self.fab.components[leftover.uuid]
             log.info(msg)
-            route = self.fab.setup_bidirectional_routing(
+            routes = self.fab.setup_bidirectional_routing(
                 pfm, comp, write_to_ssdt=False) # comp_init() will write SSDT
             try:
                 comp.add_fab_dr_comp()
             except Exception as e:
                 log.error(f'add_fab_dr_comp(gcid={comp.gcid}, dr_gcid={comp.dr.gcid}, dr_iface={comp.dr.egress_iface}) failed with exception {e}')
-                self.fab.teardown_routing(pfm, comp, route[0] + route[1])
+                self.fab.teardown_routing(pfm, comp, routes[0] + routes[1])
                 return
             usable = comp.comp_init(pfm, prefix='dr', ingress_iface=peer_iface,
-                                    route=route[1])
+                                    route=routes[1])
             if send:
                 js = comp.to_json(verbosity=1)
                 self.fab.send_mgrs(['llamas'], 'mgr_topo', 'component', js,
@@ -1677,7 +1677,7 @@ class Component():
                                         send=send, reclaim=reclaim)
             elif not usable:
                 log.warning(f'{comp} is not usable')
-                self.fab.teardown_routing(pfm, comp, route[0] + route[1])
+                self.fab.teardown_routing(pfm, comp, routes[0] + routes[1])
         # end if peer_cstate
 
     def explore_interfaces(self, pfm, ingress_iface=None, explore_ifaces=None,
@@ -1769,13 +1769,13 @@ class Component():
         from zephyr_route import DirectedRelay
         dr = DirectedRelay(dr_comp, None, peer_iface, to_iface=peer_iface.peer_iface)
         self.set_dr(dr)
-        route = fab.setup_bidirectional_routing(fab.pfm, self,
+        routes = fab.setup_bidirectional_routing(fab.pfm, self,
                             write_to_ssdt=False) # a later comp_init() will write SSDT
         try:
             self.add_fab_dr_comp()
         except Exception as e:
             log.error(f'add_fab_dr_comp(gcid={self.gcid}, dr_gcid={self.dr.gcid}, dr_iface={self.dr.egress_iface}) failed with exception {e}')
-            fab.teardown_routing(fab.pfm, self, route[0] + route[1])
+            fab.teardown_routing(fab.pfm, self, routes[0] + routes[1])
 
     def nearest_iface_to(self, to: 'Component'):
         rts = self.fab.get_routes(self, to)

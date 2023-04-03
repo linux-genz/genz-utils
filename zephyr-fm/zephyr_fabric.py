@@ -23,7 +23,7 @@
 
 import ctypes
 import json
-from typing import List, Tuple, Iterator, Optional
+from typing import List, Tuple, Iterator, Iterable, Optional
 from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount, AllOnesData
 import itertools
 import random
@@ -38,7 +38,7 @@ import networkx as nx
 from uuid import UUID, uuid4
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from base64 import b64encode, b64decode
-from heapq import nlargest
+from heapq import nlargest, nsmallest
 from zeroconf import Zeroconf, ServiceInfo, ServiceBrowser
 from threading import Thread
 from collections import defaultdict
@@ -47,7 +47,7 @@ from zephyr_conf import log, INVALID_GCID
 from zephyr_iface import Interface
 from zephyr_comp import (Component, LocalBridge, component_num, get_cuuid,
                          get_cclass, get_gcid, get_serial, get_mgr_uuid)
-from zephyr_route import RouteElement, Routes, Route
+from zephyr_route import RouteElement, Routes, Route, RoutesTuple
 from zephyr_res import Resources
 
 # Revisit: copied from zephyr_subsys.py
@@ -504,7 +504,7 @@ class Fabric(nx.MultiGraph):
         # end for
 
     def setup_routing(self, fr: Component, to: Component, write_ssdt=True,
-                      routes=None, send=True, overrideMaxRoutes=False) -> List[Route]:
+                      routes=None, send=True, overrideMaxRoutes=False) -> Tuple[List[Route], List[Route]]:
         cur_rts = self.get_routes(fr, to)
         new_rts = []
         excess_rts = []
@@ -522,7 +522,13 @@ class Fabric(nx.MultiGraph):
         if max_routes is not None and n > max_routes:
             log.debug(f'too many routes ({n}) from {fr} to {to}')
             excess_rts = nlargest(n - max_routes, merged)
+            keep_rts = nsmallest(max_routes, merged)
             self.teardown_routing(fr, to, excess_rts, send=send)
+        else:
+            keep_rts = merged
+        # increment refcount on all keep_rts that are not in new_rts
+        for rt in (r for r in keep_rts if r not in set(new_rts)):
+            rt.refcount.inc()
         log.info(f'added {len(new_rts)} routes, removed {len(excess_rts)} routes from {fr} to {to}')
         if write_ssdt and to is self.pfm:
             fr.pfm_uep_update(self.pfm)
@@ -533,30 +539,32 @@ class Fabric(nx.MultiGraph):
             self.send_sfm('sfm_routes', 'routes', js, op='add')
             self.send_mgrs(['sfm', 'llamas'], 'mgr_routes', 'routes', js,
                            op='add', invertTypes=True)
-        return new_rts
+        return (new_rts, keep_rts)
 
     def setup_bidirectional_routing(self, fr: Component, to: Component,
-                                    write_to_ssdt=True) -> Tuple[List[Route], List[Route]]:
+                                    write_to_ssdt=True) -> RoutesTuple:
         if fr is to: # Revisit: loopback
             return None
         to_routes = self.setup_routing(fr, to) # always write fr ssdt
-        to_inverted = [rt.invert(self) for rt in to_routes]
+        to_inverted = [rt.invert(self) for rt in to_routes[0]]
         # rt.invert may return None for routes that cannot be inverted
         # (because a route table row is full) - filter those routes out
         to_filtered = filter(lambda rt: rt is not None, to_inverted)
-        fr_routes = (self.setup_routing(to, fr, write_ssdt=write_to_ssdt,
-                                        routes=to_filtered)
-                     if len(to_routes) > 0 else [])
-        return (to_routes, fr_routes)
+        fr_routes = self.setup_routing(to, fr, write_ssdt=write_to_ssdt,
+                                       routes=to_filtered)
+        return RoutesTuple(to_routes[0], fr_routes[0], to_routes[1], fr_routes[1])
 
     def teardown_routing(self, fr: Component, to: Component,
-                         routes: List[Route] = None, send=True,
+                         routes: Iterable[Route] = None, send=True,
                          iface: Interface = None) -> None:
         '''Teardown routes from @fr to @to.
         If @routes is None, then teardown all current routes. Otherwise, @routes
         is a list of the routes to tear down.
         If @iface is not None, then it is the interface that has become
         unusable, forcing the teardown.
+        If @iface is None, then the teardown is due to removal of a
+        ResourceList, in which case the route is torn down only when its
+        refcount reaches 0.
         '''
         # Revisit: when tearing down HW routes from "fr" to "to",
         # Revisit: some of the components may not be reachable from PFM
@@ -591,7 +599,7 @@ class Fabric(nx.MultiGraph):
                 log.debug(f'skipping recompute routes for unusable {fr}, {to}')
                 continue
             log.debug(f'recompute routes: {fr}, {to}')
-            self.setup_routing(fr, to)
+            self.setup_routing(fr, to) # Revisit: save results
 
     def replace_dr_routes(self, fr: Component, to: Component):
         for dr_rt in filter(lambda x: x.is_dr, self.get_routes(fr, to)):
