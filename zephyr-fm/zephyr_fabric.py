@@ -159,7 +159,7 @@ class Fabric(nx.MultiGraph):
             try:
                 availLen = len(self.avail_cids)
                 cid = self.avail_cids.pop(0)
-                if reclaim and cstate == CState.CCFG:
+                if reclaim and cstate == CState.CCFG: # find a non-conflicting CID
                     done = False
                     while not done:
                         if cid not in self.assigned_gcids.values():
@@ -204,10 +204,10 @@ class Fabric(nx.MultiGraph):
             return False
         gcid = self.assign_gcid(comp, proposed_gcid=prev_gcid)
         if gcid is None:
-            log.debug(f'{comp}: unable to reassign GCID to {prev_gcid}')
+            log.warning(f'{comp}: unable to reassign GCID to {prev_gcid}')
             return False
         comp.tmp_gcid = cur_gcid # for teardown_routing & add_fab_comp scenario3
-        # fix up routes - teardown old routes to comp & setup new
+        # fix up routes - teardown old routes to comp & setup new ones
         # routes back to PFM are unaffected
         self.teardown_routing(self.pfm, comp)
         route = self.setup_routing(self.pfm, comp)

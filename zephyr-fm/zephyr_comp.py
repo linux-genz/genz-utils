@@ -436,8 +436,9 @@ class Component():
                     pass
             # end for
             if pfm and self.cstate is CState.CCFG:
-                # lookup cuuid_serial and potentially adjust GCID
-                self.fab.reassign_gcid(self)
+                if args.reclaim:
+                    # lookup cuuid_serial and potentially adjust GCID
+                    self.fab.reassign_gcid(self)
                 # set CV/CID0/SID0 - first Gen-Z control write if !local_br
                 # Revisit: support subnets and multiple CIDs
                 core.CID0 = self.gcid.cid
