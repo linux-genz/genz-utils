@@ -546,7 +546,9 @@ class Fabric(nx.MultiGraph):
         if fr is to: # Revisit: loopback
             return None
         to_routes = self.setup_routing(fr, to) # always write fr ssdt
-        to_inverted = [rt.invert(self) for rt in to_routes[0]]
+        # setup_routing() has side-effects that interact with rt.invert(),
+        # so this must be a generator expression which is evaluated lazily
+        to_inverted = (rt.invert(self) for rt in to_routes[0])
         # rt.invert may return None for routes that cannot be inverted
         # (because a route table row is full) - filter those routes out
         to_filtered = filter(lambda rt: rt is not None, to_inverted)

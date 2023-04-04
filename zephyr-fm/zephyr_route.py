@@ -24,7 +24,7 @@
 import ctypes
 import json
 import re
-from typing import List, Tuple, NamedTuple
+from typing import List, Tuple, NamedTuple, Optional
 from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount
 from pdb import set_trace
 from collections import Counter
@@ -322,8 +322,12 @@ class Route():
                 log.error(f'route_info_update failed: to={to}, elem={elem}, rt_num={elem.rt_num}')
         # end for
 
-    def invert(self, fab: 'Fabric') -> 'Route':
-        # MultiGraph - this guarantees identical links
+    def invert(self, fab: 'Fabric') -> Optional['Route']:
+        '''Invert this route (if possible). Returns None if not, which
+        happens if the inverted route finds route_entries_avail() is False.
+        Side effects: Calls route_entries_avail() and route_info_update()
+        MultiGraph - this guarantees identical links
+        '''
         elems = []
         ingress_iface = None
         hc = self.hc
