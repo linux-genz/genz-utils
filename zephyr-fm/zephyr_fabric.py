@@ -137,7 +137,7 @@ class Fabric(nx.MultiGraph):
         log.info(f'fabric: {path}, num={self.fabnum}, fab_uuid={self.fab_uuid}, mgr_uuid={self.mgr_uuid}, cur_timestamp={ns}')
 
     def assign_gcid(self, comp, ssdt_sz=4096, proposed_gcid=None, reclaim=False,
-                    cstate=CState.CUp) -> Optional[GCID]:
+                    prev_gcid=None, cstate=CState.CUp) -> Optional[GCID]:
         # Revisit: subnets
         # Revisit: CID conficts between accepted & assigned are possible
         random_cids = self.random_cids
@@ -153,6 +153,8 @@ class Fabric(nx.MultiGraph):
             try:
                 self.avail_cids.remove(proposed_gcid)
                 comp.gcid = proposed_gcid
+                if prev_gcid is not None: # return prev_gcid to avail list
+                    self.avail_cids.append(prev_gcid)
             except ValueError:
                 comp.gcid = None
         else:
@@ -202,7 +204,8 @@ class Fabric(nx.MultiGraph):
             prev_gcid = cur_gcid
         if cur_gcid == prev_gcid: # no change - done
             return False
-        gcid = self.assign_gcid(comp, proposed_gcid=prev_gcid)
+        gcid = self.assign_gcid(comp, proposed_gcid=prev_gcid,
+                                prev_gcid=cur_gcid)
         if gcid is None:
             log.warning(f'{comp}: unable to reassign GCID to {prev_gcid}')
             return False
@@ -216,7 +219,7 @@ class Fabric(nx.MultiGraph):
         if path.exists():
             comp.remove_fab_comp(force=True, useDR=False, useTMP=False,
                                  rm_paths=False)
-        log.info(f'{comp}: reassignd GCID from {cur_gcid} to {gcid}')
+        log.info(f'{comp}: reassigned GCID from {cur_gcid} to {gcid}')
         return True
 
     def add_comp(self, comp):
@@ -307,7 +310,7 @@ class Fabric(nx.MultiGraph):
             brnum = component_num(br_path)
             cclass = int(get_cclass(br_path))
             if self.pfm is None: # this bridge will be our PFM component
-                tmp_gcid = cur_gcid if cur_gcid.sid == TEMP_SUBNET else INVALID_GCID
+                tmp_gcid = cur_gcid if cur_gcid.sid == TEMP_SUBNET else None
                 br = LocalBridge(cclass, self, self.map, br_path, self.mgr_uuid,
                                  local_br=True, brnum=brnum, dr=None,
                                  tmp_gcid=tmp_gcid, netlink=self.nl,
@@ -351,7 +354,7 @@ class Fabric(nx.MultiGraph):
             if self.sfm is None: # this bridge will be our SFM component
                 self.mgr_uuid = get_mgr_uuid(br_path)
                 gcid = cur_gcid
-                tmp_gcid = cur_gcid if cur_gcid.sid == TEMP_SUBNET else INVALID_GCID
+                tmp_gcid = cur_gcid if cur_gcid.sid == TEMP_SUBNET else None
                 # temporary component until we get the PFM-assigned uuid
                 br = LocalBridge(cclass, self, self.map, br_path, self.mgr_uuid,
                                  local_br=True, brnum=brnum, dr=None,
