@@ -240,13 +240,13 @@ class RouteInfo(Counter):
 
 class Route():
     def __init__(self, path: List[Component], elems: List[RouteElement] = None,
-                 noDR: bool = False):
+                 noDR: bool = False, refcount: int = 0):
         path_len = len(path)
         if path_len < 2:
             raise(IndexError)
         self._path = path
         self.ifaces = set()
-        self.refcount = RefCount()
+        self.refcount = RefCount(val=refcount)
         ingress_iface = None
         hc = path_len - 2
         telems = [] # temporary list
@@ -372,7 +372,8 @@ class Route():
         return rts
 
     def to_json(self):
-        return [e.to_json() for e in self._elems]
+        return { 'route': [e.to_json() for e in self._elems],
+                 'refcount': self.refcount.value() }
 
     def __getitem__(self, key):
         return self._elems[key]
@@ -504,7 +505,7 @@ class Routes():
         to_iface = to.interfaces[to_iface_num]
         return (fr_iface, to_iface)
 
-    def parse_route(self, route_list: list, fab) -> Route:
+    def parse_route(self, route_list: list, refcount: int, fab) -> Route:
         path = []
         elems = []
         ingress_iface = None
@@ -518,8 +519,11 @@ class Routes():
             ingress_iface = to_iface
             hc -= 1
         path.append(to_iface.comp)
-        rt = Route(path, elems)
+        rt = Route(path, elems, refcount=refcount)
         return rt
+
+    def parse_route_list_elem(self, rtle, fab):
+        return self.parse_route(rtle['route'], rtle['refcount'], fab)
 
     def parse(self, routes_dict: dict, fab, fab_rts=None):
         ret_dict = {}
@@ -527,8 +531,8 @@ class Routes():
             fr, to = self.parse_fr_to(k, fab)
             rts = Routes(fab.fab_uuid) if fab_rts is None else fab_rts
             mod_timestamp = routes_dict[k]['mod_timestamp']
-            for rtl in routes_dict[k]['route_list']:
-                rt = self.parse_route(rtl, fab)
+            for rtle in routes_dict[k]['route_list']:
+                rt = self.parse_route_list_elem(rtle, fab)
                 rts.add(fr, to, rt, ts=mod_timestamp)
             # end for rtl
             if fab_rts is None:

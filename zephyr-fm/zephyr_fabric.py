@@ -507,7 +507,8 @@ class Fabric(nx.MultiGraph):
         # end for
 
     def setup_routing(self, fr: Component, to: Component, write_ssdt=True,
-                      routes=None, send=True, overrideMaxRoutes=False) -> Tuple[List[Route], List[Route]]:
+                      routes=None, send=True, overrideMaxRoutes=False,
+                      res=False) -> Tuple[List[Route], List[Route]]:
         cur_rts = self.get_routes(fr, to)
         new_rts = []
         excess_rts = []
@@ -529,9 +530,11 @@ class Fabric(nx.MultiGraph):
             self.teardown_routing(fr, to, excess_rts, send=send)
         else:
             keep_rts = merged
-        # increment refcount on all keep_rts that are not in new_rts
-        for rt in (r for r in keep_rts if r not in set(new_rts)):
-            rt.refcount.inc()
+        if res:
+            # increment refcount on all keep_rts that are not in new_rts
+            for rt in (r for r in keep_rts if r not in set(new_rts)):
+                rt.refcount.inc()
+                log.debug(f'inc refcount on route(hc={rt.hc}) {rt}, refcount={rt.refcount.value()}')
         log.info(f'added {len(new_rts)} routes, removed {len(excess_rts)} routes from {fr} to {to}')
         if write_ssdt and to is self.pfm:
             fr.pfm_uep_update(self.pfm)
@@ -545,10 +548,11 @@ class Fabric(nx.MultiGraph):
         return (new_rts, keep_rts)
 
     def setup_bidirectional_routing(self, fr: Component, to: Component,
-                                    write_to_ssdt=True) -> RoutesTuple:
+                                    write_to_ssdt=True,
+                                    res=False) -> RoutesTuple:
         if fr is to: # Revisit: loopback
             return None
-        to_routes = self.setup_routing(fr, to) # always write fr ssdt
+        to_routes = self.setup_routing(fr, to, res=res) # always write fr ssdt
         # setup_routing() has side-effects that interact with rt.invert(),
         # so this must be a generator expression which is evaluated lazily
         to_inverted = (rt.invert(self) for rt in to_routes[0])
@@ -556,7 +560,7 @@ class Fabric(nx.MultiGraph):
         # (because a route table row is full) - filter those routes out
         to_filtered = filter(lambda rt: rt is not None, to_inverted)
         fr_routes = self.setup_routing(to, fr, write_ssdt=write_to_ssdt,
-                                       routes=to_filtered)
+                                       res=res, routes=to_filtered)
         return RoutesTuple(to_routes[0], fr_routes[0], to_routes[1], fr_routes[1])
 
     def teardown_routing(self, fr: Component, to: Component,
@@ -604,13 +608,18 @@ class Fabric(nx.MultiGraph):
                 log.debug(f'skipping recompute routes for unusable {fr}, {to}')
                 continue
             log.debug(f'recompute routes: {fr}, {to}')
-            self.setup_routing(fr, to) # Revisit: save results
+            try:
+                self.setup_routing(fr, to) # Revisit: save results
+            except nx.exception.NetworkXNoPath:
+                log.debug(f'cannot recompute routes for unreachable {fr}, {to}')
 
     def replace_dr_routes(self, fr: Component, to: Component):
         for dr_rt in filter(lambda x: x.is_dr, self.get_routes(fr, to)):
-            rt = Route(dr_rt.path, dr_rt.elems, noDR=True)
+            rt = Route(dr_rt.path, dr_rt.elems, noDR=True,
+                       refcount=dr_rt.refcount.value())
             # do replacement
             if rt.route_entries_avail():
+                log.debug(f'replacing DR route {dr_rt} with non-DR route {rt}, dr_rt.refcount={dr_rt.refcount.value()}, rt.refcount={rt.refcount.value()}')
                 self.routes.remove(fr, to, dr_rt) # remove old DR
                 dr_rt.route_info_update(False)
                 self.routes.add(fr, to, rt)       # add new

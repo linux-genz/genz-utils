@@ -96,8 +96,11 @@ def routes():
           'FromComp(GCID)->ToComp(GCID)': {
             'mod_timestamp': 'int', # last modification, from time.time_ns()
             'route_list': [
-              [ 'EgressIface->ToIface',
-              ]
+              { 'route':
+                [ 'EgressIface->ToIface',
+                ],
+                'refcount': 'int'
+              }
             ]
           }
         }

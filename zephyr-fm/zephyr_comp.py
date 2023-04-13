@@ -1582,6 +1582,7 @@ class Component():
                     log.warning(msg)
                     reset_required = True
                     peer_c_reset_only = True
+                    routes = None
                 else:
                     msg += ', retaining gcid={}'.format(gcid)
                     log.info(msg)
@@ -1609,7 +1610,8 @@ class Component():
                                             peer_c_reset_only=peer_c_reset_only)
                     if peer_cstate is not CState.CCFG:
                         log.warning(f'unable to reset - ignoring component {comp} on {iface}')
-                        self.fab.teardown_routing(pfm, comp, routes[0] + routes[1])
+                        if routes is not None:
+                            self.fab.teardown_routing(pfm, comp, routes[0] + routes[1])
                         return
             else:
                 msg += ' ignoring unknown component'

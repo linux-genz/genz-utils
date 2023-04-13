@@ -118,7 +118,7 @@ class ResourceList():
                 self.update_mod_timestamp()
                 if not readOnly:
                     routes = self.fab.setup_bidirectional_routing(
-                        cons_comp, self.producer)
+                        cons_comp, self.producer, res=True)
                     self.res_routes.add(cons_comp, routes)
         # end for cons
 
@@ -194,14 +194,12 @@ class ResourceRoutes():
         self.by_consumer = defaultdict(lambda: ToFr(set(), set()))
 
     def add(self, cons: Component, rts: RoutesTuple):
-        set_trace()
         for rt in rts.all_to:
             self.by_consumer[cons].to.add(rt)
         for rt in rts.all_from:
             self.by_consumer[cons].fr.add(rt)
 
     def remove(self, cons: Component): # Revisit: import Component?
-        set_trace()
         fab = cons.fab
         routes = self.by_consumer[cons]
         fab.teardown_routing(cons, self.rl.producer, routes=routes.to)

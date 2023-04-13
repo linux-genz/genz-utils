@@ -329,9 +329,12 @@ class Opcodes(SpecialField, Union):
 
 
 class RefCount():
-    def __init__(self, sz: tuple = (1, 1)):
-        self._array = [[atomics.atomic(width=4, atype=atomics.UINT)
+    def __init__(self, sz: tuple = (1, 1), val: int = 0):
+        self._array = [[atomics.atomic(width=4, atype=atomics.INT)
                         for col in range(sz[1])] for row in range(sz[0])]
+        for row in range(sz[0]):
+            for col in range(sz[1]):
+                self.set_value(val, row, col)
 
     def inc(self, row=0, col=0) -> bool:
         '''
@@ -343,6 +346,7 @@ class RefCount():
         '''
         Decrement the refcount. Returns True if the refcount was 1 (now 0).
         '''
+        assert(self.value(row, col) > 0)
         return (self._array[row][col].fetch_dec() == 1)
 
     def value(self, row=0, col=0):
@@ -350,6 +354,12 @@ class RefCount():
         Return the refcount.
         '''
         return self._array[row][col].load()
+
+    def set_value(self, val, row=0, col=0):
+        '''
+        Set the refcount.
+        '''
+        return self._array[row][col].store(val)
 
     def __getitem__(self, row):
         return self._array[row]
