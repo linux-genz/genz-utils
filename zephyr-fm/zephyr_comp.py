@@ -33,6 +33,7 @@ from pathlib import Path
 import zephyr_conf
 from zephyr_conf import log, INVALID_GCID
 from zephyr_iface import Interface
+from blueprints.resource.blueprint import send_resource
 
 ALL_RKD = 0 # all requesters are granted this RKD
 FM_RKD = 1  # only the FM is granted this RKD
@@ -458,16 +459,13 @@ class Component():
                 rows, cols = self.ssdt_size(prefix=prefix)
             except AllOnesData:
                 return self.warn_unusable('ssdt_size returned all-ones data')
-            # initialize SSDT route info (required before set_ssdt())
+            # initialize SSDT route info (required before fixup_ssdt())
             from zephyr_route import RouteInfo
             self.route_info = [[RouteInfo() for j in range(cols)]
                                for i in range(rows)]
-            # setup SSDT and RIT entries for route back to FM
+            # setup SSDT and RIT entries for route(s) back to FM
             if pfm and ingress_iface is not None:
-                self.ssdt_read() # required before set_ssdt()
-                # use route elem to correctly set SSDT HC & MHC
-                elem = route[0][0]
-                elem.set_ssdt(pfm, updateRtNum=True)
+                self.fixup_ssdt(route, pfm)
                 self.rit_write(ingress_iface, 1 << ingress_iface.num)
             if pfm:
                 # initialize RSP-VCAT
@@ -1397,6 +1395,16 @@ class Component():
                                off=self.ssdt.cs_offset(cid, rt), sz=sz)
         # end with
 
+    def fixup_ssdt(self, routes, pfm) -> None:
+        self.ssdt_read() # required before set_ssdt()
+        # must do all routes even though they all setup the SSDT exactly the same
+        # (since they all use the same DR interface) because we must set the
+        # route_info counter correctly as well as each route's rt_num
+        for rt in routes:
+            # use first route elem to correctly set SSDT HC & MHC and update rt_num
+            elem = rt[0]
+            elem.set_ssdt(pfm, updateRtNum=True)
+
     def update_rit_dir(self, prefix='control'):
         if self.rit_dir is None:
             return
@@ -1552,6 +1560,10 @@ class Component():
                 comp = self.fab.comp_gcids[peer_gcid]
                 peer_iface = comp.interfaces[iface.peer_iface_num]
                 iface.set_peer_iface(peer_iface)
+                # bring peer iface to I-Up (if it isn't already)
+                peer_istate, _ = peer_iface.iface_state()
+                if peer_istate is not IState.IUp:
+                    peer_iface.iface_init()
                 nonce_valid = iface.do_nonce_exchange()
                 if not nonce_valid:
                     iface.set_peer_iface(None)
@@ -1725,9 +1737,16 @@ class Component():
         log.warning(f'{self}: unreachable component {to} due to interface {iface} failure')
 
 
-    def is_unreachable(self, fr: 'Component'):
-        return not self.usable or (self is not fr and
-                                   len(self.fab.routes.get_routes(fr, self)) < 1)
+    def is_unreachable(self, fr: 'Component', bidirectional: bool = True) -> bool:
+        '''Is this Component unreachable from Component @fr?
+        Returns True if this Component is unusable or there are no routes
+        from @fr to this Component, or, when @bidirectional is True, no routes
+        from this Component back to @fr.
+        '''
+        return not self.usable or ((self is not fr and
+                                    self.fab.routes.count_routes(fr, self) < 1) or
+                                   (self is not fr and bidirectional and
+                                    self.fab.routes.count_routes(self, fr) < 1))
 
     def warm_reset(self, iface, prefix='control', peer_c_reset_only=False):
         if not peer_c_reset_only:
@@ -1933,8 +1952,12 @@ class Bridge(Component):
 
     def unreachable_comp(self, to, iface):
         super().unreachable_comp(to, iface)
-        # Revisit: finish this - notify llamas instance about
-        # unreachable resources
+        # notify llamas instance about unreachable resources
+        fab = self.fab
+        unreach = fab.resources.unreachable(self, to)
+        endpoints = fab.mainapp.get_endpoints([self.cuuid_serial],
+                                              'llamas', 'unreach_res')
+        send_resource(unreach, endpoints)
 
 class LocalBridge(Bridge):
     def __init__(self, *args, brnum, **kwargs):

@@ -151,6 +151,7 @@ class Resources():
         self.fab = fab
         self.by_producer = defaultdict(set) # key: producer Component, val: ResourceList set
         self.by_consumer = defaultdict(set) # key: consumer Component, val: ResourceList set
+        self.by_cons_prod = defaultdict(set) # key: (cons Comp, prod Comp), val: ResourceList set
         self.by_instance_uuid = {} # key: instance UUID, val: Resource
         self.mod_timestamp = time.time_ns()
         for res in resources:
@@ -163,6 +164,7 @@ class Resources():
         self.by_producer[res.producer].add(res_list)
         for cons in res.consumers:
             self.by_consumer[cons].add(res_list)
+            self.by_cons_prod[(cons, res.producer)].add(res_list)
         # end for
 
     def remove(self, res: Resource, ts=None) -> None:
@@ -172,6 +174,17 @@ class Resources():
         self.by_producer[res.producer].remove(res_list)
         for cons in res.consumers:
             self.by_consumer[cons].remove(res_list)
+            self.by_cons_prod[(cons, res.producer)].remove(res_list)
+
+    def unreachable(self, cons: Component, prod: Component):
+        unreach_res = self.by_cons_prod[(cons, prod)]
+        unreach_dict = { 'fab_uuid': str(self.fab.fab_uuid),
+                         'cur_timestamp': time.time_ns(),
+                         'consumer': cons.cuuid_serial,
+                         'producer': prod.cuuid_serial,
+                         'resources': [res.to_json() for res in unreach_res]
+                        }
+        return unreach_dict
 
     def to_json(self):
         res_dict = { 'fab_uuid': str(self.fab.fab_uuid),

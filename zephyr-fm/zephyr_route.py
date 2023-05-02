@@ -222,7 +222,7 @@ class DirectedRelay(RouteElement):
 
 class RouteInfo(Counter):
     '''Every SSDT and LPRT entry has a RouteInfo to keep track of
-    all RouteElements that make use of that entry.
+    how many RouteElements make use of that entry.
     '''
     def add_route(self, elem: RouteElement) -> int:
         self[elem] += 1
@@ -319,7 +319,7 @@ class Route():
             try:
                 elem.route_info_update(to, add)
             except TypeError:
-                log.error(f'route_info_update failed: to={to}, elem={elem}, rt_num={elem.rt_num}')
+                log.error(f'route_info_update failed: {self}, elem={elem}, rt_num={elem.rt_num}')
         # end for
 
     def invert(self, fab: 'Fabric') -> Optional['Route']:
@@ -424,6 +424,9 @@ class Routes():
 
     def get_routes(self, fr: Component, to: Component) -> List[Route]:
         return [] if fr is to else self.fr_to[(fr, to)]['route_list']
+
+    def count_routes(self, fr: Component, to: Component) -> int:
+        return len(self.get_routes(fr, to))
 
     def add_ifaces(self, route: Route) -> None:
         for iface in route.ifaces:

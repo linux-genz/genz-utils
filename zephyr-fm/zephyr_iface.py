@@ -215,10 +215,11 @@ class Interface():
             # save PeerCState & PeerGCID
             self.peer_cstate = self.get_peer_cstate(iface)
             self.peer_gcid = self.get_peer_gcid(iface)
-            if self.peer_iface is not None:
+            if (self.peer_iface is not None and not
+                self.peer_comp.is_unreachable(self.comp.fab.pfm)):
                 nonce_valid = self.nonce_exchange(iface)
                 if not nonce_valid:
-                    log.warning('{}: invalid nonce exchange'.format(self))
+                    log.warning(f'{self}: invalid nonce exchange')
         # end with
         self.istats_write(enb=True)
         if is_switch:

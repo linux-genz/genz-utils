@@ -572,7 +572,7 @@ class Fabric(nx.MultiGraph):
         If @iface is not None, then it is the interface that has become
         unusable, forcing the teardown.
         If @iface is None, then the teardown is due to removal of a
-        ResourceList, in which case the route is torn down only when its
+        ResourceList, in which case each route is torn down only when its
         refcount reaches 0.
         '''
         # Revisit: when tearing down HW routes from "fr" to "to",
@@ -580,19 +580,24 @@ class Fabric(nx.MultiGraph):
         cur_rts = self.get_routes(fr, to)
         if routes is None:
             routes = cur_rts
-        for route in routes:
+        hw_list = [] # for 2nd pass
+        for route in routes: # 1st pass - update zephyr route data structures only
             if route not in cur_rts:
                 log.debug(f'skipping missing route {route}')
-            else:
-                if iface is None: # teardown due to resource removal
-                    last = route.refcount.dec()
-                    if not last:
-                        log.debug(f'decremented route {route} refcount, refcount={route.refcount.value()}')
-                        continue
-                log.debug(f'removing route(hc={route.hc}) from {fr} to {to} via {route}')
-                route.route_info_update(False) # remove route_info
-                self.write_route(route, enable=False, refcountOnly=(not send))
-                self.routes.remove(fr, to, route)
+                continue
+            if iface is None: # teardown due to resource removal
+                last = route.refcount.dec()
+                if not last:
+                    log.debug(f'decremented route {route} refcount, refcount={route.refcount.value()}')
+                    continue
+            log.debug(f'removing route(hc={route.hc}) from {fr} to {to} via {route}')
+            hw_list.append(route)
+            route.route_info_update(False) # remove route_info
+            self.routes.remove(fr, to, route)
+        # end for
+        for route in hw_list: # 2nd pass - write HW route tables
+            log.debug(f'removing HW route(hc={route.hc}) from {fr} to {to} via {route}')
+            self.write_route(route, enable=False, refcountOnly=(not send))
         # end for
         if send and len(routes) > 0:
             js = Routes(fab_uuid=self.fab_uuid, routes=routes).to_json()
@@ -694,7 +699,8 @@ class Fabric(nx.MultiGraph):
         es = genz.IErrorES(rec['ES'])
         bitK = es.BitK
         errName = es.errName
-        log.info(f'{br}: {key}:{errName}[{bitK}]({es.errSeverity}) UEP from {sender} on {iface}')
+        id = rec['EventID']
+        log.info(f'{br}: {key}:{errName}[{bitK}]({es.errSeverity}) UEP[{id}] from {sender} on {iface}')
         # with AutoStop enabled, IfaceFCFwdProgressViolation requires peer_c_reset
         if errName == 'IfaceFCFwdProgressViolation':
             log.debug(f'attempting peer_c_reset on {iface}')
@@ -733,7 +739,8 @@ class Fabric(nx.MultiGraph):
     def iface_reset(self, key, br, sender, iface, rc, rec):
         genz = zephyr_conf.genz
         bit = genz.IEvent.uep_map(rec['Event'])
-        log.info(f'{br}: {key}[{bit}] UEP from {sender} on {iface}')
+        id = rec['EventID']
+        log.info(f'{br}: {key}[{bit}] UEP[{id}] from {sender} on {iface}')
         try:
             # clear IEventStatus bit
             sender.clear_ievent_status(bit)
@@ -755,13 +762,8 @@ class Fabric(nx.MultiGraph):
     def new_peer_comp(self, key, br, sender, iface, rc, rec):
         genz = zephyr_conf.genz
         bit = genz.IEvent.uep_map(rec['Event'])
-        log.info(f'{br}: {key}[{bit}] UEP from {sender} on {iface}')
-        iup = iface.iface_init()
-        if not iup:
-            log.warning(f'{br}: new_peer_comp: unable to bring up interface {iface}')
-            return { key: f'{iface} not I-Up' }
-        sender.explore_interfaces(self.pfm, ingress_iface=None, explore_ifaces=[iface],
-                                  reclaim=True, send=True)
+        id = rec['EventID']
+        log.info(f'{br}: {key}[{bit}] UEP[{id}] from {sender} on {iface}')
         try:
             # clear IEventStatus bit
             sender.clear_ievent_status(bit)
@@ -769,14 +771,27 @@ class Fabric(nx.MultiGraph):
             log.warning(f'{iface}: new_peer_comp interface{iface.num} returned all-ones data')
             iface.usable = False
             return { key: 'ievent_status all-ones' }
+        icfg_ifaces = [i for i in sender.interfaces
+                       if i.iface_state()[0] is IState.ICFG]
+        expl_ifaces = []
+        for iface in icfg_ifaces:
+            iup = iface.iface_init()
+            if iup:
+                expl_ifaces.append(iface)
+            else:
+                log.warning(f'{br}: new_peer_comp: unable to bring up interface {iface}')
+        # end for
+        sender.explore_interfaces(self.pfm, ingress_iface=None,
+                                  explore_ifaces=expl_ifaces,
+                                  reclaim=True, send=True)
         return { key: 'ok' }
 
     @register(events, 'ExceededTransientErrThresh')
     def trans_err_thresh(self, key, br, sender, iface, rc, rec):
         genz = zephyr_conf.genz
         bit = genz.IEvent.uep_map(rec['Event'])
-        log.info(f'{br}: {key}[{bit}] UEP from {sender} on {iface}')
-        # Revisit: do something useful
+        id = rec['EventID']
+        log.info(f'{br}: {key}[{bit}] UEP[{id}] from {sender} on {iface}')
         try:
             # clear IEventStatus bit
             sender.clear_ievent_status(bit)
@@ -784,14 +799,15 @@ class Fabric(nx.MultiGraph):
             log.warning(f'{iface}: trans_err_thresh interface{iface.num} returned all-ones data')
             iface.usable = False
             return { key: 'ievent_status all-ones' }
+        # Revisit: do something useful
         return { key: 'ok' }
 
     @register(events, 'IfacePerfDegradation')
     def iface_perf_degradation(self, key, br, sender, iface, rc, rec):
         genz = zephyr_conf.genz
         bit = genz.IEvent.uep_map(rec['Event'])
-        log.info(f'{br}: {key}[{bit}] UEP from {sender} on {iface}')
-        # Revisit: do something useful
+        id = rec['EventID']
+        log.info(f'{br}: {key}[{bit}] UEP[{id}] from {sender} on {iface}')
         try:
             # clear IEventStatus bit
             sender.clear_ievent_status(bit)
@@ -799,6 +815,7 @@ class Fabric(nx.MultiGraph):
             log.warning(f'{iface}: iface_perf_degradation interface{iface.num} returned all-ones data')
             iface.usable = False
             return { key: 'ievent_status all-ones' }
+        # Revisit: do something useful
         return { key: 'ok' }
 
     # C-Error UEPs
@@ -808,7 +825,8 @@ class Fabric(nx.MultiGraph):
         esVal = rec['ES']
         rsnName = self.uep_reason_name(esVal)
         bit = genz.CError.uep_map(rec['Event'], esVal)
-        log.info(f'{br}: {key}:{rsnName}[{bit}] UEP from {sender}, rc {rc}') # no iface
+        id = rec['EventID']
+        log.info(f'{br}: {key}:{rsnName}[{bit}] UEP[{id}] from {sender}, rc {rc}') # no iface
         # Revisit: do something useful
         try:
             # clear CErrorStatus bit
@@ -824,7 +842,8 @@ class Fabric(nx.MultiGraph):
         esVal = rec['ES']
         rsnName = self.uep_reason_name(esVal)
         bit = genz.CError.uep_map(rec['Event'], esVal)
-        log.info(f'{br}: {key}:{rsnName}[{bit}] UEP from {sender}, rc {rc}') # no iface
+        id = rec['EventID']
+        log.info(f'{br}: {key}:{rsnName}[{bit}] UEP[{id}] from {sender}, rc {rc}') # no iface
         # Revisit: do something useful
         try:
             # clear CErrorStatus bit
@@ -842,7 +861,8 @@ class Fabric(nx.MultiGraph):
         es = genz.OpcodeEventES(esVal)
         pktName = genz.Packet.className(es.OpClass, es.OpCode)
         bit = genz.CEvent.uep_map(rec['Event'], esVal)
-        log.info(f'{br}: {key}[{bit}] UEP from {sender}, rc {rc}, pkt {pktName}') # no iface
+        id = rec['EventID']
+        log.info(f'{br}: {key}[{bit}] UEP[{id}] from {sender}, rc {rc}, pkt {pktName}') # no iface
         # Revisit: do something useful
         try:
             # clear CEventStatus bit
