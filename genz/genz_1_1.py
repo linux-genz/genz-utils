@@ -1656,7 +1656,7 @@ class CPageSz(SpecialField, Union):
     _cpage_sz = ['4KiB', '64KiB', '1MiB', '32MiB']
     _special = {'CPageSz': _cpage_sz}
 
-    def __init__(self, value, parent, verbosity=0):
+    def __init__(self, value, parent, verbosity=0, check=False):
         super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
 
