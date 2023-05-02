@@ -196,56 +196,44 @@ class GCID(int):
 
 INVALID_GCID = GCID(val=0xffffffff) # valid GCIDs are only 28 bits
 
-class RKey():
-    # Revisit: add a random generator (per rkd), perhaps based on
-    # the solutions by orange or aak318, here:
-    # https://stackoverflow.com/questions/9755538/how-do-i-create-a-list-of-random-numbers-without-duplicates
-    def __init__(self, val=None, rkd=None, os=None, str=None):
+class RKey(int):
+    def __new__(cls, val=None, rkd=None, os=None, str=None):
         if val is not None:
-            self.val = val
+            pass
         elif rkd is not None and os is not None:
             if os < 0 or os >= 1<<20:
-                raise(ValueError)
+                raise ValueError(f'os {os} is out of range')
             if rkd < 0 or rkd >= 1<<12:
-                raise(ValueError)
-            self.val = (rkd << 20) | os
+                raise ValueError(f'rkd {rkd} is out of range')
+            val = (rkd << 20) | os
         elif str is not None:
             rkd_str, os_str = str.split(':')
             rkd = int(rkd_str, 16)
             os = int(os_str, 16)
-            self.val = (rkd << 20) | os
+            val = (rkd << 20) | os
         else:
             raise(TypeError)
-        if self.val < 0 or self.val >= 1<<32:
-            raise(ValueError)
+        if val < 0 or val >= 1<<32:
+            raise ValueError(f'value {val} is out of range')
+        return int.__new__(cls, val)
 
     @property
     def rkd(self):
-        return self.val >> 20
-
-    @rkd.setter
-    def rkd(self, val):
-        if val < 0 or val > 1<<12:
-            raise(ValueError)
-        self.val = (val << 12) | self.os
+        return self >> 20
 
     @property
     def os(self):
-        return self.val & 0xfffff
+        return self & 0xfffff
 
-    @os.setter
-    def os(self, val):
-        if val < 0 or val > 1<<20:
-            raise(ValueError)
-        self.val = (self.rkd << 20) | (val & 0xfffff)
-
-    def __eq__(self, other):
-        if type(self) != type(other):
-            return NotImplemented
-        return self.val == other.val
+    @property
+    def val(self):
+        return int(self)
 
     def __repr__(self):
         return '{:03x}:{:05x}'.format(self.rkd, self.os)
+
+    def to_json(self):
+        return str(self)
 
 class SpecialField():
     def __init__(self, value, parent=None, verbosity=0, check=False):
