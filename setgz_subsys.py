@@ -523,12 +523,16 @@ def main():
     except ValueError:
         print('invalid class uuid: {}'.format(args.cuuid))
         exit(1)
-    try:
-        # Revisit: allow cclass names
-        match_cclasses = [] if args.cclass is None else [int(c, base=0) for c in args.cclass]
-    except ValueError:
-        print('invalid cclass number: {}'.format(args.cclass))
-        exit(1)
+    match_cclasses = []
+    for c in (args.cclass if args.cclass is not None else []):
+        try:
+            match_cclasses.extend(genz.cclass_name_to_classes[c])
+        except KeyError:
+            try:
+                match_cclasses.append(int(c, base=0))
+            except ValueError:
+                print(f'invalid cclass name/number: {c}')
+                exit(1)
     ops = [Operation(op) for op in args.operations]
     if args.fake_root is not None:
         sys_devices = Path(args.fake_root) / 'sys/devices'
