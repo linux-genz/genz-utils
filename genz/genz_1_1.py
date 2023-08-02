@@ -160,6 +160,12 @@ eventType = { val[0]: key for key, val in eventData.items() }
 def ceil_div(num: int, denom: int) -> int:
     return -(-num // denom)
 
+class ACREQRSP(IntEnum):
+    NoAccess             = 0x0
+    RKeyRequired         = 0x1
+    Rv                   = 0x2
+    FullAccess           = 0x3
+
 class Reason(IntEnum):
     NoError              = 0x00
     NE                   = 0x00
@@ -3184,7 +3190,7 @@ class ComponentPAStructure(ControlStructure):
     _uuid_dict = dict(zip([item for sublist in zip(*_uuid_fields) for item in sublist],
                           _uuid_fields * 2))
 
-    _special_dict = {'PACAP1': PACAP1, 'PACAP1Ctl': PACAP1Control}
+    _special_dict = {'PACAP1': PACAP1, 'PACAP1Control': PACAP1Control}
 
 @add_from_buffer_kw
 class ComponentCAccessStructure(ControlStructure):
@@ -3471,8 +3477,16 @@ class ControlTableElement(ControlStructure):
 class PATable(ControlTableArray):
     def fileToStructInit(self):
         super().fileToStructInit()
-        # Revisit: subfields
-        fields = [('PeerAttr',  c_u16, 16)
+        fields = [('OpCodeSetTableID',   c_u16,  3),
+                  ('LatencyDomain',      c_u16,  1),
+                  ('PeerNextHdrEnb',     c_u16,  1),
+                  ('Rv1',                c_u16,  1),
+                  ('PeerPrecTimeEnb',    c_u16,  1),
+                  ('PeerAEADEnb',        c_u16,  1),
+                  ('Rv2',                c_u16,  2),
+                  ('WriteMSGEmbedRdEnb', c_u16,  1),
+                  ('MetaRdWrEnb',        c_u16,  1),
+                  ('Rv4',                c_u16,  4),
         ]
         PA = type('PA', (ControlTableElement,), {'_fields_': fields,
                                               'verbosity': self.verbosity,
@@ -3514,7 +3528,7 @@ class ComponentRKDStructure(ControlStructure):
                                     path=self.path, parent=self,
                                     core=self.core, offset=self.offset+0x10)
 
-    def assign_rkd(self, rkd, val):
+    def assign_rkd(self, rkd, val) -> int:
         row = rkd // 64
         bit = rkd % 64
         mask = 1 << bit
@@ -3523,6 +3537,7 @@ class ComponentRKDStructure(ControlStructure):
         if val:
             rkdAuth |= mask
         self.embeddedArray[row].RKDAuth = rkdAuth
+        return row
 
 @add_from_buffer_kw
 class IStatsVCArray(ControlTableArray):
@@ -3873,14 +3888,24 @@ class SSAPMCAPMSAPMSMCAPTable(ControlTableArray):
         super().fileToStructInit()
         # use parent to dynamically build SSAP entry based on PAIdxSz & PadSz
         cap1 = PACAP1(self.parent.PACAP1, self.parent)
-        pa_idx_sz = cap1.field.PAIdxSz * 8  # bytes to bits
+        self.pa_idx_sz = cap1.PAIdxSz * 8  # bytes to bits
+        self.wc_akey = cap1.WildcardAKeySup
+        self.wc_pa = cap1.WildcardPASup
+        self.wc_acreq = cap1.WildcardACREQSup
+        self.wc_acrsp = cap1.WildcardACRSPSup
         pad_sz = self.parent.PadSz
         fields = []
-        if pa_idx_sz > 0:
-            fields.append(('PAIdx',       c_u32,  pa_idx_sz))
-        fields.append(('AKey',            c_u32,  6))
-        fields.append(('ACREQ',           c_u32,  2))
-        fields.append(('ACRSP',           c_u32,  2))
+        if self.pa_idx_sz > 0:
+            fields.append(('PAIdx',       c_u32,  self.pa_idx_sz))
+        # Revisit: Gen-Z Core spec v1.1e does not state whether fields
+        # corresponding to supported wildcards are Reserved or non-existent
+        # This assumes non-existent.
+        if not self.wc_akey:
+            fields.append(('AKey',        c_u32,  6))
+        if not self.wc_acreq:
+            fields.append(('ACREQ',       c_u32,  2))
+        if not self.wc_acrsp:
+            fields.append(('ACRSP',       c_u32,  2))
         if pad_sz > 0:
             fields.append(('Pad',         c_u32,  pad_sz))
         SSAP = type(self._name, (ControlTableElement,), {'_fields_': fields,

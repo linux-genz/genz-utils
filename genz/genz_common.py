@@ -196,6 +196,20 @@ class GCID(int):
 
 INVALID_GCID = GCID(val=0xffffffff) # valid GCIDs are only 28 bits
 
+class AKey(int):
+    def __new__(cls, val=None, rkd=None, os=None, str=None):
+        if val is None:
+            raise TypeError
+        if val < 0 or val >= 64:
+            raise ValueError(f'AKey value {val} is out of range')
+        return int.__new__(cls, val)
+
+    @property
+    def val(self):
+        return int(self)
+
+DEFAULT_AKEY = AKey(0)
+
 class RKey(int):
     def __new__(cls, val=None, rkd=None, os=None, str=None):
         if val is not None:
@@ -214,7 +228,7 @@ class RKey(int):
         else:
             raise(TypeError)
         if val < 0 or val >= 1<<32:
-            raise ValueError(f'value {val} is out of range')
+            raise ValueError(f'RKey value {val} is out of range')
         return int.__new__(cls, val)
 
     @property
@@ -230,10 +244,13 @@ class RKey(int):
         return int(self)
 
     def __repr__(self):
+        return repr(self.val)
+
+    def __str__(self):
         return '{:03x}:{:05x}'.format(self.rkd, self.os)
 
     def to_json(self):
-        return str(self)
+        return repr(self)
 
 class SpecialField():
     def __init__(self, value, parent=None, verbosity=0, check=False):
