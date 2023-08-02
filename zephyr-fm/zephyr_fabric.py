@@ -24,7 +24,7 @@
 import ctypes
 import json
 from typing import List, Tuple, Iterator, Iterable, Optional
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount, AllOnesData
+from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount, AllOnesData, AKey, DEFAULT_AKEY
 import itertools
 import random
 import posixpath
@@ -46,9 +46,12 @@ import zephyr_conf
 from zephyr_conf import log, INVALID_GCID
 from zephyr_iface import Interface
 from zephyr_comp import (Component, LocalBridge, component_num, get_cuuid,
-                         get_cclass, get_gcid, get_serial, get_mgr_uuid)
+                         get_cclass, get_gcid, get_serial, get_mgr_uuid,
+                         ALL_RKD, FM_RKD)
 from zephyr_route import RouteElement, Routes, Route, RoutesTuple
 from zephyr_res import Resources
+from zephyr_rkey import RKD, RKDs
+from zephyr_akey import AKeys, Partitions
 
 # Revisit: copied from zephyr_subsys.py
 # Magic to get JSONEncoder to call to_json method, if it exists
@@ -101,7 +104,8 @@ class Fabric(nx.MultiGraph):
         return 1 if usable else None
 
     def __init__(self, nl, mainapp, map, path, fab_uuid=None, grand_plan=None,
-                 random_cids=False, conf=None, mgr_uuid=None, verbosity=0):
+                 random_cids=False, conf=None, mgr_uuid=None, fm_akey=None,
+                 verbosity=0):
         self.nl = nl
         self.mainapp = mainapp
         self.map = map
@@ -123,18 +127,27 @@ class Fabric(nx.MultiGraph):
         self.nonce_list = [ 0 ]
         self.routes = Routes(fab_uuid=fab_uuid)
         self.resources = Resources(self)
+        self.all_rkd = RKD([], ALL_RKD)
+        self.fm_rkd = RKD([], FM_RKD)
+        self.rkds = RKDs(self, [self.all_rkd, self.fm_rkd])
         self.aesgcm = AESGCM(b64decode(conf.data['aesgcm_key']))
         self.pfm = None
         self.sfm = None
         self.pfm_fm = None
         self.fms = {}
+        self.akeys = AKeys(self)
+        new_fm_akey = fm_akey is None and not zephyr_conf.args.sfm
+        proposed_akey = None if new_fm_akey else fm_akey
+        self.fm_akey = (DEFAULT_AKEY if zephyr_conf.args.no_akeys else
+                        self.akeys.alloc_akey([], proposed_akey=proposed_akey))
+        self.partitions = Partitions(self)
         self.promote_sfm_refcount = RefCount()
         self._g = None  # Graph() for routing
         mgr_uuids = [] if self.mgr_uuid is None else [self.mgr_uuid]
         ns = time.time_ns()
         super().__init__(fab_uuid=self.fab_uuid, mgr_uuids=mgr_uuids,
                          cur_timestamp=ns, mod_timestamp=ns)
-        log.info(f'fabric: {path}, num={self.fabnum}, fab_uuid={self.fab_uuid}, mgr_uuid={self.mgr_uuid}, cur_timestamp={ns}')
+        log.info(f'fabric: {path}, num={self.fabnum}, fab_uuid={self.fab_uuid}, mgr_uuid={self.mgr_uuid}, fm_akey={self.fm_akey}, cur_timestamp={ns}')
 
     def assign_gcid(self, comp, ssdt_sz=4096, proposed_gcid=None, reclaim=False,
                     prev_gcid=None, cstate=CState.CUp) -> Optional[GCID]:
@@ -389,14 +402,28 @@ class Fabric(nx.MultiGraph):
         return ServiceBrowser(zeroconf, services, self)
 
     def set_pfm(self, pfm):
+        prev_pfm = self.pfm
         self.pfm = pfm
         self.graph['pfm'] = pfm
+        if pfm is not None:
+            self.rkds.add_comps_to_rkd([pfm], self.fm_rkd)
+            self.akeys.add_comps_to_akey([pfm], self.fm_akey)
+        else:
+            self.rkds.remove_comps_from_rkd([prev_pfm], self.fm_rkd)
+            self.akeys.remove_comps_from_akey([prev_pfm], self.fm_akey)
         self.send_mgrs(['llamas', 'sfm'], 'mgr_topo', 'graph', self.graph,
                        op='change', invertTypes=True)
 
     def set_sfm(self, sfm: Component):
+        prev_sfm = self.sfm
         self.sfm = sfm
         self.graph['sfm'] = sfm
+        if sfm is not None:
+            self.rkds.add_comps_to_rkd([sfm], self.fm_rkd)
+            self.akeys.add_comps_to_akey([sfm], self.fm_akey)
+        else:
+            self.rkds.remove_comps_from_rkd([prev_sfm], self.fm_rkd)
+            self.akeys.remove_comps_from_akey([prev_sfm], self.fm_akey)
         self.send_mgrs(['llamas', 'sfm'], 'mgr_topo', 'graph', self.graph,
                        op='change', invertTypes=True)
 
@@ -775,7 +802,7 @@ class Fabric(nx.MultiGraph):
                        if i.iface_state()[0] is IState.ICFG]
         expl_ifaces = []
         for iface in icfg_ifaces:
-            iup = iface.iface_init()
+            iup = iface.iface_init(no_akeys=zephyr_conf.args.no_akeys)
             if iup:
                 expl_ifaces.append(iface)
             else:
@@ -1000,6 +1027,56 @@ class Fabric(nx.MultiGraph):
         # Revisit: return correct success/failed dict
         return { 'success': [] }
 
+    def add_rkds(self, rkds_body, send=True):
+        try:
+            rkds = self.rkds.parse(rkds_body, self)
+        except:
+            return { 'failed': [ 'rkds parse error' ] }
+        # Revisit: finish this
+
+    def release_rkds(self, rkds_body, send=True):
+        set_trace() # Revisit: temp debug
+        pass # Revisit: implement this
+
+    def add_rkey(self, rkds_body, send=True):
+        try:
+            rkds = self.rkds.parse(rkds_body, self)
+        except:
+            return { 'failed': [ 'rkds parse error' ] }
+        # Revisit: finish this
+
+    def rm_rkey(self, rkds_body, send=True):
+        set_trace() # Revisit: temp debug
+        pass # Revisit: implement this
+
+    def add_partition(self, body, send=True):
+        fab_uuid = UUID(body['fab_uuid'])
+        if fab_uuid != self.fab_uuid:
+            return { 'failed': [ 'fab_uuid mismatch' ] }
+        resp = self.partitions.parse(body, action='add')
+        return resp
+
+    def remove_partition(self, body, send=True):
+        fab_uuid = UUID(body['fab_uuid'])
+        if fab_uuid != self.fab_uuid:
+            return { 'failed': [ 'fab_uuid mismatch' ] }
+        resp = self.partitions.parse(body, action='remove')
+        return resp
+
+    def add_partition_comps(self, body, send=True):
+        fab_uuid = UUID(body['fab_uuid'])
+        if fab_uuid != self.fab_uuid:
+            return { 'failed': [ 'fab_uuid mismatch' ] }
+        resp = self.partitions.parse(body, action='add_comps')
+        return resp
+
+    def remove_partition_comps(self, body, send=True):
+        fab_uuid = UUID(body['fab_uuid'])
+        if fab_uuid != self.fab_uuid:
+            return { 'failed': [ 'fab_uuid mismatch' ] }
+        resp = self.partitions.parse(body, action='remove_comps')
+        return resp
+
     def enable_sfm(self, sfm: Component):
         # Revisit: what to do if there's already a registered SFM?
         for comp in self.components.values():
@@ -1222,8 +1299,6 @@ class Fabric(nx.MultiGraph):
                 if path.exists():
                     comp.remove_fab_comp(force=True)
                 comp.add_fab_comp(setup=True)
-            # Revisit: instead, call rsp_page_grid_init(readOnly=True)
-            comp.rsp_page_grid_ps = ps
             self.update_mod_timestamp(comp, ts)
             comp.comp_init(None) # None: not PFM
             if cuuid_serial == pfm:

@@ -96,7 +96,7 @@ class Interface():
         return False
 
     # Returns True if interface is usable - is I-Up, not I-Down/I-CFG/I-LP
-    def iface_init(self, prefix='control'):
+    def iface_init(self, prefix='control', no_akeys=False):
         genz = zephyr_conf.genz
         self.setup_paths(prefix)
         iface_file = self.iface_dir / 'interface'
@@ -172,9 +172,9 @@ class Interface():
                 ictl = genz.IControl(iface.IControl, iface, check=True)
             except AllOnesData:
                 return self.warn_unusable('IControl is all-ones')
-            # set IfaceAKeyValidationEnb (if supported)
-            ictl.field.IfaceAKeyValidationEnb = (1 if
-                                    icap1.field.IfaceAKeyValidationSup else 0)
+            # set IfaceAKeyValidationEnb (if supported and not --no-akeys)
+            ictl.IfaceAKeyValidationEnb = (1 if not no_akeys and
+                                           icap1.IfaceAKeyValidationSup else 0)
             # Revisit: set Ingress/Egress AKeyMask
             # Revisit: set IngressDREnb only when needed
             ictl.field.IngressDREnb = 1

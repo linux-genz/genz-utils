@@ -65,6 +65,7 @@ class Conf():
         self.fab = fab
         if writeConf:
             self.data['mgr_uuid'] = str(fab.mgr_uuid)
+            self.data['fm_akey'] = fab.fm_akey
             self.write_conf_file(self.data)
 
     def read_conf_file(self):
@@ -117,7 +118,7 @@ class Conf():
                     log.warning('mixed newRes and addCons resources')
                     continue
                 newRes = True
-                res = Resource(res_list, res_dict)
+                res = Resource(res_list, res_dict, readOnly=ro)
                 res_list.append(res)
                 fab.resources.add(res)
                 # Revisit: set up responder ZMMU if res['type'] is DATA (1)
@@ -130,7 +131,7 @@ class Conf():
                 res = fab.resources.by_instance_uuid[instance_uuid]
                 res_list = res.res_list
                 res_list.add_consumers(conf_add['consumers'], readOnly=ro)
-        # send new/modified resources to SFM
+        # send new/modified resources to SFM and other mgrs
         js = res_list.to_json()
         if send:
             op='add' if newRes else 'add_cons'

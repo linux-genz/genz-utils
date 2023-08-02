@@ -35,7 +35,7 @@ from importlib import import_module
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from base64 import b64encode, b64decode
 from collections import defaultdict
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity
+from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, AKey
 import zephyr_conf
 from zephyr_conf import log, Conf
 from zephyr_iface import Interface
@@ -324,6 +324,8 @@ def main():
                         type=float, help='Control TO')
     parser.add_argument('--control-drto', action='store', default=10e-3,
                         type=float, help='Control DRTO')
+    parser.add_argument('--no-akeys', action='store_true',
+                        help='do not enable AKeys')
     parser.add_argument('--no-nonce', action='store_true',
                         help='do no nonce exchanges')
     parser.add_argument('--reversed', action='store_true',
@@ -344,6 +346,7 @@ def main():
     nl = NetlinkManager(config='./zephyr-fm/alpaka.conf')
     map = genz.ControlStructureMap()
     mgr_uuid = None # by default, PFM generates new mgr_uuid every run
+    fm_akey = None  # same for fm_akey
     conf = Conf(args.conf)
     try:
         data = conf.read_conf_file()
@@ -351,8 +354,9 @@ def main():
         if args.reclaim:
             try:
                 mgr_uuid = UUID(data['mgr_uuid'])
+                fm_akey = AKey(data['fm_akey'])
             except (KeyError, ValueError):
-                log.error('Missing/invalid conf file mgr_uuid with --reclaim')
+                log.error('Missing/invalid conf file mgr_uuid/fm_akey with --reclaim')
                 return
     except FileNotFoundError:
         # create new skeleton file
@@ -388,7 +392,7 @@ def main():
     fab_paths = sys_devices.glob('genz*')
     for fab_path in sorted(fab_paths):
         fab = Fabric(nl, mainapp, map, fab_path, random_cids=args.random_cids,
-                     fab_uuid=fab_uuid,
+                     fab_uuid=fab_uuid, fm_akey=fm_akey,
                      conf=conf, mgr_uuid=mgr_uuid, verbosity=args.verbosity)
         fabrics[fab_path] = fab
         conf.set_fab(fab, writeConf=(not args.sfm))

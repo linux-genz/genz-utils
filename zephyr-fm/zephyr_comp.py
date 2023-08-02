@@ -22,23 +22,24 @@
 # SOFTWARE.
 
 import ctypes
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, CReset, HostMgrUUID, genzUUID, RefCount, MAX_HC, AllOnesData
+from genz.genz_common import GCID, CState, IState, AKey, RKey, PHYOpStatus, ErrSeverity, CReset, HostMgrUUID, genzUUID, RefCount, MAX_HC, AllOnesData, DEFAULT_AKEY
 import os
 import re
 import time
 from pdb import set_trace
 from uuid import UUID, uuid4
-from math import ceil, log2
+from math import ceil, floor, log2
 from pathlib import Path
 import zephyr_conf
 from zephyr_conf import log, INVALID_GCID
 from zephyr_iface import Interface
 from blueprints.resource.blueprint import send_resource
 
+# Revisit: these should move to zephyr_rkey.py
 ALL_RKD = 0 # all requesters are granted this RKD
-FM_RKD = 1  # only the FM is granted this RKD
-FM_RKEY = RKey(rkd=FM_RKD, os=0) # for FM-only control structs
-NO_ACCESS_RKEY = RKey(rkd=FM_RKD, os=1) # no-access: rsp RO+RW; read-only: rsp RW
+FM_RKD = 0xfff  # only the FMs (PFM/SFM) are granted this RKD
+FM_RKEY = RKey(rkd=FM_RKD, os=0xfab) # for FM-only control structs
+NO_ACCESS_RKEY = RKey(rkd=FM_RKD, os=0xfa15e) # no-access: rsp RO+RW; read-only: rsp RW
 DEFAULT_RKEY = RKey(rkd=ALL_RKD, os=0)
 
 def ceil_log2(x):
@@ -122,16 +123,22 @@ class Component():
         self._req_vcat_sz = None
         self._rsp_vcat_sz = None
         self._ssdt_sz = None
+        self._ssap_sz = None
         self.comp_dest = None
+        self.component_pa = None
         self.ssdt = None
+        self.ssap = None
+        self.pa = None
         self.ssdt_dir = None # needed by rt.invert() early on
         self.ces_dir = None  # needed if comp_init() fails and usable is False
+        self.rkd_dir = None # needed by rkd_write()
         self.rit = None
         self.route_info = None
         self.req_vcat = None
         self.rsp_vcat = None
         self.rsp_page_grid_ps = 0
         self.paths_setup = False
+        self.partition = None
         self.usable = False # will be set True if comp_init() succeeds
         self.cstate = CState.CDown # will be updated by comp_init()
         fab.components[self.uuid] = self
@@ -316,9 +323,22 @@ class Component():
         except IndexError:
             self.opcode_set_table_dir = None
         try:
+            self.component_pa_dir = list((self.path / prefix).glob(
+                'component_pa@*'))[0]
+        except IndexError:
+            self.component_pa_dir = None
+        try:
             self.ssdt_dir = list(self.comp_dest_dir.glob('ssdt@*'))[0]
         except IndexError:
             self.ssdt_dir = None
+        try:
+            self.ssap_dir = list(self.component_pa_dir.glob('ssap@*'))[0]
+        except (IndexError, AttributeError):
+            self.ssap_dir = None
+        try:
+            self.peer_attr_dir = list(self.component_pa_dir.glob('pa@*'))[0]
+        except (IndexError, AttributeError):
+            self.peer_attr_dir = None
         try:
             self.req_vcat_dir = list(self.comp_dest_dir.glob('req_vcat@*'))[0]
         except IndexError:
@@ -341,6 +361,10 @@ class Component():
                 'component_error_and_signal_event@*'))[0]
         except IndexError:
             self.ces_dir = None
+        try:
+            self.rkd_dir = list(self.comp_dest_dir.glob('component_rkd@*'))[0]
+        except IndexError:
+            self.rkd_dir = None
         self.rsp_pg_dir = self.find_rsp_page_grid_path(prefix)
         if self.rsp_pg_dir is not None:
             self.rsp_pg_table_dir = list(self.rsp_pg_dir.glob(
@@ -354,11 +378,15 @@ class Component():
         self.opcode_set_dir = None
         self.opcode_set_table_dir = None
         self.ssdt_dir = None
+        self.component_pa_dir = None
+        self.ssap_dir = None
+        self.peer_attr_dir = None
         self.req_vcat_dir = None
         self.rsp_vcat_dir = None
         self.rit_dir = None
         self.switch_dir = None
         self.ces_dir = None
+        self.rkd_dir = None
         self.rsp_pg_dir = None
         self.rsp_pg_table_dir = None
         self.rsp_pte_table_dir = None
@@ -467,6 +495,10 @@ class Component():
             if pfm and ingress_iface is not None:
                 self.fixup_ssdt(route, pfm)
                 self.rit_write(ingress_iface, 1 << ingress_iface.num)
+            try:
+                ssap_sz = self.ssap_size(prefix=prefix)
+            except AllOnesData:
+                return self.warn_unusable('ssap_size returned all-ones data')
             if pfm:
                 # initialize RSP-VCAT
                 # Revisit: multiple Action columns
@@ -527,7 +559,18 @@ class Component():
         self.fru_uuid = get_fru_uuid(self.path)
         self.fab.add_comp(self)
         self.fab.update_assigned_gcids(self)
-        if not pfm:
+        # initialize Responder Page Grid structure
+        # Revisit: should we be doing this when reclaiming a C-Up comp?
+        self.rsp_page_grid_init(core, readOnly=not pfm)
+        self.peer_attr_init(readOnly=not pfm)
+        if pfm:
+            # initial ACREQ/ACRSP is unchanged; Control ops allowed
+            # Revisit: NLL paIdx
+            self.ssap_write(pfm.gcid.cid, self.fab.fm_akey, paIdx=0)
+        if self.is_responder and self.core.MaxData > 0:
+            from zephyr_res import Producer
+            self.producer = Producer(self)
+        if not pfm: # SFM init stops here
             return self.check_usable()
         # re-open core file at (potential) new location set by add_fab_comp()
         core_file = self.path / prefix / 'core@0x0/core'
@@ -597,7 +640,8 @@ class Component():
             iupCnt = 0
             for ifnum in range(0, core.MaxInterface):
                 try:
-                    iup = self.interfaces[ifnum].iface_init(prefix=prefix)
+                    iup = self.interfaces[ifnum].iface_init(prefix=prefix,
+                                                no_akeys=args.no_akeys)
                     if iup:
                         iupCnt += 1
                 except IndexError:
@@ -649,9 +693,10 @@ class Component():
                     self.rit_write(iface, 1 << iface.num)
             # initialize OpCode Set structure
             self.opcode_set_init()
-            # initialize Responder Page Grid structure
-            # Revisit: should we be doing this when reclaiming a C-Up comp?
-            self.rsp_page_grid_init(core, valid=1)
+            # enable component AKeys (if not --no-akeys)
+            # do not enable if PFM bridge cannot generate AKeys
+            enb = not args.no_akeys and pfm.akey_sup
+            self.enable_akeys(enb=enb)
             # if component is usable, set ComponentEnb - transition to C-Up
             if self.usable:
                 # Revisit: before setting ComponentEnb, once again check that
@@ -680,6 +725,8 @@ class Component():
             except AllOnesData:
                 return self.warn_unusable('switch_init returned all-ones data')
         self.comp_err_signal_init(core)
+        if self.usable and self.is_requester:
+            self.fab.rkds.add_comps_to_rkd([self], self.fab.all_rkd)
         self.fab.update_comp(self, forceTimestamp=True)
         return self.usable
 
@@ -1088,12 +1135,49 @@ class Component():
                 switch, genz.ComponentSwitchStructure.SwitchCAP1Control, sz=8)
         # end with
 
-    def rsp_page_grid_init(self, core, valid=0):
+    def rsp_pte_update(self, chunk: 'ChunkTuple', zaddr: int, ps: int,
+                       valid: int = 1, baseAddr: int = 0) -> None:
         if self.rsp_pg_dir is None:
             return
         if self.max_data == 0:
-            log.warning('{}: component has Rsp Page Grid but MaxData==0'.format(
-                self.gcid))
+            log.warning(f'{self}: component has Rsp Page Grid but MaxData==0')
+            return
+        rsp_pte_table_file = self.rsp_pte_table_dir / 'pte_table'
+        with rsp_pte_table_file.open(mode='rb+') as f:
+            pte_table = self.rsp_pte_table
+            pte_table.set_fd(f)
+            ps_bytes = 1 << ps
+            min_pte = (zaddr - baseAddr) // ps_bytes
+            max_pte = min_pte + ceil(chunk.length / ps_bytes)
+            local_addr = chunk.start # need not be page-aligned
+            for i in range(min_pte, max_pte):
+                pte_table[i].V = valid
+                pte_table[i].RORKey = chunk.ro_rkey if valid else NO_ACCESS_RKEY.val
+                pte_table[i].RWRKey = chunk.rw_rkey if valid else NO_ACCESS_RKEY.val
+                pte_table[i].ADDR = local_addr
+                # Revisit: add PA/CCE/CE/WPE/PSE/LPE/IE/PFE/RKMGR/PASID/RK_MGR
+                self.control_write(pte_table, pte_table.element.V,
+                                   off=pte_table.element.Size*i,
+                                   sz=pte_table.element.Size)
+                local_addr += ps_bytes # Revisit: alignment
+            # end for
+        # end with
+
+    def peer_attr_init(self, readOnly=False):
+        if self.peer_attr_dir is None:
+            return
+        pa = self.pa_read()
+        if len(pa) < 2: # must have at least 2 rows
+            return
+        if not readOnly:
+            self.pa_write(0, 0) # LL
+            self.pa_write(1, 1) # NLL
+
+    def rsp_page_grid_init(self, core, readOnly=False):
+        if self.rsp_pg_dir is None:
+            return
+        if self.max_data == 0:
+            log.warning(f'{self}: component has Rsp Page Grid but MaxData==0')
             return
         # Revisit: return if rsp_pg should be host managed
         rsp_pg_file = self.rsp_pg_dir / 'component_page_grid'
@@ -1104,15 +1188,17 @@ class Component():
                                        verbosity=self.verbosity)
             if pg.all_ones_type_vers_size():
                 raise AllOnesData(f'{self}: component page grid all-ones data')
-            log.debug('{}: {}'.format(self.gcid, pg))
+            log.debug(f'{self}: {pg}')
             # Revisit: verify the PG-PTE-UUID
         # end with
-        # Cover all of data space using 2 page grids each with half the
-        # available PTEs, one for direct-mapped pages and one for interleave
-        pte_cnt = pg.PTETableSz // 2
-        ps = max(ceil_log2(self.max_data / pte_cnt), 12)
+        # Cover all of data space using 1 page grid.
+        # The page size is chosen such that all of data space can
+        # be mapped twice. This is used during RKey & zaddr transitions.
+        # Any additional page grids will be allocated dynamically for creating
+        # interleave groups.
+        self.pte_cnt = pg.PTETableSz
+        ps = max(ceil_log2(2 * self.max_data / self.pte_cnt), 20) # min ps for interleaving
         self.rsp_page_grid_ps = ps
-        # Revisit: verify pg.PGTableSz >= 2
         rsp_pg_table_file = self.rsp_pg_table_dir / 'pg_table'
         with rsp_pg_table_file.open(mode='rb+') as f:
             data = bytearray(f.read())
@@ -1120,24 +1206,20 @@ class Component():
                                              path=rsp_pg_table_file,
                                              fd=f.fileno(), parent=pg,
                                              verbosity=self.verbosity)
-            log.debug('{}: {}'.format(self.gcid, pg_table))
-            # Direct-mapped pages start at zaddr 0
-            pg_table[0].PGBaseAddr = 0
-            pg_table[0].PageSz = ps
-            pg_table[0].RES = 0
-            pg_table[0].PageCount = pte_cnt
-            pg_table[0].BasePTEIdx = 0
-            # Interleaved pages start at zaddr 0x8000000000000000
-            pg_table[1].PGBaseAddr = 1 << (63 - 12) # base addr is 52-bit field
-            pg_table[1].PageSz = ps
-            pg_table[1].RES = 0
-            pg_table[1].PageCount = pte_cnt
-            pg_table[1].BasePTEIdx = pte_cnt
-            for i in range(2, pg.PGTableSz):
-                pg_table[i].PageCount = 0
-            for i in range(0, pg.PGTableSz):
-                self.control_write(pg_table, pg_table.element.R0,
-                                   off=16*i, sz=16)
+            log.debug('{self}: {pg_table}')
+            if not readOnly:
+                # Responder pages start at zaddr 0 in PG0
+                pg_table[0].PGBaseAddr = 0
+                pg_table[0].PageSz = ps
+                pg_table[0].RES = 0
+                pg_table[0].PageCount = self.pte_cnt
+                pg_table[0].BasePTEIdx = 0
+                # All other PGs are initially disabled
+                for i in range(1, pg.PGTableSz):
+                    pg_table[i].PageCount = 0
+                for i in range(0, pg.PGTableSz):
+                    self.control_write(pg_table, pg_table.element.R0,
+                                       off=16*i, sz=16)
         # end with
         rsp_pte_table_file = self.rsp_pte_table_dir / 'pte_table'
         with rsp_pte_table_file.open(mode='rb+') as f:
@@ -1146,20 +1228,18 @@ class Component():
                                               path=rsp_pte_table_file,
                                               fd=f.fileno(), parent=pg,
                                               verbosity=self.verbosity)
-            log.debug('{}: {}'.format(self.gcid, pte_table))
-            for i in range(0, pte_cnt):
-                pte_table[i].V = valid
-                pte_table[i].RORKey = NO_ACCESS_RKEY.val
-                pte_table[i].RWRKey = NO_ACCESS_RKEY.val
-                # Revisit: non-zero-based addressing
-                pte_table[i].ADDR = i * (1 << ps)
-                # Revisit: add PA/CCE/CE/WPE/PSE/LPE/IE/PFE/RKMGR/PASID/RK_MGR
-            for i in range(pte_cnt, pg.PTETableSz):
-                pte_table[i].V = 0
-            for i in range(0, pg.PTETableSz):
-                self.control_write(pte_table, pte_table.element.V,
-                                   off=pte_table.element.Size*i,
-                                   sz=pte_table.element.Size)
+            log.debug('{self}: {pte_table}')
+            self.rsp_pte_table = pte_table # for rsp_pte_update()
+            if not readOnly:
+                for i in range(0, self.pte_cnt):
+                    pte_table[i].V = 0
+                    pte_table[i].RORKey = NO_ACCESS_RKEY.val
+                    pte_table[i].RWRKey = NO_ACCESS_RKEY.val
+                    pte_table[i].ADDR = i * (1 << ps)
+                for i in range(0, pg.PTETableSz):
+                    self.control_write(pte_table, pte_table.element.V,
+                                       off=pte_table.element.Size*i,
+                                       sz=pte_table.element.Size)
         # end with
 
     def comp_dest_read(self, prefix='control', haveCore=True):
@@ -1181,6 +1261,24 @@ class Component():
             self.core.comp_dest = comp_dest # Revisit: two copies
             self.core.comp_dest.HCS = self.route_control_read(prefix=prefix)
         return comp_dest
+
+    def component_pa_read(self, prefix='control', haveCore=True):
+        if self.component_pa is not None or self.component_pa_dir is None:
+            return self.component_pa
+        component_pa_file = self.component_pa_dir / 'component_pa'
+        with component_pa_file.open(mode='rb') as f:
+            data = bytearray(f.read())
+            component_pa = self.map.fileToStruct(
+                'component_pa',
+                data, fd=f.fileno(), verbosity=self.verbosity)
+            if component_pa.all_ones_type_vers_size():
+                raise AllOnesData('component_pa structure returned all-ones data')
+        # end with
+        if haveCore:
+            self.component_pa = component_pa
+            self.core.component_pa = component_pa # Revisit: two copies
+            #self.core.comp_dest.HCS = self.route_control_read(prefix=prefix) # Revisit
+        return component_pa
 
     # returns route_control.HCS
     def route_control_read(self, prefix='control'):
@@ -1313,6 +1411,24 @@ class Component():
                                off=self.rsp_vcat.cs_offset(vc, action), sz=sz)
         # end with
 
+    def rkd_write(self, rkd: 'RKD', enable=True):
+        if self.rkd_dir is None:
+            return
+        # Revisit: avoid open/close (via "with") on every write?
+        rkd_file = self.rkd_dir / 'component_rkd'
+        with rkd_file.open(mode='rb+', buffering=0) as f:
+            if self.rkd is None:
+                data = bytearray(f.read())
+                self.rkd = self.map.fileToStruct('component_rkd', data, path=rkd_file,
+                                    core=self.core, parent=self.core,
+                                    fd=f.fileno(), verbosity=self.verbosity)
+            else:
+                self.rkd.set_fd(f)
+            row = self.rkd.assign_rkd(rkd.rkd, enable)
+            self.control_write(self.rkd, self.rkd.AuthArray,
+                               off=self.rkd.embeddedArray.cs_offset(row), sz=8)
+        # end with
+
     def ssdt_size(self, prefix='control', haveCore=True):
         if self._ssdt_sz is not None:
             return self._ssdt_sz
@@ -1405,6 +1521,133 @@ class Component():
             elem = rt[0]
             elem.set_ssdt(pfm, updateRtNum=True)
 
+    def ssap_size(self, prefix='control', haveCore=True) -> int:
+        if self._ssap_sz is not None:
+            return self._ssap_sz
+        comp_pa = self.component_pa_read(prefix=prefix, haveCore=haveCore)
+        if comp_pa is None or comp_pa.SSAPPTR == 0:
+            self._ssap_sz = 0
+        else:
+            self._ssap_sz = comp_pa.sz_0_special(comp_pa.SSAPSz, 12)
+        log.debug(f'{self.gcid}: ssap_sz={self._ssap_sz}')
+        return self._ssap_sz
+
+    def ssap_read(self):
+        if self.ssap is not None or self.ssap_dir is None:
+            return self.ssap
+        # Revisit: avoid open/close (via "with") on every read?
+        ssap_file = self.ssap_dir / 'ssap'
+        with ssap_file.open(mode='rb+', buffering=0) as f:
+            data = bytearray(f.read())
+            self.ssap = self.map.fileToStruct('ssap', data, path=ssap_file,
+                                    core=self.core, parent=self.comp_pa,
+                                    fd=f.fileno(), verbosity=self.verbosity)
+        return self.ssap
+
+    def ssap_write(self, cid, akey: AKey = None, acreq=None, acrsp=None, paIdx=None):
+        if self.ssap_dir is None:
+            return
+        # Revisit: avoid open/close (via "with") on every write?
+        ssap_file = self.ssap_dir / 'ssap'
+        with ssap_file.open(mode='rb+', buffering=0) as f:
+            if self.ssap is None:
+                data = bytearray(f.read())
+                self.ssap = self.map.fileToStruct('ssap', data, path=ssap_file,
+                                    core=self.core, parent=self.component_pa,
+                                    fd=f.fileno(), verbosity=self.verbosity)
+            else:
+                self.ssap.set_fd(f)
+            sz = ctypes.sizeof(self.ssap.element)
+            elem = None
+            if self.ssap.pa_idx_sz > 0:
+                elem = self.ssap.element.PAIdx
+                if paIdx is not None:
+                    self.ssap[cid].PAIdx = paIdx
+            if not self.ssap.wc_akey:
+                elem = self.ssap.element.AKey if elem is None else elem
+                if akey is not None:
+                    self.ssap[cid].AKey = akey
+            if not self.ssap.wc_acreq:
+                elem = self.ssap.element.ACREQ if elem is None else elem
+                if acreq is not None:
+                    self.ssap[cid].ACREQ = acreq
+            if not self.ssap.wc_acrsp:
+                elem = self.ssap.element.ACRSP if elem is None else elem
+                if acrsp is not None:
+                    self.ssap[cid].ACRSP = acrsp
+            if elem is not None:
+                self.control_write(self.ssap, elem,
+                                   off=self.ssap.cs_offset(cid), sz=sz)
+        # end with
+
+    def pa_size(self, prefix='control', haveCore=True):
+        if self._pa_sz is not None:
+            return self._pa_sz
+        comp_pa = self.component_pa_read(prefix=prefix, haveCore=haveCore)
+        if comp_pa is None or comp_pa.PAPTR == 0:
+            self._pa_sz = 0
+        else:
+            self._pa_sz = comp_pa.sz_0_special(comp_pa.PASize, 16)
+        log.debug(f'{self.gcid}: pa_sz={self._pa_sz}')
+        return self._pa_sz
+
+    def pa_read(self):
+        if self.pa is not None or self.peer_attr_dir is None:
+            return self.pa
+        # Revisit: avoid open/close (via "with") on every read?
+        pa_file = self.peer_attr_dir / 'pa'
+        with pa_file.open(mode='rb+', buffering=0) as f:
+            data = bytearray(f.read())
+            self.pa = self.map.fileToStruct('pa', data, path=pa_file,
+                                    core=self.core, parent=self.component_pa,
+                                    fd=f.fileno(), verbosity=self.verbosity)
+        return self.pa
+
+    def pa_write(self, paIdx, latDom):
+        if self.peer_attr_dir is None:
+            return
+        # Revisit: avoid open/close (via "with") on every write?
+        pa_file = self.peer_attr_dir / 'pa'
+        with pa_file.open(mode='rb+', buffering=0) as f:
+            if self.pa is None:
+                data = bytearray(f.read())
+                self.pa = self.map.fileToStruct('pa', data, path=pa_file,
+                                    core=self.core, parent=self.component_pa,
+                                    fd=f.fileno(), verbosity=self.verbosity)
+            else:
+                self.pa.set_fd(f)
+            sz = ctypes.sizeof(self.pa.element)
+            self.pa[paIdx].LatencyDomain = latDom
+            # Revisit: support other PeerAttr fields
+            self.control_write(self.pa, self.pa.element.OpCodeSetTableID,
+                               off=self.pa.cs_offset(paIdx), sz=sz)
+        # end with
+
+    @property
+    def akey_sup(self, wildOk: bool = False) -> bool:
+        '''Component has AKey support. Requires a ComponentPA structure
+        and either a non-zero SSAPPTR or (if @wildOk) WildcardAKeySup.
+        '''
+        genz = zephyr_conf.genz
+        comp_pa = self.component_pa_read()
+        if comp_pa is None:
+            return False
+        cap1 = genz.PACAP1(comp_pa.PACAP1, comp_pa)
+        return comp_pa.SSAPPTR != 0 or (cap1.WildcardAKeySup and wildOk)
+
+    def enable_akeys(self, enb=True):
+        genz = zephyr_conf.genz
+        comp_pa = self.component_pa_read()
+        if comp_pa is None:
+            return
+        cap1ctl = genz.PACAP1Control(comp_pa.PACAP1Control, comp_pa)
+        cap1ctl.AKeyEnb = enb
+        comp_pa.PACAP1Control = cap1ctl.val
+        component_pa_file = self.component_pa_dir / 'component_pa'
+        with component_pa_file.open(mode='rb+', buffering=0) as f:
+            comp_pa.set_fd(f)
+            self.control_write(comp_pa, genz.ComponentPAStructure.PACAP1Control, sz=4)
+
     def update_rit_dir(self, prefix='control'):
         if self.rit_dir is None:
             return
@@ -1437,6 +1680,26 @@ class Component():
         self.ssdt_dir = list(self.comp_dest_dir.glob('ssdt@*'))[0]
         log.debug('new ssdt_dir = {}'.format(self.ssdt_dir))
 
+    def update_ssap_dir(self, prefix='control'):
+        if self.component_pa_dir is None:
+            return
+        self.component_pa_dir = list((self.path / prefix).glob(
+            'component_pa@*'))[0]
+        if self.ssap_dir is None:
+            return
+        self.ssap_dir = list(self.component_pa_dir.glob('ssap@*'))[0]
+        log.debug('new ssap_dir = {}'.format(self.ssap_dir))
+
+    def update_peer_attr_dir(self, prefix='control'):
+        if self.component_pa_dir is None:
+            return
+        self.component_pa_dir = list((self.path / prefix).glob(
+            'component_pa@*'))[0]
+        if self.peer_attr_dir is None:
+            return
+        self.peer_attr_dir = list(self.component_pa_dir.glob('pa@*'))[0]
+        log.debug('new peer_attr_dir = {}'.format(self.peer_attr_dir))
+
     def update_opcode_set_dir(self, prefix='control'):
         if self.opcode_set_dir is None:
             return
@@ -1465,6 +1728,14 @@ class Component():
             'component_error_and_signal_event@*'))[0]
         log.debug('new ces_dir = {}'.format(self.ces_dir))
 
+    def update_rkd_dir(self, prefix='control'):
+        if self.rkd_dir is None:
+            return
+        self.comp_dest_dir = list((self.path / prefix).glob(
+            'component_destination_table@*'))[0]
+        self.rkd_dir = list(self.comp_dest_dir.glob('component_rkd@*'))[0]
+        log.debug('new rkd_dir = {}'.format(self.rkd_dir))
+
     def update_rsp_page_grid_dir(self, prefix='control'):
         if self.rsp_pg_dir is None:
             return
@@ -1478,11 +1749,14 @@ class Component():
         self.path = self.fab.make_path(self.gcid)
         log.debug('new path: {}'.format(self.path))
         self.update_ssdt_dir()
+        self.update_ssap_dir()
+        self.update_peer_attr_dir()
         self.update_rit_dir()
         self.update_req_vcat_dir()
         self.update_rsp_vcat_dir()
         self.update_switch_dir()
         self.update_ces_dir()
+        self.update_rkd_dir()
         self.update_opcode_set_dir()
         self.update_rsp_page_grid_dir()
         for iface in self.interfaces:
@@ -1495,6 +1769,33 @@ class Component():
     @property
     def has_switch(self):
         return self.switch_dir is not None
+
+    @property
+    def is_requester(self) -> bool:
+        return self.core.MaxREQSuppReqs > 0
+
+    @property
+    def is_responder(self) -> bool:
+        return self.core.MaxRSPSuppReqs > 0
+
+    def acreqrsp(self, other: 'Component'):
+        '''Use ACREQ/ACRSP to allow data traffic between:
+        1. Components that have not been partitioned
+        2. Components that share the same partition (and therefore AKey)
+        3. Everybody, if --no-akeys
+        No other combinations are allowed. Because Control pkts are not
+        impacted by ACREQ/ACRSP, PFM/SFM are not special here.
+        '''
+        genz = zephyr_conf.genz
+        no_akeys = zephyr_conf.args.no_akeys
+        same_part = self.partition == other.partition
+        acreq = (genz.ACREQRSP.FullAccess if no_akeys else
+                 genz.ACREQRSP.RKeyRequired if self.is_requester and same_part
+                 else genz.ACREQRSP.NoAccess)
+        acrsp = (genz.ACREQRSP.FullAccess if no_akeys else
+                 genz.ACREQRSP.RKeyRequired if self.is_responder and same_part
+                 else genz.ACREQRSP.NoAccess)
+        return (acreq, acrsp)
 
     def explore_interface(self, iface, pfm, ingress_iface,
                           send=False, reclaim=False):
@@ -1563,7 +1864,7 @@ class Component():
                 # bring peer iface to I-Up (if it isn't already)
                 peer_istate, _ = peer_iface.iface_state()
                 if peer_istate is not IState.IUp:
-                    peer_iface.iface_init()
+                    peer_iface.iface_init(no_akeys=args.no_akeys)
                 nonce_valid = iface.do_nonce_exchange()
                 if not nonce_valid:
                     iface.set_peer_iface(None)
@@ -1604,6 +1905,7 @@ class Component():
                     self.fab.add_link(iface, peer_iface)
                     routes = self.fab.setup_bidirectional_routing(
                         pfm, comp, write_to_ssdt=False)
+                    pfm.ssap_write(comp.gcid.cid, self.fab.fm_akey, paIdx=0)
                     try:
                         comp.add_fab_comp(setup=True)
                     except Exception as e:
@@ -1675,6 +1977,7 @@ class Component():
             log.info(msg)
             routes = self.fab.setup_bidirectional_routing(
                 pfm, comp, write_to_ssdt=False) # comp_init() will write SSDT
+            pfm.ssap_write(comp.gcid.cid, self.fab.fm_akey, paIdx=0)
             try:
                 comp.add_fab_dr_comp()
             except Exception as e:
@@ -1807,6 +2110,7 @@ class Component():
         '''Enable @sfm as Secondary Fabric Manager of this component and
         setup bidirectional routing.
         '''
+        args = zephyr_conf.args
         core_file = self.path / prefix / 'core@0x0/core'
         with core_file.open(mode='rb+') as f:
             genz = zephyr_conf.genz
@@ -1829,6 +2133,13 @@ class Component():
                 core.CAP1Control = cap1ctl.val
                 self.control_write(core, genz.CoreStructure.CAP1Control, sz=8)
         # end with
+        # Revisit: NLL paIdx
+        acreq, acrsp = sfm.acreqrsp(self)
+        sfm.ssap_write(self.gcid.cid, self.fab.fm_akey,
+                       acreq=acreq, acrsp=acrsp, paIdx=0)
+        acreq, acrsp = self.acreqrsp(sfm)
+        self.ssap_write(sfm.gcid.cid, self.fab.fm_akey,
+                        acreq=acreq, acrsp=acrsp, paIdx=0)
         routes = self.fab.setup_bidirectional_routing(sfm, self)
         self.sfm_uep_update(sfm)
         return routes # Revisit
@@ -1869,6 +2180,7 @@ class Component():
         self.sfm_uep_update(None, valid=False)
         # Revisit: remove SFM routes (when route refcounts are available)
         #routes = self.fab.setup_bidirectional_routing(sfm, self)
+        # Revisit: disable fm_akey in sfm and self
         #return routes # Revisit
 
     def promote_sfm_to_pfm(self, sfm, pfm, prefix='control'):
@@ -1975,11 +2287,14 @@ class LocalBridge(Bridge):
                 if self.brnum == br_num:
                     self.path = br_path
                     self.update_ssdt_dir()
+                    self.update_ssap_dir()
+                    self.update_peer_attr_dir()
                     self.update_rit_dir()
                     self.update_req_vcat_dir()
                     self.update_rsp_vcat_dir()
                     self.update_switch_dir()
                     self.update_ces_dir()
+                    self.update_rkd_dir()
                     self.update_opcode_set_dir()
                     self.update_rsp_page_grid_dir()
                     log.debug('new path: {}'.format(self.path))

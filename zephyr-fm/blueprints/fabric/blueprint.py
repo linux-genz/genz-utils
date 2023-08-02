@@ -153,6 +153,38 @@ def endpoints():
     return flask.make_response(flask.jsonify(desc), 200)
 
 
+@Journal.BP.route(f'/{Journal.name}/partitions', methods=['GET'])
+def partitions():
+    """
+        Accepts GET request and returns a json body describing the fabric
+    partitions (and the fabric_uuid).
+    Returned body model:
+    {
+        'fab_uuid' : 'string',
+        'cur_timestamp': 'int', # from time.time_ns()
+        'mod_timestamp': 'int', # last modification, from time.time_ns()
+        'partitions': [
+          {
+            'instance_uuid': 'string',
+            'mod_timestamp': 'int', # last modification, from time.time_ns()
+            'akey': 'int',
+            'comp_list': [
+              'cuuid:serial',
+              ...
+            ]
+          },
+          ...
+        ]
+    }
+
+    """
+    global Journal
+    mainapp = Journal.mainapp
+    fab = mainapp.conf.fab
+
+    return flask.make_response(flask.jsonify(fab.partitions.to_json()), 200)
+
+
 @Journal.BP.route(f'/{Journal.name}/uep', methods=['POST'])
 def uep():
     """
@@ -198,7 +230,7 @@ def uep():
     return flask.make_response(flask.jsonify(resp), 200)
 
 
-@Journal.BP.route('/%s/routes/add' % (Journal.name), methods=['POST'])
+@Journal.BP.route(f'/{Journal.name}/routes/add', methods=['POST'])
 def routes_add():
     """
         Accepts POST request with a json body describing the routes to add.
@@ -233,7 +265,7 @@ def routes_add():
     return flask.make_response(flask.jsonify(resp), 200)
 
 
-@Journal.BP.route('/%s/routes/remove' % (Journal.name), methods=['POST'])
+@Journal.BP.route(f'/{Journal.name}/routes/remove', methods=['POST'])
 def routes_remove():
     """
         Accepts POST request with a json body describing the routes to remove.
@@ -299,6 +331,156 @@ def sfm_routes():
 
     response['success'].append(f'{op}')
     return flask.make_response(flask.jsonify(response), 200)
+
+@Journal.BP.route(f'/{Journal.name}/sfm_rkds', methods=['POST'])
+def sfm_rkds():
+    """
+        Accepts POST request with a json body detailing the RKD changes
+    that the PFM wants to alert the SFM about.
+    POST body model:
+    {
+        'fabric_uuid' : 'string',
+        'mgr_uuid'    : 'string',
+        'operation'   : 'string',  # 'add', 'release', 'add_rkey', or 'rm_rkey'
+        'rkds': {
+          [ { 'rkd': 'int', 'comps': [ 'cuuid_serial', ... ],
+              'assigned_rkeys': ['int', ...] },
+            ...
+          ]
+        }
+    }
+    """
+    global Journal
+    mainapp = Journal.mainapp
+    body = flask.request.get_json()
+    fab = mainapp.conf.fab
+
+    if body is None:
+        msg = { 'error ' : 'body is None'}
+        return flask.make_response(flask.jsonify(msg), 400)
+
+    # Revisit: validate json against schema
+    rkds = body.get('rkds', None)
+    fabric_uuid = body.get('fabric_uuid', None)
+    # Revisit: check mgr_uuid
+    op = body.get('operation', None)
+
+    # Check that the fabric_uuid matches ours
+    if fabric_uuid != str(fab.fab_uuid):
+        msg = { 'error' : f'Incorrect fabric_uuid: {fabric_uuid}.' }
+        return flask.make_response(flask.jsonify(msg), 404)
+
+    # Check for a valid operation
+    if not op in [ 'add', 'release', 'add_rkey', 'rm_rkey' ]:
+        msg = { 'error' : f'Unknown operation: {op}.' }
+        return flask.make_response(flask.jsonify(msg), 404)
+    if op == 'add':
+        response = fab.add_rkds(rkds, send=False)
+    elif op == 'release':
+        response = fab.release_rkds(rkds, send=False)
+    elif op == 'add_rkey':
+        response = fab.add_rkey(rkds, send=False)
+    else: # op == 'rm_rkey'
+        response = fab.rm_rkey(rkds, send=False)
+
+    response['success'].append(f'{op}')
+    return flask.make_response(flask.jsonify(response), 200)
+
+@Journal.BP.route(f'/{Journal.name}/partition/add', methods=['POST'])
+def partition_add():
+    """
+        Accepts POST request with a json body describing the partition to add.
+    Body model:
+    {
+        'fab_uuid'    : 'string',
+        'partition'      : {
+                  'instance_uuid': '???',
+                  'mod_timestamp': int,
+                  'comp_list': [
+                      'cuuid:serial',
+                      ...
+                  ],
+              }
+    }
+    """
+    global Journal
+    mainapp = Journal.mainapp
+    fab = mainapp.conf.fab
+    body = flask.request.get_json()
+
+    if body is None:
+        msg = { 'error ' : ''}
+        return flask.make_response(flask.jsonify(msg), 400)
+
+    # Revisit: validate json against schema
+    resp = fab.add_partition(body)
+    return flask.make_response(flask.jsonify(resp), 200)
+
+
+@Journal.BP.route(f'/{Journal.name}/partition/remove', methods=['POST'])
+def partition_remove():
+    """
+        Accepts POST request with a json body describing the partition to remove.
+    Body model: See partition_add(), except that the "instance_uuid" must be
+    the correct one from the earlier "add".
+    """
+    global Journal
+    mainapp = Journal.mainapp
+    fab = mainapp.conf.fab
+    body = flask.request.get_json()
+
+    if body is None:
+        msg = { 'error ' : 'body is None'}
+        return flask.make_response(flask.jsonify(msg), 400)
+
+    # Revisit: validate json against schema
+    resp = fab.remove_partition(body)
+    return flask.make_response(flask.jsonify(resp), 200)
+
+
+@Journal.BP.route(f'/{Journal.name}/partition/add_comps', methods=['POST'])
+def partition_add_comps():
+    """
+        Accepts POST request with a json body describing the components to
+    add to the partition.
+    Body model: See partition_add(), except that the "instance_uuid" must be
+    the correct one from the earlier "add".
+    """
+    global Journal
+    mainapp = Journal.mainapp
+    fab = mainapp.conf.fab
+    body = flask.request.get_json()
+
+    if body is None:
+        msg = { 'error ' : 'body is None'}
+        return flask.make_response(flask.jsonify(msg), 400)
+
+    # Revisit: validate json against schema
+    resp = fab.add_partition_comps(body)
+    return flask.make_response(flask.jsonify(resp), 200)
+
+
+@Journal.BP.route(f'/{Journal.name}/partition/remove_comps', methods=['POST'])
+def partition_remove_comps():
+    """
+        Accepts POST request with a json body describing the components to
+    remove from the partition.
+    Body model: See partition_add(), except that the "instance_uuid" must be
+    the correct one from the earlier "add".
+    """
+    global Journal
+    mainapp = Journal.mainapp
+    fab = mainapp.conf.fab
+    body = flask.request.get_json()
+
+    if body is None:
+        msg = { 'error ' : 'body is None'}
+        return flask.make_response(flask.jsonify(msg), 400)
+
+    # Revisit: validate json against schema
+    resp = fab.remove_partition_comps(body)
+    return flask.make_response(flask.jsonify(resp), 200)
+
 
 @Journal.BP.route(f'/{Journal.name}/mgr_endpoints', methods=['POST'])
 def mgr_endpoints():
