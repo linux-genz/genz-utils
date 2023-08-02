@@ -50,7 +50,12 @@ def create_resource():
         msg = { 'error' : str(err) }
         return flask.make_response(flask.jsonify(msg), 400)
 
-    add_res = mainapp.conf.add_resource(resource)
+    try:
+        add_res = mainapp.conf.add_resource(resource)
+    except Exception as err:
+        msg = { 'error' : str(err) }
+        return flask.make_response(flask.jsonify(msg), 400)
+
     endpoints = mainapp.get_endpoints(resource['consumers'], 'llamas', 'add')
     # If nobody subscribed to this "create" event, then nobody will be notified.
     if len(endpoints) == 0:
