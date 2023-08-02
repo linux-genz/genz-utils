@@ -4736,9 +4736,12 @@ class Core64ReadResponseBase(ExplicitHdr):
         r += (',,,,{}' if self.csv else ', ECRC:{1}{0:06x}').format(self.ECRC, self.ecrc_sep)
         r += self.expected_ecrc_str
         if self.verbosity:
-            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
+            byte_len = self.pay_len * 4 - self.PadCNT
+            r += f'\n\tPayload[{byte_len}]:'
             for i in reversed(range(self.pay_len)):
-                r += ' {:08x}'.format(self.Payload[i])
+                width = 8 if byte_len >= 4 else 2 * byte_len
+                r += f' {self.Payload[i]:0{width}x}'
+                byte_len -= width // 2
         return r
 
 class Core64ReadResponsePkt(Core64ReadResponseBase):
@@ -4813,9 +4816,12 @@ class Core64WriteBase(ExplicitReqHdr, Core64ReadWriteMixin):
         r += (',{},{},,,,,{}' if self.csv else ', PD: {0}, FPS: {1}, ECRC:{3}{2:06x}').format(self.PD, self.FPS, self.ECRC, self.ecrc_sep)
         r += self.expected_ecrc_str
         if self.verbosity:
-            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
+            byte_len = self.pay_len * 4 - self.PadCNT
+            r += f'\n\tPayload[{byte_len}]:'
             for i in reversed(range(self.pay_len)):
-                r += ' {:08x}'.format(self.Payload[i])
+                width = 8 if byte_len >= 4 else 2 * byte_len
+                r += f' {self.Payload[i]:0{width}x}'
+                byte_len -= width // 2
         return r
 
 class Core64WritePkt(Core64WriteBase):
@@ -4902,9 +4908,12 @@ class Core64WritePartialBase(ExplicitReqHdr, Core64ReadWriteMixin):
         r += (',{},{},,,,,{}' if self.csv else ', PD: {0}, FPS: {1}, ECRC:{3}{2:06x}').format(self.PD, self.FPS, self.ECRC, self.ecrc_sep)
         r += self.expected_ecrc_str
         if self.verbosity:
-            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4)) # no PadCNT
+            byte_len = self.pay_len * 4 # no PadCNT
+            r += f'\n\tPayload[{byte_len}]:'
             for i in reversed(range(self.pay_len)):
-                r += ' {:08x}'.format(self.Payload[i])
+                width = 8 if byte_len >= 4 else 2 * byte_len
+                r += f' {self.Payload[i]:0{width}x}'
+                byte_len -= width // 2
         return r
 
 class Core64WritePartialPkt(Core64WritePartialBase):
@@ -5164,9 +5173,12 @@ class ControlWriteBase(ExplicitHdr, ControlReadWriteMixin):
         r += (',,,,,,,,,{},,,,,{}' if self.csv else ', FPS: {0}, ECRC:{2}{1:06x}').format(self.FPS, self.ECRC, self.ecrc_sep)
         r += self.expected_ecrc_str
         if self.verbosity:
-            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
+            byte_len = self.pay_len * 4 - self.PadCNT
+            r += f'\n\tPayload[{byte_len}]:'
             for i in reversed(range(self.pay_len)):
-                r += ' {:08x}'.format(self.Payload[i])
+                width = 8 if byte_len >= 4 else 2 * byte_len
+                r += f' {self.Payload[i]:0{width}x}'
+                byte_len -= width // 2
         return r
 
 class ControlWritePkt(ControlWriteBase):
@@ -5263,9 +5275,12 @@ class ControlWritePartialBase(ExplicitHdr, ControlReadWriteMixin):
         r += (',,,,,,,,,{},,,,,{}' if self.csv else ', FPS: {0}, ECRC:{2}{1:06x}').format(self.FPS, self.ECRC, self.ecrc_sep)
         r += self.expected_ecrc_str
         if self.verbosity:
-            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4)) # no PadCNT
+            byte_len = self.pay_len * 4 - self.PadCNT
+            r += f'\n\tPayload[{byte_len}]:'
             for i in reversed(range(self.pay_len)):
-                r += ' {:08x}'.format(self.Payload[i])
+                width = 8 if byte_len >= 4 else 2 * byte_len
+                r += f' {self.Payload[i]:0{width}x}'
+                byte_len -= width // 2
         return r
 
 class ControlWritePartialPkt(ControlWritePartialBase):
@@ -5518,9 +5533,12 @@ class CtxIdWriteMSGBase(ExplicitHdr, WriteMsgMixin):
         r += (',{},{},,,,,{}' if self.csv else ', CA: {0}, FPS: {1}, ECRC:{3}{2:06x}').format(self.CA, self.FPS, self.ECRC, self.ecrc_sep)
         r += self.expected_ecrc_str
         if self.verbosity:
-            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
+            byte_len = self.pay_len * 4 # no PadCNT
+            r += f'\n\tPayload[{byte_len}]:'
             for i in reversed(range(self.pay_len)):
-                r += ' {:08x}'.format(self.Payload[i])
+                width = 8 if byte_len >= 4 else 2 * byte_len
+                r += f' {self.Payload[i]:0{width}x}'
+                byte_len -= width // 2
         return r
 
 class CtxIdWriteMSGPkt(CtxIdWriteMSGBase):
@@ -5614,9 +5632,12 @@ class ControlWriteMSGBase(ExplicitHdr, WriteMsgMixin):
         r += (',,{},,,,,{}' if self.csv else ', FPS: {0}, ECRC:{2}{1:06x}').format(self.FPS, self.ECRC, self.ecrc_sep)
         r += self.expected_ecrc_str
         if self.verbosity:
-            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
+            byte_len = self.pay_len * 4 - self.PadCNT
+            r += f'\n\tPayload[{byte_len}]:'
             for i in reversed(range(self.pay_len)):
-                r += ' {:08x}'.format(self.Payload[i])
+                width = 8 if byte_len >= 4 else 2 * byte_len
+                r += f' {self.Payload[i]:0{width}x}'
+                byte_len -= width // 2
         return r
 
 class ControlWriteMSGPkt(ControlWriteMSGBase):
@@ -5828,9 +5849,12 @@ class MulticastUnrelWriteMSGBase(MulticastHdr, WriteMsgMixin):
         r += (',{},{},,,,,{}' if self.csv else ', ECRC:{1}{0:06x}').format(self.ECRC, self.ecrc_sep)
         r += self.expected_ecrc_str
         if self.verbosity:
-            r += ('\n\tPayload[{}]:'.format(self.pay_len * 4 - self.PadCNT))
+            byte_len = self.pay_len * 4 - self.PadCNT
+            r += f'\n\tPayload[{byte_len}]:'
             for i in reversed(range(self.pay_len)):
-                r += ' {:08x}'.format(self.Payload[i])
+                width = 8 if byte_len >= 4 else 2 * byte_len
+                r += f' {self.Payload[i]:0{width}x}'
+                byte_len -= width // 2
         return r
 
 class MulticastUnrelWriteMSGPkt(MulticastUnrelWriteMSGBase):
