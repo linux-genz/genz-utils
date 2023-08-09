@@ -149,7 +149,9 @@ class Component():
         return hash(self.uuid)
 
     def __eq__(self, other):
-        return self.uuid == other.uuid
+        if isinstance(other, Component):
+            return self.uuid == other.uuid
+        return NotImplemented
 
     def to_json(self, verbosity=0):
         if verbosity == 0:

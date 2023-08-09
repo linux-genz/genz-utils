@@ -24,7 +24,7 @@
 import ctypes
 import time
 from typing import List, Tuple, Iterator
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount, MAX_HC, AllOnesData
+from genz.genz_common import GCID, CState, IState, AKey, RKey, PHYOpStatus, ErrSeverity, RefCount, MAX_HC, AllOnesData
 from pdb import set_trace
 import zephyr_conf
 from zephyr_conf import log
@@ -47,6 +47,8 @@ class Interface():
         self.phy_tx_lwr = 0
         self.phy_rx_lwr = 0
         self.mod_timestamp = None
+        self.ingress_akey_mask_refcount = RefCount((64, 1))
+        self.egress_akey_mask_refcount = RefCount((64, 1))
 
     def setup_paths(self, prefix):
         self._prefix = prefix
@@ -721,6 +723,50 @@ class Interface():
                                 sz=4, off=4)
             # Revisit: implement snapshots
         #end with
+
+    def update_ingress_akey_mask(self, akey: AKey, enable: bool,
+                                 refcountOnly: bool = False):
+        if enable:
+            doWrite = self.ingress_akey_mask_refcount.inc(akey)
+        else:
+            doWrite = self.ingress_akey_mask_refcount.dec(akey)
+        if not doWrite or refcountOnly:
+            return
+        iface_file = self.iface_dir / 'interface'
+        with iface_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            iface = self.comp.map.fileToStruct('interface', data,
+                                fd=f.fileno(), verbosity=self.comp.verbosity)
+            if iface.all_ones_type_vers_size():
+                raise AllOnesData('interface structure returned all-ones data')
+            if enable:
+                iface.IngressAKeyMask |= akey.mask
+            else:
+                iface.IngressAKeyMask &= ~akey.mask
+            self.comp.control_write(iface, type(iface).IngressAKeyMask, sz=8)
+        # end with
+
+    def update_egress_akey_mask(self, akey: AKey, enable: bool,
+                                refcountOnly: bool = False):
+        if enable:
+            doWrite = self.egress_akey_mask_refcount.inc(akey)
+        else:
+            doWrite = self.egress_akey_mask_refcount.dec(akey)
+        if not doWrite or refcountOnly:
+            return
+        iface_file = self.iface_dir / 'interface'
+        with iface_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            iface = self.comp.map.fileToStruct('interface', data,
+                                fd=f.fileno(), verbosity=self.comp.verbosity)
+            if iface.all_ones_type_vers_size():
+                raise AllOnesData('interface structure returned all-ones data')
+            if enable:
+                iface.EgressAKeyMask |= akey.mask
+            else:
+                iface.EgressAKeyMask &= ~akey.mask
+            self.comp.control_write(iface, type(iface).EgressAKeyMask, sz=8)
+        # end with
 
     def update_lprt_dir(self):
         if self.lprt_dir is None:

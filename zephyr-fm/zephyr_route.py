@@ -25,7 +25,7 @@ import ctypes
 import json
 import re
 from typing import List, Tuple, NamedTuple, Optional
-from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount
+from genz.genz_common import GCID, CState, IState, RKey, PHYOpStatus, ErrSeverity, RefCount, DEFAULT_AKEY
 from pdb import set_trace
 from collections import Counter
 from itertools import product
@@ -370,6 +370,52 @@ class Route():
             if self != rt: # skip original route
                 rts.append(rt)
         return rts
+
+    @property
+    def partition(self):
+        fr = self.fr
+        to = self.to
+        if to.partition != fr.partition:
+            raise ValueError(f'invalid route: {fr} and {to} are in different partitions')
+        return fr.partition
+
+    @property
+    def fm_route(self) -> bool:
+        fr = self.fr
+        to = self.to
+        pfm = fr.fab.pfm
+        sfm = fr.fab.sfm
+        return fr == pfm or fr == sfm or to == pfm or to == sfm
+
+    @property
+    def akey(self) -> Optional['AKey']:
+        part = self.partition
+        return (self.fr.fab.fm_akey if self.fm_route else
+                None if part is None else part.akey)
+
+    def egress_ifaces(self, include_fr: bool = True):
+        for e in self._elems:
+            if e.egress_iface and include_fr:
+                yield e.egress_iface
+                include_fr = True
+
+    def ingress_ifaces(self, include_to: bool = True):
+        for e in self._elems:
+            if e.ingress_iface:
+                yield e.ingress_iface
+        if include_to: # include the "to" interface
+            yield e.to_iface
+
+    def update_akey_masks(self, enable, include_fr=True, refcountOnly=False):
+        akey = self.akey
+        if akey is not None and akey != DEFAULT_AKEY:
+            include_to = self.fr is not self.fr.fab.pfm
+            for iface in self.ingress_ifaces(include_to=include_to):
+                iface.update_ingress_akey_mask(akey, enable,
+                                               refcountOnly=refcountOnly)
+            for iface in self.egress_ifaces(include_fr=include_fr):
+                iface.update_egress_akey_mask(akey, enable,
+                                              refcountOnly=refcountOnly)
 
     def to_json(self):
         return { 'route': [e.to_json() for e in self._elems],

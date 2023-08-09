@@ -208,6 +208,10 @@ class AKey(int):
     def val(self):
         return int(self)
 
+    @property
+    def mask(self):
+        return (1 << self.val)
+
 DEFAULT_AKEY = AKey(0)
 
 class RKey(int):

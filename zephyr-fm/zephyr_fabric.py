@@ -526,6 +526,9 @@ class Fabric(nx.MultiGraph):
                 # add to's GCID to rt's SSDT
                 rt.set_ssdt(route.to, valid=enable, refcountOnly=refcountOnly,
                             updateRtNum=refcountOnly)
+        # end for
+        route.update_akey_masks(enable, include_fr=write_ssdt,
+                                refcountOnly=refcountOnly)
 
     def write_routes(self, rts: Routes, write_ssdt=True, enable=True, refcountOnly=False):
         for rt in rts:

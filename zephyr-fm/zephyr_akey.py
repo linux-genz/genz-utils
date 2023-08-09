@@ -79,7 +79,7 @@ class AKeys():
                 random.shuffle(self.akeys)
             self.refill_akeys = False
         # end if refill
-        if proposed_akey is not None:
+        if proposed_akey is not None and proposed_akey != DEFAULT_AKEY:
             self.akeys.remove(proposed_akey) # ValueError if not available
             akey = proposed_akey
         else:
@@ -107,6 +107,8 @@ class AKeys():
 
     def add_comps_to_akey(self, comps: Iterable[Component], akey: AKey,
                           readOnly=False) -> None:
+        if akey is DEFAULT_AKEY:
+            return
         prev_comps = self.by_akey[akey]
         comps_set = set(comps) | prev_comps
         for comp in comps:
@@ -117,6 +119,8 @@ class AKeys():
 
     def remove_comps_from_akey(self, comps: Iterable[Component], akey: AKey,
                                readOnly=False) -> bool:
+        if akey is DEFAULT_AKEY:
+            return False
         prev_comps = self.by_akey[akey]
         comps_set = prev_comps - set(comps)
         for comp in comps:
