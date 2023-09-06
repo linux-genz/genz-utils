@@ -608,16 +608,25 @@ class Component():
                 return self.warn_unusable('all-ones MGRUUID - component not owned')
             if core.MGRUUID != self.mgr_uuid:
                 return self.warn_unusable(f'component MGRUUID {core.MGRUUID} != PFM MGRUUID {self.mgr_uuid} - component not owned')
+            # re-read fields modified by HW during CID capture on 1st write
+            self.control_read(core, genz.CoreStructure.PMCID, sz=8)
+            self.control_read(core, genz.CoreStructure.CAP1Control, sz=8)
+            self.control_read(core, genz.CoreStructure.CAP2Control, sz=8)
             # set PFMSID/PFMCID (must be before PrimaryFabMgrRole = 1)
             # Revisit: subnets
             core.PFMCID = pfm.gcid.cid
             self.control_write(core, genz.CoreStructure.PMCID, sz=8)
+            # set PFMCIDValid; do not clear other CID/SID valid bits (yet)
+            cap2ctl = genz.CAP2Control(core.CAP2Control, core)
+            cap2ctl.PFMCIDValid = 1
+            core.CAP2Control = cap2ctl.val
+            self.control_write(core, genz.CoreStructure.CAP2Control, sz=8)
             # set HostMgrMGRUUIDEnb, MGRUUIDEnb
             cap1ctl = genz.CAP1Control(core.CAP1Control, core)
             uuEnb = HostMgrUUID.Core if self.local_br else HostMgrUUID.Zero
             cap1ctl.HostMgrMGRUUIDEnb = uuEnb
             cap1ctl.MGRUUIDEnb = 1
-            # set ManagerType, PrimaryFabMgrRole
+            # set ManagerType, PrimaryFabMgrRole; must be before PMCIDValid=0
             # clear PrimaryMgrRole, SecondaryFabMgrRole, PwrMgrEnb
             cap1ctl.field.ManagerType = 1
             cap1ctl.field.PrimaryMgrRole = 0
@@ -636,10 +645,8 @@ class Component():
             cap1ctl.field.SWMgmt7 = 0
             core.CAP1Control = cap1ctl.val
             self.control_write(core, genz.CoreStructure.CAP1Control, sz=8)
-            # set PFMCIDValid; clear other CID/SID valid bits
-            cap2ctl = genz.CAP2Control(core.CAP2Control, core)
+            # clear other CID/SID valid bits - after ManagerType=1
             cap2ctl.field.PMCIDValid = 0
-            cap2ctl.field.PFMCIDValid = 1
             cap2ctl.field.SFMCIDValid = 0
             cap2ctl.field.PFMSIDValid = 0
             cap2ctl.field.SFMSIDValid = 0
