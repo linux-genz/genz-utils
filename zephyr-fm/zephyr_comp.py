@@ -373,6 +373,14 @@ class Component():
                 'pg_table@*'))[0]
             self.rsp_pte_table_dir = list(self.rsp_pg_dir.glob(
                 'pte_table@*'))[0]
+        try: # Revisit: only 1 caccess_dir supported
+            self.caccess_dir = list((self.path / prefix / 'component_c_access').glob(
+                'component_c_access0@*'))[0]
+        except IndexError:
+            self.caccess_dir = None
+        if self.caccess_dir is not None:
+            self.caccess_rkey_dir = list(self.caccess_dir.glob(
+                'c_access_r_key@*'))[0]
         self.paths_setup = True
 
     def remove_paths(self):
@@ -392,6 +400,8 @@ class Component():
         self.rsp_pg_dir = None
         self.rsp_pg_table_dir = None
         self.rsp_pte_table_dir = None
+        self.caccess_dir = None
+        self.caccess_rkey_dir = None
         self.paths_setup = False
 
     def check_usable(self, prefix='control'):
@@ -699,6 +709,8 @@ class Component():
             # do not enable if PFM bridge cannot generate AKeys
             enb = not args.no_akeys and pfm.akey_sup
             self.enable_akeys(enb=enb)
+            # initialize CAccess RKeys
+            self.caccess_rkey_init()
             # if component is usable, set ComponentEnb - transition to C-Up
             if self.usable:
                 # Revisit: before setting ComponentEnb, once again check that
@@ -1165,6 +1177,28 @@ class Component():
             # end for
         # end with
 
+    def caccess_update(self, chunk: 'ChunkTuple',
+                       valid: int = 1, baseAddr: int = 0) -> None:
+        # Revisit: only 1 c_access structure supported
+        if self.caccess_dir is None or self.caccess_rkey_dir is None:
+            return
+        ps = self.caccess_ps
+        caccess_rkey_file = self.caccess_rkey_dir / 'c_access_r_key'
+        with caccess_rkey_file.open(mode='rb+') as f:
+            caccess_rkey = self.caccess_rkey
+            caccess_rkey.set_fd(f)
+            ps_bytes = 1 << ps
+            min_pte = (chunk.start - baseAddr) // ps_bytes
+            max_pte = min_pte + ceil(chunk.length / ps_bytes)
+            for i in range(min_pte, max_pte):
+                caccess_rkey[i].RORKey = chunk.ro_rkey if valid else NO_ACCESS_RKEY.val
+                caccess_rkey[i].RWRKey = chunk.rw_rkey if valid else NO_ACCESS_RKEY.val
+                self.control_write(caccess_rkey, caccess_rkey.element.RORKey,
+                                   off=caccess_rkey.element.Size*i,
+                                   sz=caccess_rkey.element.Size)
+            # end for
+        # end with
+
     def peer_attr_init(self, readOnly=False):
         if self.peer_attr_dir is None:
             return
@@ -1243,6 +1277,52 @@ class Component():
                                        off=pte_table.element.Size*i,
                                        sz=pte_table.element.Size)
         # end with
+
+    def caccess_rkey_init(self, readOnly=False):
+        genz = zephyr_conf.genz
+        if self.caccess_dir is None or self.caccess_rkey_dir is None:
+            return
+        caccess_file = self.caccess_dir / 'component_c_access'
+        with caccess_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            caccess = self.map.fileToStruct('component_c_access', data,
+                                            fd=f.fileno(),
+                                            verbosity=self.verbosity)
+            if caccess.all_ones_type_vers_size():
+                raise AllOnesData(f'{self}: component c_access all-ones data')
+            log.debug(f'{self}: {caccess}')
+        # end with
+        self.caccess_table_sz = caccess.CAccessTableSz
+        cpage_sz = genz.CPageSz(caccess.CPageSz, caccess)
+        self.caccess_ps = cpage_sz.ps()
+        caccess_rkey_file = self.caccess_rkey_dir / 'c_access_r_key'
+        with caccess_rkey_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            caccess_rkey = self.map.fileToStruct('c_access_r_key', data,
+                                                 path=caccess_rkey_file,
+                                                 fd=f.fileno(), parent=caccess,
+                                                 verbosity=self.verbosity)
+            log.debug('{self}: {caccess_rkey}')
+            self.caccess_rkey = caccess_rkey # for caccess_update()
+            if not readOnly:
+                for i in range(0, self.caccess_table_sz):
+                    caccess_rkey[i].RORKey = NO_ACCESS_RKEY.val
+                    caccess_rkey[i].RWRKey = NO_ACCESS_RKEY.val
+                    self.control_write(caccess_rkey, caccess_rkey.element.RORKey,
+                                       off=caccess_rkey.element.Size*i,
+                                       sz=caccess_rkey.element.Size)
+                # end for
+            # end if
+        # end with
+        # set CAccessCTL.RKeyEnb
+        with caccess_file.open(mode='rb+') as f:
+            caccess.set_fd(f)
+            ctl = genz.CAccessCTL(caccess.CAccessCTL, caccess)
+            ctl.RKeyEnb = 1
+            caccess.CAccessCTL = ctl.val
+            # Revisit: orthus cannot do 1-byte write of CAccessCTL
+            self.control_write(caccess,
+                               genz.ComponentCAccessStructure.CPageSz, sz=8)
 
     def comp_dest_read(self, prefix='control', haveCore=True):
         if self.comp_dest is not None:
@@ -1746,6 +1826,16 @@ class Component():
         self.rsp_pte_table_dir = list(self.rsp_pg_dir.glob('pte_table@*'))[0]
         log.debug('new rsp_pg_dir = {}'.format(self.rsp_pg_dir))
 
+    def update_caccess_dir(self, prefix='control'):
+        # Revisit: only 1 c_access structure supported
+        if self.caccess_dir is None or self.caccess_rkey_dir is None:
+            return
+        self.caccess_dir = list((self.path / prefix / 'component_c_access').glob(
+            'component_c_access0@*'))[0]
+        self.caccess_rkey_dir = list(self.caccess_dir.glob(
+            'c_access_r_key@*'))[0]
+        log.debug('new caccess_dir = {}'.format(self.caccess_dir))
+
     def update_path(self):
         log.debug('current path: {}'.format(self.path))
         self.path = self.fab.make_path(self.gcid)
@@ -1761,6 +1851,7 @@ class Component():
         self.update_rkd_dir()
         self.update_opcode_set_dir()
         self.update_rsp_page_grid_dir()
+        self.update_caccess_dir()
         for iface in self.interfaces:
             iface.update_path(prefix='control')
 
@@ -2299,6 +2390,7 @@ class LocalBridge(Bridge):
                     self.update_rkd_dir()
                     self.update_opcode_set_dir()
                     self.update_rsp_page_grid_dir()
+                    self.update_caccess_dir()
                     log.debug('new path: {}'.format(self.path))
                     for iface in self.interfaces:
                         iface.update_path()

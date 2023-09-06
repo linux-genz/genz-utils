@@ -121,7 +121,6 @@ class Conf():
                 res = Resource(res_list, res_dict, readOnly=ro)
                 res_list.append(res)
                 fab.resources.add(res)
-                # Revisit: set up responder ZMMU if res['type'] is DATA (1)
             else: # modification of existing resource - add consumers
                 if newRes:
                     log.warning('mixed newRes and addCons resources')

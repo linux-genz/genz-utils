@@ -34,16 +34,22 @@ from intervaltree import Interval, IntervalTree
 from sortedcontainers import SortedSet
 from operator import neg
 from math import ceil
+from enum import IntEnum
 from zephyr_conf import log
 from zephyr_comp import Component, NO_ACCESS_RKEY, DEFAULT_RKEY
 from zephyr_route import RoutesTuple
 
 DynamicRKey = -1 # assign a dynamic RKey
 
+class ResType(IntEnum):
+    Control = 0
+    Data = 1
+    Interleaved = 2
+
 class ChunkTuple(NamedTuple):
     start:   int
     length:  int
-    type:    int
+    type:    ResType
     ro_rkey: RKey
     rw_rkey: RKey
 
@@ -71,8 +77,22 @@ class Chunks():
             self.chunks[chunk].remove(zaddr)
 
     @property
-    def total_size(self):
-        return sum(ch.length for ch in self.chunks)
+    def total_data(self):
+        return sum(ch.length for ch in self.chunks if ch.type == ResType.Data)
+
+    @property
+    def has_data(self):
+        for ch in self.chunks:
+            if ch.type == ResType.Data:
+                return True
+        return False
+
+    @property
+    def has_ctl(self):
+        for ch in self.chunks:
+            if ch.type == ResType.Control:
+                return True
+        return False
 
     def __iter__(self):
         return iter(self.chunks)
@@ -97,7 +117,12 @@ class Resource():
             chunk = ChunkTuple(**mem)
             self.chunks.add(chunk)
         # end for
-        self.it = self.producer.producer.rsp_pte_alloc(self, readOnly=readOnly)
+        if self.has_data:
+            self.it = self.producer.producer.rsp_pte_alloc(self,
+                                                           readOnly=readOnly)
+        if self.has_ctl: # Control
+            self.caccess_map(readOnly=readOnly)
+        # Revisit: add support for Interleaved
 
     @property
     def producer(self):
@@ -108,8 +133,24 @@ class Resource():
         return self.res_list.consumers
 
     @property
-    def total_size(self):
-        return self.chunks.total_size
+    def total_data(self):
+        return self.chunks.total_data
+
+    @property
+    def has_data(self):
+        return self.chunks.has_data
+
+    @property
+    def has_ctl(self):
+        return self.chunks.has_ctl
+
+    def caccess_map(self, readOnly=False):
+        if readOnly:
+            return
+        for ch in self.chunks:
+            if ch.type == ResType.Control:
+                # Revisit: need per-CAccess-page refcount to know when to unmap
+                self.producer.caccess_update(ch)
 
     def to_json(self):
         return self.res_dict
@@ -313,29 +354,34 @@ class Producer():
             raise ValueError(f'insufficient space on {self.comp} for {res}') # Revisit: better exception
         ps_bytes = 1 << self.ps
         zaddr = it.begin * ps_bytes
-        res_mem = { 'start': zaddr, 'length': res.chunks.total_size }
+        res_mem = { 'start': zaddr, 'length': res.chunks.total_data }
+        first = None
         for i, ch in enumerate(res.chunks):
-            if i == 0:
-                res_mem['type'] = ch.type
-                res_mem['ro_rkey'] = ch.ro_rkey
-                res_mem['rw_rkey'] = ch.rw_rkey
-            else:
-                if (res_mem['type'] != ch.type or
-                    res_mem['ro_rkey'] != ch.ro_rkey or
-                    res_mem['rw_rkey'] != ch.rw_rkey):
-                    raise ValueError('incompatible chunk type or RKey')
-            self.chunks.add_za(ch, zaddr)
-            # write the rsp PTEs
-            self.comp.rsp_pte_update(ch, zaddr, self.ps, valid=1)
-            ch_page_count = ceil(ch.length / ps_bytes)
-            zaddr += (ch_page_count * ps_bytes)
+            # fold all the data chunks into one
+            if ch.type == ResType.Data:
+                if first is None:
+                    res_mem['type'] = ch.type
+                    res_mem['ro_rkey'] = ch.ro_rkey
+                    res_mem['rw_rkey'] = ch.rw_rkey
+                    first = i
+                else:
+                    if (res_mem['ro_rkey'] != ch.ro_rkey or
+                        res_mem['rw_rkey'] != ch.rw_rkey):
+                        raise ValueError('incompatible data chunk RKey')
+                    del res.res_dict['memory'][i]
+                self.chunks.add_za(ch, zaddr)
+                # write the rsp PTEs
+                self.comp.rsp_pte_update(ch, zaddr, self.ps, valid=1)
+                ch_page_count = ceil(ch.length / ps_bytes)
+                zaddr += (ch_page_count * ps_bytes)
+            # end if
         # end for
-        # replace multiple memory ranges with one contiguous one in ZA space
-        res.res_dict['memory'] = [ res_mem ]
+        # replace multiple data ranges with one contiguous one in ZA space
+        if first is not None:
+            res.res_dict['memory'][first] = res_mem
         return it
 
     def rsp_pte_free(self, res: Resource, readOnly=False) -> None:
-        set_trace() # Revisit: temp debug
         for ch in res.chunks:
             za_list = list(self.chunks.chunks[ch]) # copy to iterate over
             for zaddr in za_list:
@@ -347,7 +393,7 @@ class Producer():
 
     def find_pte_range(self, res: Resource) -> Optional[Interval]:
         # compute Resource page_count
-        total_size = res.total_size
+        total_size = res.total_data
         if total_size <= 0:
             raise ValueError(f'invalid resource total_size {total_size}')
         page_count = ceil(total_size / (1 << self.ps))

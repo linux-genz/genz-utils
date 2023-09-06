@@ -1661,10 +1661,14 @@ class CPageSz(SpecialField, Union):
     _fields_    = [('field', CPageSzFields), ('val', c_u8)]
     _cpage_sz = ['4KiB', '64KiB', '1MiB', '32MiB']
     _special = {'CPageSz': _cpage_sz}
+    _ps = [12, 16, 20, 25]
 
     def __init__(self, value, parent, verbosity=0, check=False):
         super().__init__(value, parent, verbosity=verbosity, check=check)
         self.val = value
+
+    def ps(self):
+        return None if self.val >= len(self._ps) else self._ps[self.val]
 
 class CAccessCAP1(SpecialField, Union):
     class CAccessCAP1Fields(Structure):
