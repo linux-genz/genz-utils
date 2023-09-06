@@ -183,7 +183,8 @@ class Callbacks():
     def match(self, mgr_type: str, callbacks: dict):
         for eps in self.endpoints.values():
             for type, ep in eps.items():
-                if type == mgr_type and callbacks == ep['callbacks']:
+                if (type == mgr_type and 'callbacks' in ep and
+                    callbacks == ep['callbacks']):
                     return True
         return False
 
@@ -350,6 +351,9 @@ def main():
     conf = Conf(args.conf)
     try:
         data = conf.read_conf_file()
+        if data is None:
+            log.error(f'{conf.file} has zero length')
+            return
         fab_uuid = UUID(data['fabric_uuid'])
         if args.reclaim:
             try:

@@ -26,6 +26,7 @@ import logging
 import logging.config
 import yaml
 import json
+import os
 import time
 from uuid import UUID
 from pdb import set_trace
@@ -70,6 +71,8 @@ class Conf():
 
     def read_conf_file(self):
         with open(self.file, 'r') as f:
+            if os.fstat(f.fileno()).st_size == 0:
+                return None
             self.data = json.load(f)
             return self.data
 
