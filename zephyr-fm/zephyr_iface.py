@@ -234,7 +234,7 @@ class Interface():
         log.debug('{}: iface_init done'.format(self))
         return self.usable
 
-    def ierror_init(self, iface, icap1):
+    def ierror_init(self, iface, icap1, clearStatus=True):
         if icap1.IfaceErrFieldsSup == 0:
             return
         genz = zephyr_conf.genz
@@ -262,6 +262,9 @@ class Interface():
         #                        sz=6)
         self.comp.control_write(iface, genz.InterfaceStructure.IErrorSigTgt,
                                 sz=8)
+        if clearStatus:
+            self.comp.control_write(iface, genz.InterfaceStructure.IErrorStatus,
+                                    sz=4) # Revisit: sz=2 fails on orthus
         # Set IErrorDetect - last, after other IError fields setup
         try:
             ierr_det = genz.IErrorDetect(iface.IErrorDetect, iface, check=True)

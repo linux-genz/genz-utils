@@ -821,7 +821,7 @@ class Component():
                                sz=8, off=0)
         # end with
 
-    def cerror_init(self, ces):
+    def cerror_init(self, ces, clearStatus=True):
         genz = zephyr_conf.genz
         # Set CErrorSigTgt
         cerr_tgt = genz.CErrorSigTgt([ces.CErrorSigTgtl,
@@ -847,6 +847,9 @@ class Component():
         ces.CErrorSigTgth = cerr_tgt.val[2]
         self.control_write(ces,
                     genz.ComponentErrorSignalStructure.CErrorSigTgtl, sz=24)
+        if clearStatus:
+            self.control_write(ces,
+                    genz.ComponentErrorSignalStructure.CErrorStatus, sz=8)
         # Set CErrorDetect - last, after other CError fields setup
         cerr_det = genz.CErrorDetect(ces.CErrorDetect, ces)
         cerr_det.field.CompContain = 1
@@ -868,7 +871,7 @@ class Component():
         self.control_write(ces,
                     genz.ComponentErrorSignalStructure.CErrorDetect, sz=8)
 
-    def cevent_init(self, ces):
+    def cevent_init(self, ces, clearStatus=True):
         genz = zephyr_conf.genz
         # Set CEventSigTgt
         cevt_tgt = genz.CEventSigTgt([ces.CEventSigTgtl,
@@ -883,6 +886,9 @@ class Component():
         ces.CEventSigTgth = cevt_tgt.val[2]
         self.control_write(ces,
                     genz.ComponentErrorSignalStructure.CEventSigTgtl, sz=24)
+        if clearStatus:
+            self.control_write(ces,
+                    genz.ComponentErrorSignalStructure.CEventStatus, sz=8)
         # Set CEventDetect - last, after other CEvent fields setup
         cevt_det = genz.CEventDetect(ces.CEventDetect, ces)
         cevt_det.field.UnableToCommAuthDest = 1
@@ -893,7 +899,7 @@ class Component():
         self.control_write(ces,
                     genz.ComponentErrorSignalStructure.CEventDetect, sz=8)
 
-    def ievent_init(self, ces, newPeerComp=False):
+    def ievent_init(self, ces, newPeerComp=False, clearStatus=True):
         genz = zephyr_conf.genz
         # Set IEventSigTgt
         ievt_tgt = genz.IEventSigTgt([ces.IEventSigTgtl,
@@ -910,6 +916,9 @@ class Component():
         ces.IEventSigTgth = ievt_tgt.val[2]
         self.control_write(ces,
                     genz.ComponentErrorSignalStructure.IEventSigTgtl, sz=24)
+        if clearStatus:
+            self.control_write(ces,
+                    genz.ComponentErrorSignalStructure.IEventStatus, sz=8)
         # Set IEventDetect - last, after other IEvent fields setup
         ievt_det = genz.IEventDetect(ces.IEventDetect, ces)
         ievt_det.field.FullIfaceReset = 1
