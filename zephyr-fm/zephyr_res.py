@@ -108,6 +108,10 @@ class Resource():
         if res_dict['instance_uuid'] == '???':
                 res_dict['instance_uuid'] = str(uuid4())
         self.instance_uuid = UUID(res_dict['instance_uuid'])
+        self.ref_uuid = (UUID(res_dict['reference_uuid'])
+                         if 'reference_uuid' in res_dict else None)
+        ref_res = (res_list.fab.resources.by_instance_uuid[self.ref_uuid]
+                   if self.ref_uuid is not None else None)
         self.chunks = Chunks()
         for mem in res_dict['memory']:
             if mem['rw_rkey'] == DynamicRKey:
@@ -117,6 +121,11 @@ class Resource():
             chunk = ChunkTuple(**mem)
             self.chunks.add(chunk)
         # end for
+        # Revisit: should also check that chunks match (ignoring RKeys)
+        # Revisit: how do we know when to teardown the ref_res PTEs?
+        if ref_res is not None and self.producer == ref_res.producer:
+            self.res_dict['memory'] = ref_res.res_dict['memory']
+            return
         if self.has_data:
             self.it = self.producer.producer.rsp_pte_alloc(self,
                                                            readOnly=readOnly)
@@ -231,6 +240,7 @@ class ResourceList():
                         cons_comp, self.producer, res=True)
                     self.res_routes.add(cons_comp, routes)
         # end for cons
+        # Revisit: this should also check that resources have at least 1 non-default RKey
         if prev_cons != self.consumers and not readOnly:
             rkds = self.fab.rkds
             #set_trace() # Revisit: temp debug
@@ -241,7 +251,7 @@ class ResourceList():
                 if prev_rkd is not None:
                     # Revisit: this is wrong - must defer until all prev_cons
                     # have acknowleged that they've updated to the new RKey
-                    rkds.release_rkd(res, prev_rkd)
+                    rkds.release_rkd(self, prev_rkd)
             pass # Revisit: finish this
 
     def remove_consumers(self, res: Resource, consumers, ts=None):
