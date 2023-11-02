@@ -2218,7 +2218,7 @@ class ControlStructureMap(LittleEndianStructure):
                 'component_precision_time'    : 'ComponentPrecisionTimeStructure',
                 'component_mechanical'        : 'ComponentMechanicalStructure',
                 'component_destination_table' : 'ComponentDestinationTableStructure',
-                'service_uuid'                : 'ServiceUUIDStructure',
+                'service_uuid'                : 'ServiceUUIDFactory',
                 'component_c_access'          : 'ComponentCAccessStructure',
                 'requester_p2p'               : 'RequesterP2PStructure',
                 'component_pa'                : 'ComponentPAStructure',
@@ -2261,6 +2261,7 @@ class ControlStructureMap(LittleEndianStructure):
                 'msap'                        : 'MSAPTable',
                 'msmcap'                      : 'MSMCAPTable',
                 'i_snapshot'                  : 'ISnapshotFactory',
+                's_uuid'                      : 'ServiceUUIDTable',
     }
 
     def nameToId(self, name):
@@ -2411,14 +2412,35 @@ class ControlStructure(ControlStructureMap):
                     if specialStr != '':
                         r += '{}\n'.format(specialStr)
             bitOffset += width
+        # end for field
         return r
 
     def __repr__(self):
         r = type(self).__name__ + '('
         l = len(self._fields_)
+        skipNext = False
         for i, field in enumerate(self._fields_, start=1):
-            fmt = '{}=0x{:x}, ' if i < l else '{}=0x{:x})'
-            r += fmt.format(field[0], getattr(self, field[0]))
+            if skipNext:
+                skipNext = False
+                if i == l:
+                    r += ')'
+                continue
+            name = field[0]
+            try:
+                width = field[2]
+            except IndexError:
+                width = 0
+            uu = self.isUuid(name)
+            if uu is not None:
+                fmt = '{}={}, ' if i < l else '{}={})'
+                r += fmt.format(name[:-1], uu)
+                skipNext = True
+            elif width == 0:
+                r += repr(self.embeddedArray)
+                #set_trace() # Revisit: temp debug
+            else:
+                fmt = '{}=0x{:x}, ' if i < l else '{}=0x{:x})'
+                r += fmt.format(name, getattr(self, name))
         return r
 
     def fileToStructInit(self):
@@ -3447,6 +3469,160 @@ class ComponentSwitchStructure(ControlStructure):
     _special_dict = {'SwitchCAP1': SwitchCAP1,
                      'SwitchCAP1Control': SwitchCAP1Control,
                      'SwitchOpCTL': SwitchOpCTL}
+
+@add_from_buffer_kw
+class MaxSIClassArray(ControlTableArray):
+    def fileToStructInit(self):
+        super().fileToStructInit()
+        # Per-Service MaxSI/Class Fields
+        fields = [('Class',              c_u32, 16),
+                  ('MaxSI',              c_u32, 16),
+                  ]
+        MaxSIClass = type('MaxSIClass', (ControlTableElement,), {'_fields_': fields,
+                                                             'verbosity': self.verbosity,
+                                                             'Size': 4}) # Revisit
+        elems = self.parent.SUUIDTableSz
+        self.array = (MaxSIClass * elems).from_buffer(self.data, self.offset)
+        self.element = MaxSIClass
+
+    def __format__(self, spec):
+        return 'maxsi-class' # Revisit: fix this
+
+# base class from which to dynamically build ServiceUUIDStructure
+class ServiceUUIDTemplate(ControlStructure):
+    _fields  = [('Type',                       c_u64, 12), #0x0
+                ('Vers',                       c_u64,  4),
+                ('Size',                       c_u64, 16),
+                ('SUUIDTableSz',               c_u64, 16),
+                ('R0',                         c_u64, 16),
+                ('SUUIDPTR',                   c_u64, 32), #0x8
+                ('R1',                         c_u64, 32),
+                ]
+    _arr =  [('MaxSIClassArray',            MaxSIClassArray), #0x10
+                ]
+
+    def fileToStructInit(self):
+        super().fileToStructInit()
+        self.embeddedArray = self.MaxSIClassArray.fileToStruct('MaxSIClassArray',
+                                    self.data,
+                                    verbosity=self.verbosity, fd=self.fd,
+                                    path=self.path, parent=self,
+                                    core=self.core, offset=self.offset+16)
+
+# factory class to dynamically build ServiceUUIDStructure
+class ServiceUUIDFactory(ControlStructure):
+    def from_buffer_kw(data, offset=0, **kwargs):
+        sz = len(data)
+        serv = ServiceUUIDStructure.from_buffer(data, offset)
+        elems = serv.sz_0_special(serv.SUUIDTableSz, 16)
+        fields = ServiceUUIDTemplate._fields + ServiceUUIDTemplate._arr
+        ServeUUID = type('ServiceUUIDStructure',
+                         (ServiceUUIDTemplate,), {'_fields_': fields,
+                                                  'arrElems': elems,
+                                                  'Size': sz})
+        return ServeUUID.from_buffer(data, offset)
+
+class ServiceUUIDStructure(ControlStructure):
+    _fields_ = ServiceUUIDTemplate._fields
+
+@add_from_buffer_kw
+class BaseLenArray(ControlTableArray):
+    def fileToStructInit(self):
+        super().fileToStructInit()
+        # Per-Service Base/Len Fields
+        fields = [('DSBase',                     c_u64, 52), #0x0
+                  ('R0',                         c_u64, 12),
+                  ('DSLen',                      c_u64, 52), #0x8
+                  ('R1',                         c_u64, 12),
+                  ('CSBase',                     c_u64, 40), #0x10
+                  ('R2',                         c_u64,  4),
+                  ('InstanceID',                 c_u64, 20),
+                  ('CSLen',                      c_u64, 40), #0x18
+                  ('R3',                         c_u64, 24),
+                  ]
+        BaseLen = type('BaseLen', (ControlTableElement,), {'_fields_': fields,
+                                                        'verbosity': self.verbosity,
+                                                        'Size': 32}) # Revisit
+        #set_trace() # Revisit: temp debug
+        elems = self.parent.arrElems # parent is ServiceUUIDTableElement
+        self.array = (BaseLen * elems).from_buffer(self.data, self.offset)
+        self.element = BaseLen
+
+    def __format__(self, spec):
+        return 'base-len' # Revisit: fix this
+
+# base class from which to dynamically build ServiceUUIDTableElement
+class ServiceUUIDTableElementTemplate(ControlTable):
+    _fields  = [('ServiceUUIDl',   c_u64, 64), #0x0
+                ('ServiceUUIDh',   c_u64, 64),
+                ]
+    _arr =  [('BaseLenArray',            BaseLenArray), #0x10
+                ]
+
+    _uuid_fields = [('ServiceUUIDh', 'ServiceUUIDl')]
+
+    _uuid_dict = dict(zip([item for sublist in zip(*_uuid_fields) for item in sublist],
+                          _uuid_fields * 2))
+
+    @property
+    def ServiceUUID(self): # Revisit: generate this (and others) from _uuid_fields
+        return self.uuid(('ServiceUUIDh', 'ServiceUUIDl'))
+
+    def fileToStructInit(self):
+        self.embeddedArray = self.BaseLenArray.fileToStruct('BaseLenArray',
+                                    self.data,
+                                    verbosity=self.verbosity, fd=self.fd,
+                                    path=self.path, parent=self,
+                                    core=self.core, offset=self.offset+16)
+
+# factory class to dynamically build ServiceUUIDTableElement
+class ServiceUUIDTableElementFactory(ControlTable):
+    def from_buffer_kw(data, offset=0, parent=None, elems=None, verbosity=0):
+        sz = len(data)
+        #set_trace() # Revisit: temp debug
+        fields = (ServiceUUIDTableElementTemplate._fields +
+                  ServiceUUIDTableElementTemplate._arr)
+        ServUUIDElem = type('ServiceUUIDTableElement',
+                            (ServiceUUIDTableElementTemplate,),
+                            {'_fields_': fields,
+                             'arrElems': elems,
+                             'verbosity': verbosity,
+                             'Size': sz})
+        return ServUUIDElem.from_buffer(data, offset)
+
+@add_from_buffer_kw
+class ServiceUUIDTable(ControlTableArray):
+    def fileToStructInit(self):
+        super().fileToStructInit()
+        elems = self.parent.SUUIDTableSz # parent is ServiceUUIDStructure
+        offset = 0
+        #set_trace() # Revisit: temp debug
+        self.array = []
+        for i in range(elems):
+            maxSI = self.parent.embeddedArray[i].MaxSI
+            sz = 16 + (maxSI * 32)
+            serv = ServiceUUIDTableElementFactory.from_buffer_kw(
+                self.data, self.offset + offset,
+                parent=self, elems=maxSI, verbosity=self.verbosity)
+            self.array.extend([serv])
+            serv.data = self.data
+            serv.offset = self.offset + offset
+            serv.verbosity = self.verbosity
+            serv.fd = self.fd
+            serv.path = self.path
+            serv.parent = self.parent
+            serv.core = self.core
+            serv._stat = None
+            serv._size = sz
+            serv.fileToStructInit()
+            offset += sz
+
+    def cs_offset(self, row, *unused):
+        '''Each element may have a different size, so the standard
+        method of doing "sizeof(element) * row" will not work.
+        Instead, each array element stores its offset.
+        '''
+        return self.array[row].cs_offset
 
 @add_from_buffer_kw
 class VendorDefinedStructure(ControlStructure):

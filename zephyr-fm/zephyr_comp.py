@@ -137,6 +137,7 @@ class Component():
         self.req_vcat = None
         self.rsp_vcat = None
         self.rsp_page_grid_ps = 0
+        self.service_uuid_table = None
         self.paths_setup = False
         self.partition = None
         self.usable = False # will be set True if comp_init() succeeds
@@ -381,6 +382,14 @@ class Component():
         if self.caccess_dir is not None:
             self.caccess_rkey_dir = list(self.caccess_dir.glob(
                 'c_access_r_key@*'))[0]
+        try:
+            self.service_uuid_dir = list((self.path / prefix).glob(
+                'service_uuid@*'))[0]
+        except (IndexError, AttributeError):
+            self.service_uuid_dir = None
+        if self.service_uuid_dir is not None:
+            self.service_uuid_table_dir = list(self.service_uuid_dir.glob(
+                's_uuid@*'))[0]
         self.paths_setup = True
 
     def remove_paths(self):
@@ -402,6 +411,8 @@ class Component():
         self.rsp_pte_table_dir = None
         self.caccess_dir = None
         self.caccess_rkey_dir = None
+        self.service_uuid_dir = None
+        self.service_uuid_table_dir = None
         self.paths_setup = False
 
     def check_usable(self, prefix='control'):
@@ -1378,6 +1389,28 @@ class Component():
             #self.core.comp_dest.HCS = self.route_control_read(prefix=prefix) # Revisit
         return component_pa
 
+    def service_uuid_read(self, prefix='control'):
+        if self.service_uuid_table is not None or self.service_uuid_dir is None:
+            return self.service_uuid_table
+        service_uuid_file = self.service_uuid_dir / 'service_uuid'
+        with service_uuid_file.open(mode='rb') as f:
+            data = bytearray(f.read())
+            service_uuid = self.map.fileToStruct(
+                'service_uuid',
+                data, fd=f.fileno(), verbosity=self.verbosity)
+            if service_uuid.all_ones_type_vers_size():
+                raise AllOnesData('service_uuid structure returned all-ones data')
+        # end with
+        service_uuid_table_file = self.service_uuid_table_dir / 's_uuid'
+        with service_uuid_table_file.open(mode='rb') as f:
+            data = bytearray(f.read())
+            service_uuid_table = self.map.fileToStruct(
+                's_uuid', data,
+                parent=service_uuid, fd=f.fileno(), verbosity=self.verbosity)
+        # end with
+        self.service_uuid_table = service_uuid_table
+        return service_uuid_table
+
     # returns route_control.HCS
     def route_control_read(self, prefix='control'):
         genz = zephyr_conf.genz
@@ -1852,6 +1885,15 @@ class Component():
             'c_access_r_key@*'))[0]
         log.debug('new caccess_dir = {}'.format(self.caccess_dir))
 
+    def update_service_uuid_dir(self, prefix='control'):
+        if self.service_uuid_dir is None or self.service_uuid_table_dir is None:
+            return
+        self.service_uuid_dir = list((self.path / prefix).glob(
+            'service_uuid@*'))[0]
+        self.service_uuid_table_dir = list(self.service_uuid_dir.glob(
+            's_uuid@*'))[0]
+        log.debug('new service_uuid_dir = {}'.format(self.service_uuid_dir))
+
     def update_path(self):
         log.debug('current path: {}'.format(self.path))
         self.path = self.fab.make_path(self.gcid)
@@ -1868,6 +1910,7 @@ class Component():
         self.update_opcode_set_dir()
         self.update_rsp_page_grid_dir()
         self.update_caccess_dir()
+        self.update_service_uuid_dir()
         for iface in self.interfaces:
             iface.update_path(prefix='control')
 
@@ -2407,6 +2450,7 @@ class LocalBridge(Bridge):
                     self.update_opcode_set_dir()
                     self.update_rsp_page_grid_dir()
                     self.update_caccess_dir()
+                    self.update_service_uuid_dir()
                     log.debug('new path: {}'.format(self.path))
                     for iface in self.interfaces:
                         iface.update_path()
