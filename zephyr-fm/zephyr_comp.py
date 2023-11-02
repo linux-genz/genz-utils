@@ -2208,6 +2208,7 @@ class Component():
             log.debug('attempting component warm reset of {}'.format(self))
             core_file = self.path / prefix / 'core@0x0/core'
             with core_file.open(mode='rb+') as f:
+                genz = zephyr_conf.genz
                 data = bytearray(f.read())
                 core = self.map.fileToStruct('core', data, fd=f.fileno(),
                                              verbosity=self.verbosity)
