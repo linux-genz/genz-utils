@@ -20,6 +20,7 @@
 # SOFTWARE.
 
 import textwrap
+import re
 import shutil
 import crcmod
 from pdb import set_trace
@@ -27,6 +28,9 @@ from uuid import UUID
 from .genz_common import *
 
 cols, lines = shutil.get_terminal_size()
+
+# match Reserved field names
+rv_re = re.compile('^R\d+$')
 
 # Based on Gen-Z revision 1.1 final
 
@@ -2398,11 +2402,15 @@ class ControlStructure(ControlStructureMap):
                 r += '    {0:{nw}}@0x{1:0>3x} = {2}\n'.format(
                     name, byteOffset, arrayStr[2:], nw=max_len)
             else:
+                if rv_re.match(name) is not None and self.verbosity < 6:
+                    bitOffset += width
+                    continue
                 r += '    {0:{nw}}@0x{1:0>3x}{{{2:2}:{3:2}}} = 0x{4:0>{hw}x}\n'.format(
                     name, byteOffset, highBit, lowBit,
                     getattr(self, name),
                     nw=max_len, hw=hexWidth)
                 if self.verbosity < 3:
+                    bitOffset += width
                     continue
                 special = self.isSpecial(name)
                 if special is not None:
@@ -3646,6 +3654,9 @@ class VendorDefinedUUIDStructure(ControlStructure):
     # Revisit: print rest of structure in hex?
 
     _uuid_fields = [('VDUUIDh',   'VDUUIDl')]
+
+    _uuid_dict = dict(zip([item for sublist in zip(*_uuid_fields) for item in sublist],
+                          _uuid_fields * 2))
 
 class UnknownStructure(ControlStructure):
     _fields_ = [('Type',                       c_u32, 12),

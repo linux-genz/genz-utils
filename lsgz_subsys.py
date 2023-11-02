@@ -339,7 +339,7 @@ class Comp:
         if self.dr:
             return 'dr: {}'.format(self.path) # Revisit: better format
         else:
-            return '{}:{} {:10s} {} {}'.format(self.fabnum, self.gcid,
+            return '{}:{} {:11s} {} {}'.format(self.fabnum, self.gcid,
                                                self.name,
                                                self.cuuid_sn, self.cstate)
 
