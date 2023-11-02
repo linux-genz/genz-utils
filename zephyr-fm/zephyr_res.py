@@ -191,6 +191,8 @@ class ResourceList():
         self.res_dict['mgr_uuid']  = str(self.producer.mgr_uuid)
         self.res_dict['resources'] = [ res.to_json() for res in self.resources ]
         self.update_mod_timestamp(ts=ts)
+        if 'llamas' in res_dict and len(res_dict['llamas']) > 0:
+            self.res_dict['llamas'] = list(res_dict['llamas'])
         self.add_consumers(res_dict['consumers'], readOnly=readOnly)
 
     def update_mod_timestamp(self, ts=None):

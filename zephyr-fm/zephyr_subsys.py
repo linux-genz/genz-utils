@@ -216,13 +216,14 @@ class FMServer(flask_fat.APIBaseline):
         self.callbacks = Callbacks()
         self.init_socket()
 
-    def get_endpoints(self, consumers, mgr_type, name):
+    def get_endpoints(self, consumers, llamas, mgr_type, name):
         endpoints = []
-        for con in consumers:
+        ids = llamas if llamas is not None else consumers
+        for id in ids:
             try:
-                endpoints.append(self.callbacks.get_endpoints(con, mgr_type)['callbacks'][name])
+                endpoints.append(self.callbacks.get_endpoints(id, mgr_type)['callbacks'][name])
             except KeyError:
-                log.debug(f'consumer {con} has no subscribed {name} endpoint')
+                log.debug(f'consumer {id} has no subscribed {name} endpoint')
         # end for
         return endpoints
 

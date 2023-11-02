@@ -2376,7 +2376,7 @@ class Bridge(Component):
         # notify llamas instance about unreachable resources
         fab = self.fab
         unreach = fab.resources.unreachable(self, to)
-        endpoints = fab.mainapp.get_endpoints([self.cuuid_serial],
+        endpoints = fab.mainapp.get_endpoints([self.cuuid_serial], None,
                                               'llamas', 'unreach_res')
         send_resource(unreach, endpoints)
 

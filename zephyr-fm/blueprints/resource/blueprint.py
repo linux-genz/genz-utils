@@ -56,7 +56,10 @@ def create_resource():
         msg = { 'error' : str(err) }
         return flask.make_response(flask.jsonify(msg), 400)
 
-    endpoints = mainapp.get_endpoints(resource['consumers'], 'llamas', 'add')
+    llamas = (resource['llamas'] if 'llamas' in resource and
+              len(resource['llamas']) > 0 else None)
+    endpoints = mainapp.get_endpoints(resource['consumers'], llamas,
+                                      'llamas', 'add')
     # If nobody subscribed to this "create" event, then nobody will be notified.
     if len(endpoints) == 0:
         msg = { 'warning' : 'Nothing happened. There are no subscribers to this event, yet.' }
@@ -108,7 +111,10 @@ def remove_resource():
         msg = { 'error' : 'remove_resource: {}'.format(str(err)) }
         return flask.make_response(flask.jsonify(msg), 400)
 
-    endpoints = mainapp.get_endpoints(resource['consumers'], 'llamas', 'remove')
+    llamas = (resource['llamas'] if 'llamas' in resource and
+              len(resource['llamas']) > 0 else None)
+    endpoints = mainapp.get_endpoints(resource['consumers'], llamas,
+                                      'llamas', 'remove')
     # If nobody subscribed to this "remove" event, then nobody will be notified.
     if len(endpoints) == 0:
         msg = { 'warning' : 'Nothing happened. There are no subscribers to this event.' }
@@ -214,6 +220,7 @@ def get_resource_schema():
     return {
         'producer': 'string',
         'consumers': [ 'string' ],
+        'llamas': [ 'string' ],
         'resources': [
             {
                 'class_uuid': 'string',
