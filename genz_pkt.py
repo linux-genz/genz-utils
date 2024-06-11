@@ -160,6 +160,18 @@ def process_text(genz, args, fname):
             prev_pkt = pkt
             prev_req = pkt if is_req else prev_req
 
+def process_tuser_tdata(genz, args, tuser: str, tdata: str):
+    if tuser is not None:
+        user = int(tuser, 16)
+        no_user = False
+    else:
+        no_user = True
+    data = bytearray.fromhex(tdata)
+    data.reverse()
+    pkt = genz.Packet.dataToPkt(data, verbosity=args.verbosity, csv=args.csv)
+    pkt.user = 0xff if no_user else user
+    return pkt
+
 
 def main():
     global args
@@ -183,12 +195,17 @@ def main():
                         help='sort output packets by time')
     parser.add_argument('-T', '--text', action='store',
                         help='input file containing ohb packet text')
+    parser.add_argument('--tdata', action='store',
+                        help='single packet tdata field')
+    parser.add_argument('--tuser', action='store',
+                        help='single packet tuser field')
     parser.add_argument('--ns', action='store_true',
                         help='output times in ns')
     args = parser.parse_args()
     if args.verbosity > 5:
         print('Gen-Z version = {}'.format(args.genz_version))
     genz = import_module('genz.genz_{}'.format(args.genz_version.replace('.', '_')))
+    unit = 'nS' if args.ns else 'uS'
     if args.text:
         if args.csv:
             print('Time,Delta,Intf,OpcName,OCL,OpCode,LEN,SCID,DCID,Tag,VC,PCRC,AKey,Deadline,ECN,GC,NH,PM,LP,TA,RK,DR,DRIface,RDSize,PadCNT,Addr,MGRUUID,TC,NS,UN,PU,RC,MS,PD,FPS,RRSPReason,RNR_QD,RS,Reason,ECRC')
@@ -196,14 +213,24 @@ def main():
             intf = pkt.user & 0xfff
             pkt_time = pkt.time*1e9 if args.ns else pkt.time*1e6
             pkt_delta = delta*1e9 if args.ns else delta*1e6
-            unit = 'nS' if args.ns else 'uS'
             if args.csv:
                 print(f'{pkt_time:.6f},{pkt_delta:.6f},{intf:x},{pkt}')
             elif args.time_delta:
                 print(f'Time: {pkt_time:16.6f}{unit}, Delta: {pkt_delta:14.6f}{unit}, Intf: {intf:x}, {pkt}')
             else:
-                print('Time: {pkt_time:16.6f}{unit}, Intf: {intf:x}, {pkt}')
+                print(f'Time: {pkt_time:16.6f}{unit}, Intf: {intf:x}, {pkt}')
         # end for
+    elif args.tuser and args.tdata:
+        pkt = process_tuser_tdata(genz, args, args.tuser, args.tdata)
+        intf = pkt.user & 0xfff
+        pkt_time = 0
+        pkt_delta = 0
+        if args.csv:
+            print(f'{pkt_time:.6f},{pkt_delta:.6f},{intf:x},{pkt}')
+        elif args.time_delta:
+            print(f'Time: {pkt_time:16.6f}{unit}, Delta: {pkt_delta:14.6f}{unit}, Intf: {intf:x}, {pkt}')
+        else:
+            print(f'Time: {pkt_time:16.6f}{unit}, Intf: {intf:x}, {pkt}')
     # end if args.text
 
 if __name__ == '__main__':
