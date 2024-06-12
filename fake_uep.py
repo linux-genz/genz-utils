@@ -28,10 +28,19 @@ import json
 import requests
 import time
 from uuid import UUID
+from pathlib import Path
 from importlib import import_module
 from genz.genz_common import GCID
 from pdb import set_trace, post_mortem
 import traceback
+
+def get_mgr_uuid(comp_path):
+    mgr_uuid = comp_path / 'mgr_uuid'
+    try:
+        with mgr_uuid.open(mode='r') as f:
+            return UUID(f.readline().rstrip())
+    except FileNotFoundError:
+        return None
 
 def send_fake_uep(url, js):
     hdrs = {'Content-type': 'application/json', 'Accept': 'text/plain'}
@@ -101,7 +110,11 @@ def main():
     if args.event_id is not None:
         uep_rec.EventID = args.event_id
     br_gcid = GCID(str=args.br_gcid)
-    mgr_uuid = UUID(args.mgr_uuid)
+    if args.mgr_uuid is None:
+        # Revisit: this assumes fabric 1, bridge 0
+        mgr_uuid = get_mgr_uuid(Path('/sys/bus/genz/devices/genz1/bridge0'))
+    else:
+        mgr_uuid = UUID(args.mgr_uuid)
     flags = 0x22  # Revisit: GENZ_UEP_INFO_VERS | ts_valid
     flags |= 0x10 if args.local else 0
     now = time.time_ns()
