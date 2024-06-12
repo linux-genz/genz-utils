@@ -380,8 +380,11 @@ class Component():
         except IndexError:
             self.caccess_dir = None
         if self.caccess_dir is not None:
-            self.caccess_rkey_dir = list(self.caccess_dir.glob(
-                'c_access_r_key@*'))[0]
+            try:
+                self.caccess_rkey_dir = list(self.caccess_dir.glob(
+                    'c_access_r_key@*'))[0]
+            except IndexError:
+                self.caccess_rkey_dir = None
         try:
             self.service_uuid_dir = list((self.path / prefix).glob(
                 'service_uuid@*'))[0]
