@@ -76,6 +76,33 @@ class Chunks():
         if zaddr in self.chunks[chunk]:
             self.chunks[chunk].remove(zaddr)
 
+    def add_service_uuid(self, res: 'Resource', mem: dict):
+        prod = res.res_list.producer
+        suuid = prod.service_uuid_read()
+        for entry in suuid:
+            if entry.ServiceUUID != res.class_uuid:
+                continue
+            for baseLen in entry.embeddedArray:
+                # Revisit: support InstanceID
+                if baseLen.DSLen != 0:
+                    ch = { 'start':   baseLen.DSBase << 12,
+                           'length':  baseLen.DSLen << 12,
+                           'type':    ResType.Data,
+                           'ro_rkey': mem['ro_rkey'],
+                           'rw_rkey': mem['rw_rkey'] }
+                    chunk = ChunkTuple(**ch)
+                    self.add(chunk)
+                if baseLen.CSLen != 0:
+                    ch = { 'start':   baseLen.CSBase << 12,
+                           'length':  baseLen.CSLen << 12,
+                           'type':    ResType.Control,
+                           'ro_rkey': mem['ro_rkey'],
+                           'rw_rkey': mem['rw_rkey'] }
+                    chunk = ChunkTuple(**ch)
+                    self.add(chunk)
+            # end for baseLen
+        # end for entry
+
     @property
     def total_data(self):
         return sum(ch.length for ch in self.chunks if ch.type == ResType.Data)
@@ -107,6 +134,7 @@ class Resource():
         self.res_dict = res_dict
         if res_dict['instance_uuid'] == '???':
                 res_dict['instance_uuid'] = str(uuid4())
+        self.class_uuid = UUID(res_dict['class_uuid'])
         self.instance_uuid = UUID(res_dict['instance_uuid'])
         self.ref_uuid = (UUID(res_dict['reference_uuid'])
                          if 'reference_uuid' in res_dict else None)
@@ -118,6 +146,9 @@ class Resource():
                 mem['rw_rkey'] = res_list.rw_rkey
             if mem['ro_rkey'] == DynamicRKey:
                 mem['ro_rkey'] = NO_ACCESS_RKEY # Revisit: RO not yet supported
+            if 'match' in mem and mem['match'] == 'service-uuid':
+                self.chunks.add_service_uuid(self, mem)
+                break
             chunk = ChunkTuple(**mem)
             self.chunks.add(chunk)
         # end for

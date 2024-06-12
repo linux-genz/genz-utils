@@ -234,6 +234,7 @@ def get_resource_schema():
                         'type': 'number',
                         'ro_rkey': 'number',
                         'rw_rkey': 'number',
+                        'match': 'string'
                     }
                 ]
             }
