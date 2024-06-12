@@ -326,6 +326,8 @@ def main():
                         type=float, help='Control TO')
     parser.add_argument('--control-drto', action='store', default=10e-3,
                         type=float, help='Control DRTO')
+    parser.add_argument('--uert', action='store', default=200e-3,
+                        type=float, help='UEP retransmission timer (default: %(default)f)')
     parser.add_argument('--no-akeys', action='store_true',
                         help='do not enable AKeys')
     parser.add_argument('--no-nonce', action='store_true',

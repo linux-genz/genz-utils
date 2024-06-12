@@ -691,7 +691,7 @@ class Component():
             self.control_write(core, genz.CoreStructure.LLMUTO, sz=2)
             # set UERT
             # Revisit: set NIRT, ATSTO, UNREQ
-            core.UERT = 200                            # 200ms # Revisit
+            core.UERT = int(args.uert * 1000)  # Revisit: range checks
             self.control_write(core, genz.CoreStructure.UERT, sz=8)
             # Revisit: set UNRSP, FPST, PCO FPST, NLMUTO
             # Revisit: set REQNIRTO, REQABNIRTO
