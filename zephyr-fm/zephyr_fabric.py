@@ -724,13 +724,14 @@ class Fabric(nx.MultiGraph):
     # UEP dispatch handlers
     # I-Error UEPs
     @register(events, 'IfaceErr')
-    def iface_error(self, key, br, sender, iface, rc, rec):
+    def iface_error(self, key, br, sender, iface, rc, rec, ts):
         genz = zephyr_conf.genz
         es = genz.IErrorES(rec['ES'])
         bitK = es.BitK
         errName = es.errName
+        local = 'local ' if br is sender else ''
         id = rec['EventID']
-        log.info(f'{br}: {key}:{errName}[{bitK}]({es.errSeverity}) UEP[{id}] from {sender} on {iface}')
+        log.info(f'{br}: {key}:{errName}[{bitK}]({es.errSeverity}) {local}UEP[{id}] at {ts} from {sender} on {iface}')
         # with AutoStop enabled, IfaceFCFwdProgressViolation requires peer_c_reset
         if errName == 'IfaceFCFwdProgressViolation':
             log.debug(f'attempting peer_c_reset on {iface}')
@@ -766,11 +767,12 @@ class Fabric(nx.MultiGraph):
 
     # I-Event UEPs
     @register(events, 'WarmIfaceReset', 'FullIfaceReset')
-    def iface_reset(self, key, br, sender, iface, rc, rec):
+    def iface_reset(self, key, br, sender, iface, rc, rec, ts):
         genz = zephyr_conf.genz
         bit = genz.IEvent.uep_map(rec['Event'])
+        local = 'local ' if br is sender else ''
         id = rec['EventID']
-        log.info(f'{br}: {key}[{bit}] UEP[{id}] from {sender} on {iface}')
+        log.info(f'{br}: {key}[{bit}] {local}UEP[{id}] at {ts} from {sender} on {iface}')
         try:
             # clear IEventStatus bit
             sender.clear_ievent_status(bit)
@@ -789,11 +791,12 @@ class Fabric(nx.MultiGraph):
         return { key: 'ok' }
 
     @register(events, 'NewPeerComp')
-    def new_peer_comp(self, key, br, sender, iface, rc, rec):
+    def new_peer_comp(self, key, br, sender, iface, rc, rec, ts):
         genz = zephyr_conf.genz
         bit = genz.IEvent.uep_map(rec['Event'])
+        local = 'local ' if br is sender else ''
         id = rec['EventID']
-        log.info(f'{br}: {key}[{bit}] UEP[{id}] from {sender} on {iface}')
+        log.info(f'{br}: {key}[{bit}] {local}UEP[{id}] at {ts} from {sender} on {iface}')
         try:
             # clear IEventStatus bit
             sender.clear_ievent_status(bit)
@@ -817,11 +820,12 @@ class Fabric(nx.MultiGraph):
         return { key: 'ok' }
 
     @register(events, 'ExceededTransientErrThresh')
-    def trans_err_thresh(self, key, br, sender, iface, rc, rec):
+    def trans_err_thresh(self, key, br, sender, iface, rc, rec, ts):
         genz = zephyr_conf.genz
         bit = genz.IEvent.uep_map(rec['Event'])
+        local = 'local ' if br is sender else ''
         id = rec['EventID']
-        log.info(f'{br}: {key}[{bit}] UEP[{id}] from {sender} on {iface}')
+        log.info(f'{br}: {key}[{bit}] {local}UEP[{id}] at {ts} from {sender} on {iface}')
         try:
             # clear IEventStatus bit
             sender.clear_ievent_status(bit)
@@ -833,11 +837,12 @@ class Fabric(nx.MultiGraph):
         return { key: 'ok' }
 
     @register(events, 'IfacePerfDegradation')
-    def iface_perf_degradation(self, key, br, sender, iface, rc, rec):
+    def iface_perf_degradation(self, key, br, sender, iface, rc, rec, ts):
         genz = zephyr_conf.genz
         bit = genz.IEvent.uep_map(rec['Event'])
+        local = 'local ' if br is sender else ''
         id = rec['EventID']
-        log.info(f'{br}: {key}[{bit}] UEP[{id}] from {sender} on {iface}')
+        log.info(f'{br}: {key}[{bit}] {local}UEP[{id}] at {ts} from {sender} on {iface}')
         try:
             # clear IEventStatus bit
             sender.clear_ievent_status(bit)
@@ -850,13 +855,14 @@ class Fabric(nx.MultiGraph):
 
     # C-Error UEPs
     @register(events, 'RecovProtocolErr')
-    def recov_protocol_err(self, key, br, sender, iface, rc, rec):
+    def recov_protocol_err(self, key, br, sender, iface, rc, rec, ts):
         genz = zephyr_conf.genz
         esVal = rec['ES']
         rsnName = self.uep_reason_name(esVal)
         bit = genz.CError.uep_map(rec['Event'], esVal)
+        local = 'local ' if br is sender else ''
         id = rec['EventID']
-        log.info(f'{br}: {key}:{rsnName}[{bit}] UEP[{id}] from {sender}, rc {rc}') # no iface
+        log.info(f'{br}: {key}:{rsnName}[{bit}] {local}UEP[{id}] at {ts} from {sender}, rc {rc}') # no iface
         # Revisit: do something useful
         try:
             # clear CErrorStatus bit
@@ -867,13 +873,14 @@ class Fabric(nx.MultiGraph):
         return { key: 'ok' }
 
     @register(events, 'UnrecovProtocolErr')
-    def unrecov_protocol_err(self, key, br, sender, iface, rc, rec):
+    def unrecov_protocol_err(self, key, br, sender, iface, rc, rec, ts):
         genz = zephyr_conf.genz
         esVal = rec['ES']
         rsnName = self.uep_reason_name(esVal)
         bit = genz.CError.uep_map(rec['Event'], esVal)
+        local = 'local ' if br is sender else ''
         id = rec['EventID']
-        log.info(f'{br}: {key}:{rsnName}[{bit}] UEP[{id}] from {sender}, rc {rc}') # no iface
+        log.info(f'{br}: {key}:{rsnName}[{bit}] {local}UEP[{id}] at {ts} from {sender}, rc {rc}') # no iface
         # Revisit: do something useful
         try:
             # clear CErrorStatus bit
@@ -885,14 +892,15 @@ class Fabric(nx.MultiGraph):
 
     # C-Event UEPs
     @register(events, 'ExcessiveRNRNAK')
-    def excessive_rnr_nak(self, key, br, sender, iface, rc, rec):
+    def excessive_rnr_nak(self, key, br, sender, iface, rc, rec, ts):
         genz = zephyr_conf.genz
         esVal = rec['ES']
         es = genz.OpcodeEventES(esVal)
         pktName = genz.Packet.className(es.OpClass, es.OpCode)
         bit = genz.CEvent.uep_map(rec['Event'], esVal)
+        local = 'local ' if br is sender else ''
         id = rec['EventID']
-        log.info(f'{br}: {key}[{bit}] UEP[{id}] from {sender}, rc {rc}, pkt {pktName}') # no iface
+        log.info(f'{br}: {key}[{bit}] {local}UEP[{id}] at {ts} from {sender}, rc {rc}, pkt {pktName}') # no iface
         # Revisit: do something useful
         try:
             # clear CEventStatus bit
@@ -928,7 +936,7 @@ class Fabric(nx.MultiGraph):
         local = flags & 0x10 # Revisit: enum?
         ts_sec = body.get('GENZ_A_UEP_TS_SEC')
         ts_nsec = body.get('GENZ_A_UEP_TS_NSEC')
-        # Revisit: do something with ts_sec/ts_nsec
+        ts = (ts_sec * 1000000000) + ts_nsec # nanoseconds since the epoch
         rec = body.get('GENZ_A_UEP_REC')  # dict, not genz.UEPEventRecord
         if local:
             sender = br
@@ -965,7 +973,7 @@ class Fabric(nx.MultiGraph):
         if zephyr_conf.args.keyboard > 2:
             set_trace()
         # dispatch to event handler based on EventName
-        return self.dispatch(rec['EventName'], br, sender, iface, rc, rec)
+        return self.dispatch(rec['EventName'], br, sender, iface, rc, rec, ts)
 
     def unreachable_comps(self, fr: Component):
         '''Return list of unreachable components from @fr'''
