@@ -771,6 +771,22 @@ class Interface():
             self.comp.control_write(iface, type(iface).EgressAKeyMask, sz=8)
         # end with
 
+    def update_precision_time_enb(self, enable: bool):
+        genz = zephyr_conf.genz
+        iface_file = self.iface_dir / 'interface'
+        with iface_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            iface = self.comp.map.fileToStruct('interface', data,
+                                fd=f.fileno(), verbosity=self.comp.verbosity)
+            if iface.all_ones_type_vers_size():
+                raise AllOnesData('interface structure returned all-ones data')
+            icap1ctl = genz.ICAP1Control(iface.ICAP1Control, iface)
+            icap1ctl.PrecisionTimeEnb = enable
+            iface.ICAP1Control = icap1ctl.val
+            self.comp.control_write(iface,
+                            genz.InterfaceStructure.ICAP1Control, sz=4, off=4)
+        # end with
+
     def update_lprt_dir(self):
         if self.lprt_dir is None:
             return

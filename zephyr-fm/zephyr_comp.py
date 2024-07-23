@@ -30,6 +30,7 @@ from pdb import set_trace
 from uuid import UUID, uuid4
 from math import ceil, floor, log2
 from pathlib import Path
+from typing import List
 import zephyr_conf
 from zephyr_conf import log, INVALID_GCID
 from zephyr_iface import Interface
@@ -84,6 +85,14 @@ def get_cclass(comp_path):
     with cclass.open(mode='r') as f:
         return f.read().rstrip()
 
+def pt_ns_to_ptd_time(ns: int, granularity: int, gran_unit: bool):
+    genz = zephyr_conf.genz
+    if gran_unit == genz.PTGranUnit.GranUnitNS:
+        mt = int(ns / granularity)
+    else: # GranUnitPS
+        mt = int(ns * 1000 / granularity)
+    return mt
+
 
 class Component():
     timer_unit_list = [ 1e-9, 10*1e-9, 100*1e-9, 1e-6, 10*1e-6, 100*1e-6,
@@ -126,6 +135,7 @@ class Component():
         self._ssap_sz = None
         self.comp_dest = None
         self.component_pa = None
+        self.pt = None
         self.ssdt = None
         self.ssap = None
         self.pa = None
@@ -140,6 +150,8 @@ class Component():
         self.service_uuid_table = None
         self.paths_setup = False
         self.partition = None
+        self.pt_req_iface = None
+        self.pt_rsp_ifaces = []
         self.usable = False # will be set True if comp_init() succeeds
         self.cstate = CState.CDown # will be updated by comp_init()
         fab.components[self.uuid] = self
@@ -393,6 +405,11 @@ class Component():
         if self.service_uuid_dir is not None:
             self.service_uuid_table_dir = list(self.service_uuid_dir.glob(
                 's_uuid@*'))[0]
+        try: # Revisit: only 1 precision_time_dir supported
+            self.precision_time_dir = list((self.path / prefix / 'component_precision_time').glob(
+                'component_precision_time0@*'))[0]
+        except IndexError:
+            self.precision_time_dir = None
         self.paths_setup = True
 
     def remove_paths(self):
@@ -416,6 +433,7 @@ class Component():
         self.caccess_rkey_dir = None
         self.service_uuid_dir = None
         self.service_uuid_table_dir = None
+        self.precision_time_dir = None
         self.paths_setup = False
 
     def check_usable(self, prefix='control'):
@@ -1414,6 +1432,24 @@ class Component():
         self.service_uuid_table = service_uuid_table
         return service_uuid_table
 
+    def precision_time_read(self, prefix='control'):
+        if self.pt is not None or self.precision_time_dir is None:
+            return self.pt
+        precision_time_file = self.precision_time_dir / 'component_precision_time'
+        with precision_time_file.open(mode='rb') as f:
+            data = bytearray(f.read())
+            precision_time = self.map.fileToStruct(
+                'component_precision_time',
+                data, fd=f.fileno(), verbosity=self.verbosity)
+            if precision_time.all_ones_type_vers_size():
+                raise AllOnesData('precision_time structure returned all-ones data')
+        # end with
+        self.pt = precision_time
+        return precision_time
+
+    def precision_time_write(self, pt):
+        pass
+
     # returns route_control.HCS
     def route_control_read(self, prefix='control'):
         genz = zephyr_conf.genz
@@ -1782,6 +1818,42 @@ class Component():
             comp_pa.set_fd(f)
             self.control_write(comp_pa, genz.ComponentPAStructure.PACAP1Control, sz=4)
 
+    @property
+    def gtc_sup(self) -> bool:
+        '''Component has Precision Time GTC support.
+        Requires a ComponentPrecisionTime structure and PTGTCSup.
+        '''
+        genz = zephyr_conf.genz
+        pt = self.precision_time_read()
+        if pt is None:
+            return False
+        cap1 = genz.PTCAP1(pt.PTCAP1, pt)
+        return cap1.PTGTCSup
+
+    @property
+    def pt_req_sup(self) -> bool:
+        '''Component has Precision Time Requester support.
+        Requires a ComponentPrecisionTime structure and PTReqSup.
+        '''
+        genz = zephyr_conf.genz
+        pt = self.precision_time_read()
+        if pt is None:
+            return False
+        cap1 = genz.PTCAP1(pt.PTCAP1, pt)
+        return cap1.PTReqSup
+
+    @property
+    def pt_rsp_sup(self) -> bool:
+        '''Component has Precision Time Responder support.
+        Requires a ComponentPrecisionTime structure and PTRspSup.
+        '''
+        genz = zephyr_conf.genz
+        pt = self.precision_time_read()
+        if pt is None:
+            return False
+        cap1 = genz.PTCAP1(pt.PTCAP1, pt)
+        return cap1.PTRspSup
+
     def update_rit_dir(self, prefix='control'):
         if self.rit_dir is None:
             return
@@ -1897,6 +1969,14 @@ class Component():
             's_uuid@*'))[0]
         log.debug('new service_uuid_dir = {}'.format(self.service_uuid_dir))
 
+    def update_precision_time_dir(self, prefix='control'):
+        # Revisit: only 1 precision_time structure supported
+        if self.precision_time_dir is None:
+            return
+        self.precision_time_dir = list((self.path / prefix / 'component_precision_time').glob(
+                'component_precision_time0@*'))[0]
+        log.debug('new precision_time_dir = {}'.format(self.precision_time_dir))
+
     def update_path(self):
         log.debug('current path: {}'.format(self.path))
         self.path = self.fab.make_path(self.gcid)
@@ -1914,6 +1994,7 @@ class Component():
         self.update_rsp_page_grid_dir()
         self.update_caccess_dir()
         self.update_service_uuid_dir()
+        self.update_precision_time_dir()
         for iface in self.interfaces:
             iface.update_path(prefix='control')
 
@@ -2389,6 +2470,80 @@ class Component():
         #routes = self.fab.setup_bidirectional_routing(sfm, self)
         #return routes # Revisit
 
+    def precision_time_init(self, pt, req_iface: Interface, rsp_ifaces: List[Interface]):
+        genz = zephyr_conf.genz
+        zargs = zephyr_conf.args
+        fab = self.fab
+        gtc = fab.gtc
+        self.pt = pt
+        ctl = genz.PTCTL(pt.PTCTL, pt)
+        cap1 = genz.PTCAP1(pt.PTCAP1, pt)
+        pt.GTCCID = gtc.gcid.cid
+        if 0 and self.gcid.sid != gtc.gcid.sid: # Revisit: subnets
+            ctl.GTCSIDEnb = 1
+            pt.GTCSID = gtc.gcid.sid
+        else:
+            ctl.GTCSIDEnb = 0
+        if self is gtc:
+            fab.PTDGranUnit = cap1.CompPTGranUnit
+            fab.PTDGranularity = pt.CompPTGranularity
+            ctl.PTGTCEnb = 1
+        else:
+            ctl.PTGTCEnb = 0
+        if self.pt_rsp_sup and len(rsp_ifaces) > 0:
+            ctl.PTRspEnb = 1
+            for iface in rsp_ifaces:
+                iface.update_precision_time_enb(1)
+        else:
+            ctl.PTRspEnb = 0
+        if self.pt_req_sup and req_iface is not None:
+            ctl.PTReqEnb = 1
+            pt.PTRspCID = req_iface.peer_comp.gcid.cid
+            if 0 and self.gcid.sid != req_iface.peer_comp.gcid.sid: # Revisit: subnets
+                ctl.PTRspSIDEnb = 1
+                pt.PTRspSID = req_iface.peer_comp.gcid.sid
+            else:
+                ctl.PTRspSIDEnb = 0
+            pt.PTDIface = req_iface.num
+            req_iface.update_precision_time_enb(1)
+        else:
+            ctl.PTReqEnb = 0
+        ctl.PTDGranUnit = fab.PTDGranUnit
+        pt.PTDGranularity = fab.PTDGranularity
+        pt.PTRT = pt_ns_to_ptd_time(zargs.ptrt * 1e9, fab.PTDGranularity, fab.PTDGranUnit)
+        # Revisit: add support for alternate PTRsp/PTDIface
+        # Revisit: pt.TC, pt.LocalOffset
+        self.control_write(pt,
+                    genz.ComponentPrecisionTimeStructure.GTCCID, sz=8)
+        self.control_write(pt,
+                    genz.ComponentPrecisionTimeStructure.AltPTRspCID, sz=8)
+        self.control_write(pt,
+                    genz.ComponentPrecisionTimeStructure.PTRT, sz=8)
+        if self is gtc:
+            now = time.time_ns()
+            pt.MasterTime = pt_ns_to_ptd_time(now, fab.PTDGranularity, fab.PTDGranUnit)
+            self.control_write(pt,
+                    genz.ComponentPrecisionTimeStructure.MasterTime, sz=8)
+        pt.PTCTL = ctl.val
+        # write enables in PTCTL last
+        self.control_write(pt,
+                           genz.ComponentPrecisionTimeStructure.PTCAP1, sz=4, off=4)
+
+    def precision_time_enable(self, req_iface: Interface, rsp_ifaces: List[Interface]):
+        if self.precision_time_dir is None:
+            return
+        if self.cstate is not CState.CUp:
+            return
+        precision_time_file = self.precision_time_dir / 'component_precision_time'
+        with precision_time_file.open(mode='rb+') as f:
+            data = bytearray(f.read())
+            pt = self.map.fileToStruct('component_precision_time',
+                                       data, fd=f.fileno(), verbosity=self.verbosity)
+            if pt.all_ones_type_vers_size():
+                raise AllOnesData(f'{self}: precision_time structure all-ones data')
+            self.precision_time_init(pt, req_iface, rsp_ifaces)
+        # end with
+
     def lookup_iface(self, iface_str: str) -> Interface:
         gcid_str, iface_num_str = iface_str.split('.')
         gcid = GCID(str=gcid_str)
@@ -2455,6 +2610,7 @@ class LocalBridge(Bridge):
                     self.update_rsp_page_grid_dir()
                     self.update_caccess_dir()
                     self.update_service_uuid_dir()
+                    self.update_precision_time_dir()
                     log.debug('new path: {}'.format(self.path))
                     for iface in self.interfaces:
                         iface.update_path()

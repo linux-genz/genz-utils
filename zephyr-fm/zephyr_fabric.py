@@ -32,6 +32,7 @@ import requests
 import sched
 import socket
 import time
+from math import nan
 from pathlib import Path
 from pdb import set_trace
 import networkx as nx
@@ -94,7 +95,7 @@ class Fabric(nx.MultiGraph):
     events = {} # UEP events dispatch dict
 
     @staticmethod
-    def link_weight(fr, to, edge_dict):
+    def link_weight(fr: Component, to: Component, edge_dict):
         fr_iface = edge_dict[str(fr.uuid)]
         to_iface = edge_dict[str(to.uuid)]
         # return None for unusable links - DR interfaces are always usable
@@ -102,6 +103,19 @@ class Fabric(nx.MultiGraph):
                   (to.dr is not None or to_iface.usable))
         # Revisit: consider bandwidth, latency, LWR
         return 1 if usable else None
+
+    @staticmethod
+    def pt_link_weight(fr: Component, to: Component, edge_dict, gtc_path_len):
+        '''Precision Time link weight'''
+        same_fru = fr.fru_uuid == to.fru_uuid
+        fr_iface = edge_dict[str(fr.uuid)]
+        to_iface = edge_dict[str(to.uuid)]
+        # return NaN for unusable links - DR interfaces are never usable -
+        # or if fr is not a PT Requester or if to is not a PT Responder
+        usable = ((fr.dr is None and fr_iface.usable and fr.pt_req_sup) and
+                  (to.dr is None and to_iface.usable and to.pt_rsp_sup))
+        # Bandwidth, latency, LWR do not matter for PTP so use gtc_path_len
+        return nan if not usable else 0.01 if same_fru else gtc_path_len
 
     def __init__(self, nl, mainapp, map, path, fab_uuid=None, grand_plan=None,
                  random_cids=False, conf=None, mgr_uuid=None, fm_akey=None,
@@ -134,6 +148,7 @@ class Fabric(nx.MultiGraph):
         self.pfm = None
         self.sfm = None
         self.pfm_fm = None
+        self.gtc = None  # Revisit: support multiple GTCs
         self.fms = {}
         self.akeys = AKeys(self)
         new_fm_akey = fm_akey is None and not zephyr_conf.args.sfm
@@ -356,6 +371,74 @@ class Fabric(nx.MultiGraph):
         log.debug('enabling NewPeerComp UEPs')
         for comp in self.components.values():
             comp.ievent_update(newPeerComp=True)
+        # Enable Precision Time (if supported)
+        self.pt_init()
+
+    def pt_init(self):
+        self.gtc = None
+        if len(self) == 0: # not a real fabric
+            return
+        if 'gtc' not in self.conf.data:  # PFM will be GTC
+            gtc = self.pfm
+        else:  # lookup specified GTC cuuid_serial
+            try:
+                gtc = self.cuuid_serial[self.conf.data['gtc']]
+            except KeyError:
+                log.warning(f'unknown GTC {self.conf.data["gtc"]}')
+                return
+        if gtc is None:
+            log.info(f'no Precision Time GTC specified')
+            return
+        elif gtc.gtc_sup:
+            self.gtc = gtc
+        else:
+            log.info(f'specified GTC {gtc} does not have Precision Time GTC support')
+            return
+        tree = self.pt_spanning_tree()
+        if len(tree.nodes) < 2:
+            log.info(f'no Precision Time components can reach GTC {gtc}')
+            return
+        pt_succs = dict(nx.bfs_successors(tree, gtc))
+        for to, fr, k in nx.edge_bfs(tree, gtc):
+            edge = self.edges[(to, fr, k)]
+            req_iface = edge[str(fr.uuid)]
+            rsp_iface = edge[str(to.uuid)]
+            fr.pt_req_iface = req_iface
+            to.pt_rsp_ifaces.append(rsp_iface)
+            if to is gtc: # PT Responder only
+                to.pt_req_iface = None
+            if fr not in pt_succs: # leaf - PT Requester only
+                fr.pt_rsp_ifaces = []
+        # end for edges
+        pt_comps = [gtc] + [su for successors in pt_succs.values() for su in successors]
+        for comp in pt_comps:
+            comp.precision_time_enable(comp.pt_req_iface, comp.pt_rsp_ifaces)
+
+    def set_pt_weights(self):
+        gtc = self.gtc
+        gtc_len = nx.shortest_path_length(self, target=gtc)
+        for to, fr, k in nx.edge_bfs(self, gtc):
+            wt = self.pt_link_weight(fr, to, self[fr][to][k], gtc_len[fr])
+            self[fr][to][k]['pt_weight'] = wt
+
+    def pt_spanning_tree(self):
+        self.set_pt_weights()
+        # nx.minimum_spanning_tree() attempts to create a new tree from our
+        # existing one, but fails because the Fabric constructor has required
+        # arguments that it doesn't know about, so re-implement it ourselves
+        # using an ordinary MultiGraph
+        edges = nx.minimum_spanning_edges(self, weight='pt_weight', ignore_nan=True)
+        tree = nx.MultiGraph()
+        tree.add_nodes_from([comp for comp in self.nodes() if (comp.pt_req_sup or comp.pt_rsp_sup)])
+        tree.add_edges_from(edges)
+        if nx.is_connected(tree):
+            return tree
+        # remove nodes (and edges) for components that cannot reach GTC
+        for comp in tree.nodes:
+            if not nx.has_path(tree, comp, self.gtc):
+                log.info(f'Precision Time component {comp} cannot reach GTC {gtc}')
+                tree.remove_node(comp)
+        return tree
 
     def sfm_init(self):
         zephyr_conf.is_sfm = True

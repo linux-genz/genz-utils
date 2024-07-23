@@ -176,6 +176,10 @@ class ACREQRSP(IntEnum):
     Rv                   = 0x2
     FullAccess           = 0x3
 
+class PTGranUnit(IntEnum):
+    GranUnitNS           = 0
+    GranUnitPS           = 1
+
 class Reason(IntEnum):
     NoError              = 0x00
     NE                   = 0x00
@@ -1813,6 +1817,48 @@ class PTEATTRl(SpecialField, Union):
     def field(self):
         return self.rsp if self.zmmuType == 1 else self.req
 
+class PTCAP1(SpecialField, Union):
+    class PTCAP1Fields(Structure):
+        _fields_ = [('PTReqSup',               c_u16,  1),
+                    ('PTRspSup',               c_u16,  1),
+                    ('PTGTCSup',               c_u16,  1),
+                    ('CompPTGranUnit',         c_u16,  1),
+                    ('Rv',                     c_u16, 12),
+        ]
+
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', PTCAP1Fields), ('val', c_u16)]
+    _gran    = ['ns', 'ps']
+    _special = {'CompPTGranUnit': _gran}
+
+    def __init__(self, value, parent, verbosity=0):
+        super().__init__(value, parent, verbosity=verbosity)
+        self.val = value
+
+class PTCTL(SpecialField, Union):
+    class PTCTLFields(Structure):
+        _fields_ = [('PTReqEnb',               c_u16,  1),
+                    ('PTRspEnb',               c_u16,  1),
+                    ('PTGTCEnb',               c_u16,  1),
+                    ('MigratePTAltRsp',        c_u16,  1),
+                    ('PTDGranUnit',            c_u16,  1),
+                    ('GTCSIDEnb',              c_u16,  1),
+                    ('PTRspSIDEnb',            c_u16,  1), # Not in v1.1e
+                    ('AltPTRspSIDEnb',         c_u16,  1), # Not in v1.1e
+                    ('Rv',                     c_u16,  8), # 10 bits in v1.1e
+        ]
+
+
+    _anonymous_ = ('field',)
+    _fields_    = [('field', PTCTLFields), ('val', c_u16)]
+    _gran    = ['ns', 'ps']
+    _special = {'PTDGranUnit': _gran}
+
+    def __init__(self, value, parent, verbosity=0, check=False):
+        super().__init__(value, parent, verbosity=verbosity, check=check)
+        self.val = value
+
 class RCCAP1(SpecialField, Union):
     class RCCAP1Fields(Structure):
         _fields_ = [('RtCtlTableSz',                      c_u16,  2),
@@ -2471,7 +2517,7 @@ class ControlTable(ControlStructure):
         return self._size
 
 # for PATable, RIT, SSAP, MCAP, MSAP, MSMCAP,
-# CAccessRKeyTable, CAccessLP2PTable, PGTable, PTETable
+# CAccessRKeyTable, CAccessLP2PTable, PGTable, PTETable, ServiceUUIDTable
 class ControlTableArray(ControlTable):
     def cs_offset(self, row, *unused):
         return sizeof(self.element) * row
@@ -2481,6 +2527,9 @@ class ControlTableArray(ControlTable):
 
     def __len__(self):
         return len(self.array)
+
+    def __iter__(self):
+        return iter(self.array)
 
     def __str__(self):
         r = type(self).__name__
@@ -3413,6 +3462,37 @@ class ComponentPageTableStructure(ControlStructure):
                           _uuid_fields * 2))
 
     _special_dict = {'PTZMMUCAP1': PTZMMUCAP1, 'PTEATTRl': PTEATTRl}
+
+@add_from_buffer_kw
+class ComponentPrecisionTimeStructure(ControlStructure):
+    _fields_ = [('Type',                       c_u64, 12), #0x0
+                ('Vers',                       c_u64,  4),
+                ('Size',                       c_u64, 16),
+                ('PTCAP1',                     c_u64, 16),
+                ('PTCTL',                      c_u64, 16),
+                ('GTCCID',                     c_u64, 12), #0x8
+                ('R0',                         c_u64,  4),
+                ('GTCSID',                     c_u64, 16),
+                ('PTRspCID',                   c_u64, 12),
+                ('R1',                         c_u64,  4),
+                ('PTRspSID',                   c_u64, 16),
+                ('AltPTRspCID',                c_u64, 12), #0x10
+                ('TC',                         c_u64,  4),
+                ('AltPTRspSID',                c_u64, 16),
+                ('CompPTGranularity',          c_u64, 10),
+                ('PTDGranularity',             c_u64, 10),
+                ('PTDIface',                   c_u64, 12),
+                ('AltPTDIface',                c_u64, 12), #0x18
+                ('R2',                         c_u64, 20),
+                ('NextPTPTR',                  c_u64, 32),
+                ('MasterTime',                 c_u64, 64), #0x20 Not in v1.1e
+                ('LocalOffset',                c_u64, 64), #0x28 Not in v1.1e
+                ('PTRT',                       c_u64, 40), #0x30 Not in v1.1e
+                ('R3',                         c_u64, 24),     # Not in v1.1e
+                ('R4',                         c_u64, 64), #0x38 Not in v1.1e
+                ]
+
+    _special_dict = {'PTCAP1': PTCAP1, 'PTCTL': PTCTL}
 
 @add_from_buffer_kw
 class ComponentSwitchStructure(ControlStructure):
@@ -4684,6 +4764,14 @@ class ExplicitHdr(Packet):
     def isResponse(self):
         return not self.isRequest
 
+    @property
+    def isRead(self):
+        return hasattr(self, 'Addr') and hasattr(self, 'RDSize')
+
+    @property
+    def isWrite(self):
+        return hasattr(self, 'Addr') and self.pay_len is not None
+
     def pcrc_init(self) -> int:
         return 0x3f
 
@@ -4754,7 +4842,6 @@ class ExplicitHdr(Packet):
 
     @property
     def opcName(self):
-        #return self._ocl.opClass(self.OCL).name(self.OpCode)
         try:
             name = self._ocl.opClass(self.OCL).name(self.OpCode)
         except KeyError:
@@ -5553,7 +5640,7 @@ class ControlUnsolicitedEventBase(ExplicitHdr):
 
     def dataToPktInit(exp_pkt, data, verbosity):
         className = exp_pkt.oclName + exp_pkt.opcName
-        pkt_type, hdr_len = Core64ReadResponseBase.pkt_type(className, 0,
+        pkt_type, hdr_len = ControlUnsolicitedEventBase.pkt_type(className, 0,
                                     exp_pkt.GC, exp_pkt.NH, pktLen=exp_pkt.LEN,
                                     data=data, verbosity=verbosity)
         pkt = pkt_type.from_buffer(exp_pkt.data)
@@ -6087,4 +6174,178 @@ class MulticastUnrelWriteMSGPkt(MulticastUnrelWriteMSGBase):
                                     GC=GC, NH=NH, RT=RT,
                                     data=data, verbosity=verbosity)
         return pkt_type(ocl, opcode, pktLen, GC=GC, NH=NH, RT=RT, data=data,
+                        verbosity=verbosity, **kwargs)
+
+class Adv2PTREQBase(ExplicitHdr):
+    os1_fields = [('NP',                         c_u32,  1),
+                  ('SV',                         c_u32,  1),
+                  ('R0',                         c_u32, 10)]
+    os2_fields = [('GTCCID',                     c_u32, 12), # Byte 12
+                  ('R1',                         c_u32,  4),
+                  ('GTCSID',                     c_u32, 16)]
+    os3_fields = [('R2',                         c_u32,  8), # Byte 16
+                  ('ECRC',                       c_u32, 24)]
+
+    @staticmethod
+    def pkt_type(className: str, payLen: int, GC:bool = False, NH:bool = False,
+                 RK:bool = False, data = None, verbosity = 0, pktLen:int = None):
+        fields = ExplicitHdr.hd_fields + Adv2PTREQBase.os1_fields
+        hdr_len = 5 # Revisit: constant 5
+        if GC:
+            fields.extend(ExplicitHdr.ms_fields)
+            hdr_len += 1
+        fields.extend(Adv2PTREQBase.os2_fields)
+        if NH:
+            fields.extend(ExplicitHdr.nh_fields)
+            hdr_len += 4
+        fields.extend(Adv2PTREQBase.os3_fields)
+        pkt_type = type(className, (Adv2PTREQBase,),
+                        {'_fields_': fields,
+                         'data': data,
+                         'verbosity': verbosity})
+        return (pkt_type, hdr_len) # no payload
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type, hdr_len = Adv2PTREQBase.pkt_type(className, 0,
+                                    exp_pkt.GC, exp_pkt.NH, pktLen=exp_pkt.LEN,
+                                    data=data, verbosity=verbosity)
+        pkt = pkt_type.from_buffer(exp_pkt.data)
+        return pkt
+
+    def to_json(self):
+        jds = super().to_json()
+        jd = { 'NP': self.NP,
+               'SV': self.SV,
+               'GTCCID': self.GTCCID,
+               'GTCSID': self.GTCSID,
+               }
+
+        return jds | jd
+
+    def __str__(self):
+        r = super().__str__()
+        # Revisit: fix csv columns
+        r += (',,,,,,,,,{},,,,,{}' if self.csv else ', NP: {}, SV: {}').format(self.NP, self.SV)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R0: {:03x}'.format(self.R0)
+        if self.csv:
+            r += (',,{},,{}' if self.csv else ', GTCCID: {:03x}, GTCSID: {:04x}').format(
+                self.GTCCID, self.GTCSID)
+        else:
+            if self.SV:
+                r += ', GTCGCID: {:04x}:{:03x}'.format(self.GTCSID, self.GTCCID)
+            else:
+                r += ', GTCCID: {:03x}'.format(self.GTCCID)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R1: {:01x}'.format(self.R1)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R2: {:02x}'.format(self.R2)
+        r += (',,,,,,,,,,,,,,{}' if self.csv else ', ECRC:{1}{0:06x}').format(self.ECRC, self.ecrc_sep)
+        r += self.expected_ecrc_str
+        return r
+
+class Adv2PTREQPkt(Adv2PTREQBase):
+    def __new__(cls, ocl, opcode, payLen, verbosity=0, GC:bool = False,
+                NH:bool = False, data = None, **kwargs):
+        className = Packet.className(ocl, opcode)
+        pkt_type, pktLen = Adv2PTREQBase.pkt_type(className, 0,
+                                GC=GC, NH=NH, data=data, verbosity=verbosity)
+        return pkt_type(ocl, opcode, pktLen, GC=GC, NH=NH, data=data,
+                        verbosity=verbosity, **kwargs)
+
+class Adv2PTRSPBase(ExplicitHdr):
+    os1_fields = [('TP',                         c_u32,  1),
+                  ('SV',                         c_u32,  1),
+                  ('GU',                         c_u32,  1),
+                  ('R0',                         c_u32,  9)]
+    os2_fields = [('GTCCID',                     c_u32, 12), # Byte 12
+                  ('R1',                         c_u32,  4),
+                  ('GTCSID',                     c_u32, 16),
+                  ('MasterTimel',                c_u32, 32), # Byte 16
+                  ('MasterTimeh',                c_u32, 32), # Byte 20
+                  ('PropDelay',                  c_u32, 32)] # Byte 24
+    os3_fields = [('R2',                         c_u32,  8), # Byte 28
+                  ('ECRC',                       c_u32, 24)]
+
+    @staticmethod
+    def pkt_type(className: str, payLen: int, GC:bool = False, NH:bool = False,
+                 RK:bool = False, data = None, verbosity = 0, pktLen:int = None):
+        fields = ExplicitHdr.hd_fields + Adv2PTRSPBase.os1_fields
+        hdr_len = 8 # Revisit: constant 8
+        if GC:
+            fields.extend(ExplicitHdr.ms_fields)
+            hdr_len += 1
+        fields.extend(Adv2PTRSPBase.os2_fields)
+        if NH:
+            fields.extend(ExplicitHdr.nh_fields)
+            hdr_len += 4
+        fields.extend(Adv2PTRSPBase.os3_fields)
+        pkt_type = type(className, (Adv2PTRSPBase,),
+                        {'_fields_': fields,
+                         'data': data,
+                         'verbosity': verbosity})
+        return (pkt_type, hdr_len) # no payload
+
+    def dataToPktInit(exp_pkt, data, verbosity):
+        className = exp_pkt.oclName + exp_pkt.opcName
+        pkt_type, hdr_len = Adv2PTRSPBase.pkt_type(className, 0,
+                                    exp_pkt.GC, exp_pkt.NH, pktLen=exp_pkt.LEN,
+                                    data=data, verbosity=verbosity)
+        pkt = pkt_type.from_buffer(exp_pkt.data)
+        return pkt
+
+    @property
+    def MasterTime(self):
+        return self.MasterTimeh << 32 | self.MasterTimel
+
+    @MasterTime.setter
+    def MasterTime(self, val):
+        self.MasterTimel = val & 0xffffffff
+        self.MasterTimeh = (val >> 32) & 0xffffffff
+
+    def to_json(self):
+        jds = super().to_json()
+        jd = { 'TP': self.TP,
+               'SV': self.SV,
+               'GU': self.GU,
+               'GTCCID': self.GTCCID,
+               'GTCSID': self.GTCSID,
+               'MasterTime': self.MasterTime,
+               'PropDelay': self.PropDelay,
+               }
+
+        return jds | jd
+
+    def __str__(self):
+        r = super().__str__()
+        # Revisit: fix csv columns
+        r += (',,,,,,,,,{},,,,,{},{}' if self.csv else ', TP: {}, SV: {}, GU: {}').format(self.TP, self.SV, self.GU)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R0: {:03x}'.format(self.R0)
+        if self.csv:
+            r += (',,{},,{}' if self.csv else ', GTCCID: {:03x}, GTCSID: {:04x}').format(
+                self.GTCCID, self.GTCSID)
+        else:
+            if self.SV:
+                r += ', GTCGCID: {:04x}:{:03x}'.format(self.GTCSID, self.GTCCID)
+            else:
+                r += ', GTCCID: {:03x}'.format(self.GTCCID)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R1: {:01x}'.format(self.R1)
+        r += (',,{},,{}' if self.csv else ', MasterTime: {:016x}, PropDelay: {:08x}').format(
+            self.MasterTime, self.PropDelay)
+        if self.verbosity > 1 and not self.csv:
+            r += ', R2: {:02x}'.format(self.R2)
+        r += (',,,,,,,,,,,,,,{}' if self.csv else ', ECRC:{1}{0:06x}').format(self.ECRC, self.ecrc_sep)
+        r += self.expected_ecrc_str
+        return r
+
+class Adv2PTRSPPkt(Adv2PTRSPBase):
+    def __new__(cls, ocl, opcode, payLen, verbosity=0, GC:bool = False,
+                NH:bool = False, data = None, **kwargs):
+        className = Packet.className(ocl, opcode)
+        pkt_type, pktLen = Adv2PTRSPBase.pkt_type(className, 0,
+                                GC=GC, NH=NH, data=data, verbosity=verbosity)
+        return pkt_type(ocl, opcode, pktLen, GC=GC, NH=NH, data=data,
                         verbosity=verbosity, **kwargs)
