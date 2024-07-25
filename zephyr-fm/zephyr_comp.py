@@ -448,11 +448,9 @@ class Component():
 
     # Returns True if component is usable - is C-Up/C-LP/C-DLP, not C-Down
     def comp_init(self, pfm, prefix='control', ingress_iface=None, route=None):
-        args = zephyr_conf.args
+        zargs = zephyr_conf.args
         genz = zephyr_conf.genz
         log.debug(f'comp_init for {self}')
-        if args.keyboard > 1:
-            set_trace()
         self.usable = True  # assume comp will be usable, until something goes wrong
         if self.local_br:
             self.br_gcid = self.gcid
@@ -509,7 +507,7 @@ class Component():
                     pass
             # end for
             if pfm and self.cstate is CState.CCFG:
-                if args.reclaim:
+                if zargs.reclaim:
                     # lookup cuuid_serial and potentially adjust GCID
                     self.fab.reassign_gcid(self)
                 # set CV/CID0/SID0 - first Gen-Z control write if !local_br
@@ -518,7 +516,7 @@ class Component():
                 core.CV = 1
                 self.control_write(core, genz.CoreStructure.CV, sz=8)
             # Revisit: MGR-UUID capture does not work on some components
-            if pfm and args.write_mgruuid:
+            if pfm and zargs.write_mgruuid:
                 # For non-local-bridge components in C-CFG, MGR-UUID will have
                 # been captured on CV/CID0/SID0 write, so skip this
                 # set MGR-UUID
@@ -692,7 +690,7 @@ class Component():
             for ifnum in range(0, core.MaxInterface):
                 try:
                     iup = self.interfaces[ifnum].iface_init(prefix=prefix,
-                                                no_akeys=args.no_akeys)
+                                                no_akeys=zargs.no_akeys)
                     if iup:
                         iupCnt += 1
                 except IndexError:
@@ -712,14 +710,14 @@ class Component():
             self.control_write(core, genz.CoreStructure.LLMUTO, sz=2)
             # set UERT
             # Revisit: set NIRT, ATSTO, UNREQ
-            core.UERT = int(args.uert * 1000)  # Revisit: range checks
+            core.UERT = int(zargs.uert * 1000)  # Revisit: range checks
             self.control_write(core, genz.CoreStructure.UERT, sz=8)
             # Revisit: set UNRSP, FPST, PCO FPST, NLMUTO
             # Revisit: set REQNIRTO, REQABNIRTO
             # set ControlTO, ControlDRTO
             # Revisit: how to compute reasonable values?
-            core.ControlTO = self.ctl_timeout_val(args.control_to)
-            core.ControlDRTO = self.ctl_timeout_val(args.control_drto)
+            core.ControlTO = self.ctl_timeout_val(zargs.control_to)
+            core.ControlDRTO = self.ctl_timeout_val(zargs.control_drto)
             self.control_write(core, genz.CoreStructure.ControlTO, sz=4)
             # set MaxRequests
             # Revisit: Why would FM choose < MaxREQSuppReqs? Only for P2P?
@@ -746,7 +744,7 @@ class Component():
             self.opcode_set_init()
             # enable component AKeys (if not --no-akeys)
             # do not enable if PFM bridge cannot generate AKeys
-            enb = not args.no_akeys and pfm.akey_sup
+            enb = not zargs.no_akeys and pfm.akey_sup
             self.enable_akeys(enb=enb)
             # initialize CAccess RKeys
             self.caccess_rkey_init()
@@ -766,9 +764,9 @@ class Component():
                 if (ingress_iface is not None and
                     ingress_iface.peer_iface is not None):
                     ingress_iface.peer_iface.update_peer_info()
-                if args.sleep > 0.0:
-                    log.debug('sleeping {} seconds for slow switch C-Up transition'.format(args.sleep))
-                    time.sleep(args.sleep)
+                if zargs.sleep > 0.0:
+                    log.debug('sleeping {} seconds for slow switch C-Up transition'.format(zargs.sleep))
+                    time.sleep(zargs.sleep)
             else:
                 log.info('{} has no usable interfaces'.format(self.path))
         # end with
@@ -2039,7 +2037,7 @@ class Component():
         the peer Component connected to it. Recurse if the component has a
         switch.
         '''
-        args = zephyr_conf.args
+        zargs = zephyr_conf.args
         iface.update_peer_info()
         # get peer CState
         peer_cstate = iface.peer_cstate
@@ -2242,8 +2240,8 @@ class Component():
         '''
         if explore_ifaces is None:
             # examine all interfaces (except ingress) & init those components
-            args = zephyr_conf.args
-            explore_ifaces = (reversed(self.interfaces) if args.reversed
+            zargs = zephyr_conf.args
+            explore_ifaces = (reversed(self.interfaces) if zargs.reversed
                               else self.interfaces)
         for iface in explore_ifaces:
             if iface == ingress_iface:
@@ -2347,7 +2345,7 @@ class Component():
         '''Enable @sfm as Secondary Fabric Manager of this component and
         setup bidirectional routing.
         '''
-        args = zephyr_conf.args
+        zargs = zephyr_conf.args
         core_file = self.path / prefix / 'core@0x0/core'
         with core_file.open(mode='rb+') as f:
             genz = zephyr_conf.genz
