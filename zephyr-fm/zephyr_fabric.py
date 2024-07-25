@@ -1008,10 +1008,15 @@ class Fabric(nx.MultiGraph):
 
     def dispatch(self, key, *args, **kwargs):
         try:
-            ret = getattr(self, self.events[key])(key, *args, **kwargs)
+            handler = getattr(self, self.events[key])
         except KeyError:
             log.warning(f'no handler for UEP {key}')
-            ret = { key: 'no handler' }
+            return { f'{key}': 'no handler' }
+        try:
+            ret = handler(key, *args, **kwargs)
+        except Exception as e:
+            log.warning(f'exception in handler for UEP {key} - "{e}"')
+            ret = { f'{key}': f'{e}' }
         return ret
 
     def handle_uep(self, body):
