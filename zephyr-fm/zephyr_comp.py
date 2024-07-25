@@ -487,6 +487,8 @@ class Component():
             self.cuuid = core.CUUID
             self.serial = core.SerialNumber
             self.cuuid_serial = f'{self.cuuid}:{self.serial:#018x}'
+            if zargs.pause_after is not None and len(self.fab) % zargs.pause_after == 0:
+                set_trace()
             # create and read (but do not HW init) the switch struct
             self.switch_read(prefix=prefix)
             # create and read (but do not HW init) all interfaces

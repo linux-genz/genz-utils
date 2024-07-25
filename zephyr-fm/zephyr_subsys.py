@@ -338,6 +338,8 @@ def main():
                         help='explore interfaces reversed (high to low)')
     parser.add_argument('--write-mgruuid', action='store_true',
                         help='Write MGR-UUID workaround for broken capture')
+    parser.add_argument('--pause-after', action='store', default=None, type=int,
+                        help='pause after initializing this many components')
     ip_group = parser.add_mutually_exclusive_group()
     ip_group.add_argument('--ip6', action='store_true',
                           help='listen on IPv4 and IPv6')
