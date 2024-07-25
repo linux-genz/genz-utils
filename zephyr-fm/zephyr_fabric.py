@@ -746,27 +746,40 @@ class Fabric(nx.MultiGraph):
                 log.warning(f'cannot replace DR route {dr_rt}')
         # end for
 
-    def has_link(self, fr_iface: Interface, to_iface: Interface) -> bool:
-        fr = fr_iface.comp
-        to = to_iface.comp
-        num_edges = self.number_of_edges(fr, to)
-        if num_edges == 0:
-            return False
-        edge_data = self.get_edge_data(fr, to)
-        for key in range(num_edges):
-            if (edge_data[key][str(fr.uuid)] == fr_iface and
-                edge_data[key][str(to.uuid)] == to_iface):
-                return True
-        return False
+    def has_link(self, fr_iface: Interface, to_iface: Interface) -> Optional[int]:
+        if fr_iface is None or to_iface is None:
+            return None
+        fr_edge = fr_iface.get_edge(to_iface)
+        to_edge = to_iface.get_edge(fr_iface)
+        if fr_edge is not None and to_edge is not None and fr_edge is to_edge:
+            return fr_iface.edge_key
+        return None
 
     def add_link(self, fr_iface: Interface, to_iface: Interface) -> bool:
         '''Returns True if link added; False if link was already there'''
         fr = fr_iface.comp
         to = to_iface.comp
         # prevent adding same link multiple times
-        if not self.has_link(fr_iface, to_iface):
-            self.add_edges_from([(fr, to, {str(fr.uuid): fr_iface,
-                                           str(to.uuid): to_iface})])
+        if self.has_link(fr_iface, to_iface) is None:
+            key = self.add_edges_from([(fr, to, {str(fr.uuid): fr_iface,
+                                                 str(to.uuid): to_iface})])[0]
+            fr_iface.edge_key = key
+            to_iface.edge_key = key
+            log.debug(f'add_link {fr_iface} - {to_iface}, key={key}')
+            self._g = None  # will be recreated in all_shortest_paths()
+            return True
+        return False
+
+    def remove_link(self, fr_iface: Interface, to_iface: Interface) -> bool:
+        '''Returns True if link removed; False if link was not found'''
+        key = self.has_link(fr_iface, to_iface)
+        if key is not None:
+            fr = fr_iface.comp
+            to = to_iface.comp
+            fr_iface.edge_key = None
+            to_iface.edge_key = None
+            self.remove_edge(fr, to, key)
+            log.debug(f'remove_link {fr_iface} - {to_iface}, key={key}')
             self._g = None  # will be recreated in all_shortest_paths()
             return True
         return False

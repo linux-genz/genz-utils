@@ -32,6 +32,7 @@ from zephyr_conf import log
 class Interface():
     def __init__(self, component, num, peer_iface=None, usable=False):
         self.comp = component
+        self.peer_iface = None
         self.set_peer_iface(peer_iface, init=True)
         self.num = num
         self.hvs = None
@@ -47,6 +48,7 @@ class Interface():
         self.phy_tx_lwr = 0
         self.phy_rx_lwr = 0
         self.mod_timestamp = None
+        self.edge_key = None
         self.ingress_akey_mask_refcount = RefCount((64, 1))
         self.egress_akey_mask_refcount = RefCount((64, 1))
 
@@ -567,7 +569,9 @@ class Interface():
         return peer_state.field.PeerMgrType
 
     def set_peer_iface(self, peer_iface, init=False) -> None:
+        self.prev_peer_iface = self.peer_iface
         if not init and self.peer_iface is not None:
+            self.peer_iface.prev_peer_iface = self.peer_iface.peer_iface
             self.peer_iface.peer_iface = None
         self.peer_iface = peer_iface
         if peer_iface is not None:
@@ -576,6 +580,15 @@ class Interface():
     @property
     def peer_comp(self):
         return self.peer_iface.comp if self.peer_iface is not None else None
+
+    def get_edge(self, other_iface=None):
+        comp = self.comp
+        if other_iface is None:
+            return (None if self.edge_key is None else
+                    comp.fab[comp][self.peer_comp][self.edge_key])
+        else:
+            return (None if self.edge_key is None else
+                    comp.fab[comp][other_iface.comp][self.edge_key])
 
     def phy_init(self) -> Tuple:
         # This does not actually init anything - it only checks PHY status

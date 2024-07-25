@@ -2097,10 +2097,13 @@ class Component():
                 comp = self.fab.comp_gcids[peer_gcid]
                 peer_iface = comp.interfaces[iface.peer_iface_num]
                 iface.set_peer_iface(peer_iface)
+                if peer_iface != iface.prev_peer_iface:  # different peer
+                    self.fab.remove_link(iface, iface.prev_peer_iface)
+                    # Revisit: send msg to SFM
                 # bring peer iface to I-Up (if it isn't already)
                 peer_istate, _ = peer_iface.iface_state()
                 if peer_istate is not IState.IUp:
-                    peer_iface.iface_init(no_akeys=args.no_akeys)
+                    peer_iface.iface_init(no_akeys=zargs.no_akeys)
                 nonce_valid = iface.do_nonce_exchange()
                 if not nonce_valid:
                     iface.set_peer_iface(None)
@@ -2124,6 +2127,9 @@ class Component():
                                        usable=True)
                 comp.found_cstate = peer_cstate
                 iface.set_peer_iface(peer_iface)
+                if peer_iface != iface.prev_peer_iface:  # different peer
+                    self.fab.remove_link(iface, iface.prev_peer_iface)
+                    # Revisit: send msg to SFM
                 gcid = self.fab.assign_gcid(comp, proposed_gcid=peer_gcid,
                                             reclaim=reclaim)
                 if gcid is None:
@@ -2178,6 +2184,9 @@ class Component():
                                  netlink=self.nl, verbosity=self.verbosity)
                 peer_iface = Interface(comp, iface.peer_iface_num, iface)
                 iface.set_peer_iface(peer_iface)
+                if peer_iface != iface.prev_peer_iface:  # different peer
+                    self.fab.remove_link(iface, iface.prev_peer_iface)
+                    # Revisit: send msg to SFM
                 # now that we have peer_iface, setup new DR that includes it
                 dr = DirectedRelay(self, ingress_iface, iface, to_iface=peer_iface)
                 comp.set_dr(dr)
