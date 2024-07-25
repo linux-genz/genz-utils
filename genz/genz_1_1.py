@@ -25,6 +25,7 @@ import shutil
 import crcmod
 from pdb import set_trace
 from uuid import UUID
+from typing import Optional
 from .genz_common import *
 
 cols, lines = shutil.get_terminal_size()
@@ -72,7 +73,7 @@ cclass_name_to_classes = {
     'lph': (0x17,),
 }
 
-def reason(esVal: int) -> int:
+def reason(esVal: int) -> Optional[int]:
     es = ProtocolErrorES(esVal)
     rsn = es.ReasonCode
     # Revisit: multicast needs to use a different mapping
@@ -5161,7 +5162,7 @@ class Core64WritePartialBase(ExplicitReqHdr, Core64ReadWriteMixin):
 
     @staticmethod
     def pkt_type(className: str, payLen: int, GC:bool = False, NH:bool = False,
-                 RK:bool = False, data = None, verbosity = 0):
+                 RK:bool = False, data = None, verbosity = 0, pktLen:int = None):
         fields = ExplicitReqHdr.hd_fields + Core64WritePartialBase.os1_fields
         hdr_len = 8 # Revisit: constant 8
         if NH:
@@ -5541,7 +5542,6 @@ class ControlWritePartialBase(ExplicitHdr, ControlReadWriteMixin):
         if NH:
             fields.extend(ExplicitHdr.nh_fields)
         fields.extend(ControlWritePartialBase.os3_fields)
-        className = exp_pkt.oclName + exp_pkt.opcName
         pkt_type = type(className, (ControlWritePartialBase,),
                         {'_fields_': fields,
                          'data': data,
